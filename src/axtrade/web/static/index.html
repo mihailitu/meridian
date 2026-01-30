@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>axtrade Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header>
+        <h1>axtrade</h1>
+        <div class="header-right">
+            <div class="health-indicators">
+                <span class="health-dot" id="health-redis" title="Redis">R</span>
+                <span class="health-dot" id="health-database" title="Database">D</span>
+                <span class="health-dot" id="health-broker" title="Broker">B</span>
+            </div>
+            <div class="status">
+                <span id="connection-status" class="disconnected">Disconnected</span>
+                <span id="last-update"></span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section class="alerts-panel" id="alerts-panel">
+            <div class="alerts-header">
+                <h2>
+                    Alerts
+                    <span class="alert-badge" id="alert-badge" style="display: none;">0</span>
+                </h2>
+                <button class="toggle-btn" id="toggle-alerts">Hide</button>
+            </div>
+            <div class="alerts-list" id="alerts-list">
+                <div class="empty-alerts">No alerts</div>
+            </div>
+        </section>
+
+        <section class="pnl-cards">
+            <div class="card">
+                <h3>Daily Realized</h3>
+                <p id="daily-realized" class="value">$0.00</p>
+            </div>
+            <div class="card">
+                <h3>Daily Unrealized</h3>
+                <p id="daily-unrealized" class="value">$0.00</p>
+            </div>
+            <div class="card">
+                <h3>Daily Total</h3>
+                <p id="daily-total" class="value">$0.00</p>
+            </div>
+            <div class="card">
+                <h3>Cumulative</h3>
+                <p id="cumulative" class="value">$0.00</p>
+            </div>
+        </section>
+
+        <section class="analytics-cards">
+            <div class="card analytics-card">
+                <h3>Sharpe Ratio</h3>
+                <p id="sharpe-ratio" class="value">-</p>
+                <span class="subtext">30-day rolling</span>
+            </div>
+            <div class="card analytics-card">
+                <h3>Sortino Ratio</h3>
+                <p id="sortino-ratio" class="value">-</p>
+                <span class="subtext">30-day rolling</span>
+            </div>
+            <div class="card analytics-card">
+                <h3>Win Rate</h3>
+                <p id="win-rate" class="value">-</p>
+                <span class="subtext" id="trade-count">0 trades</span>
+            </div>
+            <div class="card analytics-card">
+                <h3>Max Drawdown</h3>
+                <p id="max-drawdown" class="value">-</p>
+                <span class="subtext" id="current-drawdown">Current: -</span>
+            </div>
+            <div class="card analytics-card">
+                <h3>Profit Factor</h3>
+                <p id="profit-factor" class="value">-</p>
+                <span class="subtext">Gross profit / loss</span>
+            </div>
+            <div class="card analytics-card">
+                <h3>Expectancy</h3>
+                <p id="expectancy" class="value">-</p>
+                <span class="subtext">Per trade</span>
+            </div>
+        </section>
+
+        <section class="positions">
+            <h2>Open Positions</h2>
+            <table id="positions-table">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Avg Price</th>
+                        <th>Current</th>
+                        <th>Unrealized P&L</th>
+                        <th>Strategy</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="empty-row">
+                        <td colspan="7">No open positions</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section class="orders">
+            <h2>Recent Orders</h2>
+            <table id="orders-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th>Qty</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Fill Price</th>
+                        <th>Strategy</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="empty-row">
+                        <td colspan="8">No recent orders</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

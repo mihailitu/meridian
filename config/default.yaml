@@ -1,0 +1,117 @@
+gateway:
+  adapter: mock  # mock | ibkr
+
+  mock:
+    tick_interval_ms: 500
+    volatility: 0.001
+
+  ibkr:
+    host: "127.0.0.1"
+    port: 7497
+    client_id: 1
+
+  symbols:
+    - symbol: AAPL
+      base_price: 185.00
+    - symbol: MSFT
+      base_price: 420.00
+    - symbol: GOOGL
+      base_price: 175.00
+    - symbol: AMZN
+      base_price: 185.00
+    - symbol: NVDA
+      base_price: 880.00
+
+redis:
+  host: "localhost"
+  port: 6380
+  stream_prefix: "stream:ticks"
+
+aggregator:
+  intervals:
+    - "1m"
+    - "5m"
+  source_stream: "stream:ticks:us"
+  consumer_group: "aggregator"
+  bar_stream_prefix: "stream:bars"
+
+database:
+  host: "localhost"
+  port: 5433
+  database: "axtrade"
+  user: "axtrade"
+  password: "axtrade"
+  min_pool_size: 2
+  max_pool_size: 10
+
+indicators:
+  sma_period: 20
+  rsi_period: 14
+
+oms:
+  paper_mode: true
+  slippage_bps: 10
+  risk:
+    max_position_size: 1000
+    max_position_value: 50000
+    max_order_size: 500
+    max_daily_loss: 1000
+    max_open_orders: 10
+
+strategies:
+  bar_stream: "stream:bars:1m:us"
+  consumer_group: "strategies"
+  enabled:
+    - type: momentum
+      id: momentum_us_01
+      enabled: true
+      config:
+        rsi_oversold: 48
+        rsi_overbought: 52
+        stop_loss_pct: 0.02
+        position_size: 100
+
+    # Mean Reversion strategy using Bollinger Bands
+    # - type: mean_reversion
+    #   id: mean_rev_01
+    #   enabled: false
+    #   config:
+    #     bb_period: 20
+    #     bb_std: 2.0
+    #     rsi_oversold: 35
+    #     rsi_overbought: 70
+    #     stop_loss_pct: 0.02
+    #     position_size: 100
+
+    # Multi-Timeframe strategy (5m trend + 1m entry)
+    # - type: multi_timeframe
+    #   id: mtf_01
+    #   enabled: false
+    #   config:
+    #     trend_period: 20
+    #     trend_interval_minutes: 5
+    #     rsi_oversold: 40
+    #     rsi_overbought: 60
+    #     stop_loss_pct: 0.015
+    #     take_profit_pct: 0.03
+    #     position_size: 100
+
+    # Pairs Trading strategy
+    # - type: pairs
+    #   id: pairs_aapl_msft
+    #   enabled: false
+    #   config:
+    #     symbol_a: AAPL
+    #     symbol_b: MSFT
+    #     lookback: 20
+    #     entry_zscore: 2.0
+    #     exit_zscore: 0.5
+    #     stop_loss_pct: 0.03
+    #     position_size: 50
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  cors_origins:
+    - "http://localhost:3000"
+    - "http://localhost:8000"

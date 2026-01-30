@@ -1,0 +1,205 @@
+# axtrade Development Progress
+
+## Completed Iterations
+
+### Iteration 1: Gateway and Tick Streaming (Complete)
+- Mock and IBKR data adapters
+- Redis Streams for tick publishing
+- Gateway service with configurable symbols
+
+### Iteration 2: Data Persistence (Complete)
+- TimescaleDB integration for bar storage
+- Indicator calculation (SMA-20, RSI-14)
+- IndicatorEngine with rolling buffers
+- CLI for querying historical bars
+- `python -m axtrade.cli bars AAPL --limit 10`
+
+### Iteration 3: First Strategy (Complete)
+- OMS types: Order, Fill, Position with enums
+- Database schema for positions, orders, fills
+- BaseStrategy ABC with `on_bar()` interface
+- MomentumBreakout strategy (RSI oversold entry, overbought/stop-loss exit)
+- OrderManager with paper trading simulation
+- StrategyRunner service consuming bars from Redis
+- `make run-strategy`
+
+### Iteration 4: Backtesting Framework (Complete)
+- BacktestConfig, TradeRecord, EquityPoint, BacktestResult types
+- SimulatedBroker for order execution simulation
+- PerformanceAnalyzer with metrics:
+  - Sharpe ratio, max drawdown, profit factor
+  - Win rate, total return, annualized return
+- BacktestEngine replaying historical bars through strategies
+- CLI command: `python -m axtrade.cli backtest momentum --symbol AAPL --start 2024-01-01 --end 2024-01-31`
+
+### Iteration 5: Live Trading Integration (Complete)
+- BrokerProtocol abstract base class
+- PaperBroker with slippage simulation
+- IBKRBroker for live execution via ib_insync
+- RiskManager with pre-trade checks:
+  - Max position size/value limits
+  - Max order size limit
+  - Daily loss limit
+  - Max open orders limit
+- OrderManager refactored to use BrokerProtocol
+- OrderRejectedError for risk violations
+- Configuration: `oms.paper_mode: false` for live trading
+
+### Iteration 6: Web Dashboard (Complete)
+- FastAPI backend with REST API
+- WebSocket for real-time position and P&L updates
+- REST endpoints:
+  - `GET /api/positions` - Open positions with P&L
+  - `GET /api/orders` - Recent orders with filters
+  - `GET /api/fills` - Fill history
+  - `GET /api/pnl/summary` - Daily and cumulative P&L
+  - `GET /ws` - WebSocket for live updates
+- Dark-themed HTML/CSS/JS dashboard
+- Auto-reconnecting WebSocket client
+- `make run-api` to start server at http://localhost:8000
+
+### Iteration 7: Additional Strategies (Complete)
+- Bollinger Bands indicator (middle, upper, lower bands, %B, bandwidth)
+- MeanReversionStrategy: Buy at lower band + RSI oversold, sell at upper band
+- MultiTimeframeStrategy: 5m trend + 1m entry timing with take-profit/stop-loss
+- PairsStrategy: Z-score based pairs trading on correlated symbols
+- Strategies registered in STRATEGY_TYPES for dynamic loading
+- Example configs in default.yaml (commented out)
+
+### Iteration 8: Advanced Risk Management (Complete)
+- ATR indicator for volatility measurement (simple and Wilder's smoothing)
+- PositionSizer with multiple sizing methods:
+  - Fixed size with max position limit
+  - Risk percentage (% of equity at risk)
+  - Kelly criterion with fractional Kelly
+  - ATR-based volatility sizing
+- PortfolioRisk for portfolio-level risk tracking:
+  - Position/sector exposure tracking
+  - Portfolio heat (total risk / equity)
+  - Limit checks for new positions
+  - Available risk capacity calculation
+- SizingResult and PortfolioMetrics dataclasses
+
+**New Files**:
+- `src/axtrade/indicators/atr.py`
+- `src/axtrade/oms/position_sizer.py`
+- `src/axtrade/oms/portfolio_risk.py`
+
+### Iteration 9: System Health Monitoring (Complete)
+- Extensible alert system with channel architecture:
+  - AlertChannel ABC for custom integrations (email, SMS, Slack ready)
+  - LogChannel for logs + in-memory storage
+  - CallbackChannel for testing and custom callbacks
+- AlertService with deduplication and rate limiting
+- AlertRepository with in-memory storage and rotation
+- HealthMonitor for infrastructure checks:
+  - Redis, Database, Broker connectivity checks
+  - Heartbeat tracking for services
+  - Latency monitoring with warning thresholds
+  - Automatic alerts on status changes
+- REST API endpoints:
+  - `GET /api/alerts` - Recent alerts with filtering
+  - `GET /api/alerts/counts` - Alert counts by severity
+  - `POST /api/alerts/{id}/acknowledge` - Acknowledge alert
+  - `GET /api/health/detailed` - System health status
+- WebSocket broadcast for real-time alert notifications
+- Frontend updates:
+  - Alerts panel with severity indicators
+  - Health status dots in header (R/D/B for Redis/Database/Broker)
+  - Click-to-acknowledge alerts
+  - Collapsible alerts section
+
+**New Files**:
+- `src/axtrade/alerts/` module (types.py, repository.py, channels.py, service.py, health.py)
+- `src/axtrade/api/routes/alerts.py`
+- `src/axtrade/api/routes/health.py`
+
+## Test Coverage
+
+Total tests: 282
+
+| Module | Tests |
+|--------|-------|
+| Aggregator | 8 |
+| Alerts | 26 |
+| API | 15 |
+| ATR Indicator | 12 |
+| Backtest | 20 |
+| Bollinger | 14 |
+| Database | 5 |
+| Health | 19 |
+| Indicators | 18 |
+| OMS Types | 13 |
+| OMS Broker | 16 |
+| Portfolio Risk | 25 |
+| Position Sizer | 18 |
+| Risk | 17 |
+| Strategies | 15 |
+| Strategies Extended | 21 |
+| Other | 20 |
+
+## Current Architecture
+
+```
+Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
+                                |                |
+                          IndicatorEngine        v
+                           (SMA, RSI, ATR,  StrategyRunner -> OrderManager -> PostgreSQL
+                            Bollinger)           |              |              (positions,
+                                           [Strategies]   RiskManager         orders, fills)
+                                                          PositionSizer
+                                                          PortfolioRisk
+                                                               |
+                                                        BrokerProtocol
+                                                         /        \
+                                                  PaperBroker  IBKRBroker
+
+                              +------------------+
+                              |  FastAPI + WS    | <- http://localhost:8000
+                              +--------+---------+
+                                       |
+                    +------------------+------------------+
+                    |                  |                  |
+             PositionRepo         OrderRepo          AlertRepo
+                                                          |
+                                                    AlertService
+                                                     /    |    \
+                                              LogChannel  ...  (future)
+                                                    |
+                                             HealthMonitor
+```
+
+## Potential Next Iterations
+
+### Iteration 10: External Alert Channels
+**Goal**: Add email, SMS, and Slack notification channels
+
+**Key Components**:
+- EmailChannel (SendGrid/SMTP)
+- SMSChannel (Twilio)
+- SlackChannel (Webhook)
+- Channel configuration in YAML
+- Alert routing rules
+
+### Iteration 11: Performance Analytics
+**Goal**: Advanced portfolio and strategy analytics
+
+**Key Components**:
+- Rolling Sharpe/Sortino ratios
+- Drawdown analysis
+- Trade distribution analytics
+- Strategy correlation matrix
+- Performance attribution
+
+---
+
+## Completed Plan Documents
+
+Detailed implementation plans for completed iterations:
+- `docs/iteration-3-plan.md` - First Strategy
+- `docs/iteration-4-plan.md` - Backtesting Framework
+- `docs/iteration-5-plan.md` - Live Trading Integration
+- `docs/iteration-6-plan.md` - Web Dashboard
+- `docs/iteration-7-plan.md` - Additional Strategies
+- `docs/iteration-8-plan.md` - Advanced Risk Management
+- `docs/iteration-9-plan.md` - System Health Monitoring
