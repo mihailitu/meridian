@@ -12,12 +12,15 @@ def main():
     parser.add_argument(
         "--adapter",
         "-a",
-        choices=["mock", "ibkr"],
+        choices=["mock", "ibkr", "alpaca"],
         help="Override adapter type",
     )
     args = parser.parse_args()
 
-    asyncio.run(run_gateway(config_path=args.config, adapter=args.adapter))
+    try:
+        asyncio.run(run_gateway(config_path=args.config, adapter=args.adapter))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

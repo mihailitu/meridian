@@ -1,4 +1,4 @@
-.PHONY: install dev redis run test clean db db-stop
+.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api test clean db db-stop infra infra-stop
 
 install:
 	python3 -m venv .venv
@@ -31,6 +31,9 @@ run:
 
 run-ibkr:
 	.venv/bin/python -m axtrade.gateway --adapter ibkr
+
+run-alpaca:
+	.venv/bin/python -m axtrade.gateway --adapter alpaca
 
 run-aggregator:
 	.venv/bin/python -m axtrade.aggregator

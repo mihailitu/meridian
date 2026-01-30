@@ -27,12 +27,23 @@ class IBKRConfig:
 
 
 @dataclass
+class AlpacaConfig:
+    """Alpaca adapter configuration."""
+
+    api_key: str = ""
+    secret_key: str = ""
+    feed: str = "iex"  # "iex" (free) or "sip" (paid)
+    paper: bool = True
+
+
+@dataclass
 class GatewayConfig:
     """Gateway service configuration."""
 
     adapter: str = "mock"
     mock: MockConfig = field(default_factory=MockConfig)
     ibkr: IBKRConfig = field(default_factory=IBKRConfig)
+    alpaca: AlpacaConfig = field(default_factory=AlpacaConfig)
     symbols: list[SymbolConfig] = field(default_factory=list)
 
 
@@ -172,6 +183,7 @@ def load_config(path: Optional[Path] = None) -> Config:
 
     mock_data = gateway_data.get("mock", {})
     ibkr_data = gateway_data.get("ibkr", {})
+    alpaca_data = gateway_data.get("alpaca", {})
 
     return Config(
         gateway=GatewayConfig(
@@ -184,6 +196,12 @@ def load_config(path: Optional[Path] = None) -> Config:
                 host=ibkr_data.get("host", "127.0.0.1"),
                 port=ibkr_data.get("port", 7497),
                 client_id=ibkr_data.get("client_id", 1),
+            ),
+            alpaca=AlpacaConfig(
+                api_key=alpaca_data.get("api_key", ""),
+                secret_key=alpaca_data.get("secret_key", ""),
+                feed=alpaca_data.get("feed", "iex"),
+                paper=alpaca_data.get("paper", True),
             ),
             symbols=symbols,
         ),

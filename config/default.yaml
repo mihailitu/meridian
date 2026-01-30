@@ -1,5 +1,5 @@
 gateway:
-  adapter: mock  # mock | ibkr
+  adapter: mock  # mock | ibkr | alpaca
 
   mock:
     tick_interval_ms: 500
@@ -9,6 +9,12 @@ gateway:
     host: "127.0.0.1"
     port: 7497
     client_id: 1
+
+  alpaca:
+    api_key: ""  # Use ALPACA_API_KEY env var
+    secret_key: ""  # Use ALPACA_SECRET_KEY env var
+    feed: "iex"  # "iex" (free) or "sip" (paid)
+    paper: true
 
   symbols:
     - symbol: AAPL

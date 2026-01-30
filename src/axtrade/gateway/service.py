@@ -5,6 +5,7 @@ import signal
 from typing import Optional
 
 from ..common import Config, RedisPublisher, get_logger, load_config
+from .alpaca import AlpacaAdapter
 from .base import DataAdapter
 from .ibkr import IBKRAdapter
 from .mock import MockAdapter
@@ -43,6 +44,8 @@ class GatewayService:
             return MockAdapter(self.config.gateway.mock)
         elif adapter_type == "ibkr":
             return IBKRAdapter(self.config.gateway.ibkr)
+        elif adapter_type == "alpaca":
+            return AlpacaAdapter(self.config.gateway.alpaca)
         else:
             raise ValueError(f"Unknown adapter type: {adapter_type}")
 

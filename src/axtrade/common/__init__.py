@@ -2,6 +2,7 @@
 
 from .config import (
     AggregatorConfig,
+    AlpacaConfig,
     APIConfig,
     Config,
     DatabaseConfig,
@@ -23,6 +24,7 @@ from .types import Bar, SymbolConfig, Tick
 
 __all__ = [
     "AggregatorConfig",
+    "AlpacaConfig",
     "APIConfig",
     "Bar",
     "BarConsumer",
