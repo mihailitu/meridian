@@ -119,13 +119,19 @@ class RedisConsumer:
         group = self.aggregator_config.consumer_group
 
         while True:
-            messages = await self._client.xreadgroup(
-                groupname=group,
-                consumername=consumer_name,
-                streams={stream_key: ">"},
-                count=100,
-                block=block_ms,
-            )
+            if not self._client:
+                return
+
+            try:
+                messages = await self._client.xreadgroup(
+                    groupname=group,
+                    consumername=consumer_name,
+                    streams={stream_key: ">"},
+                    count=100,
+                    block=block_ms,
+                )
+            except (AttributeError, ConnectionError):
+                return
 
             if not messages:
                 continue
@@ -135,7 +141,8 @@ class RedisConsumer:
                     tick = self._parse_tick(data)
                     if tick:
                         yield tick
-                        await self._client.xack(stream_key, group, msg_id)
+                        if self._client:
+                            await self._client.xack(stream_key, group, msg_id)
 
     def _parse_tick(self, data: dict) -> Optional[Tick]:
         """Parse tick data from Redis message."""

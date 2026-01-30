@@ -143,7 +143,10 @@ async def main() -> None:
 
 def run() -> None:
     """Run the API server synchronously."""
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":
