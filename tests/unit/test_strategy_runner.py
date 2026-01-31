@@ -14,6 +14,7 @@ from axtrade.common import (
     Bar,
     Config,
     DatabaseConfig,
+    LoopSupervisor,
     OMSConfig,
     RedisConfig,
     RiskConfig,
@@ -380,6 +381,7 @@ class TestStrategyRunnerBarProcessing:
         mock_order_manager.get_position.return_value = None
 
         runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
         # Create async generator that yields one bar then stops
@@ -415,6 +417,7 @@ class TestStrategyRunnerBarProcessing:
         mock_order_manager.get_position = AsyncMock(return_value=None)
 
         runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
         bar_data = {
@@ -447,6 +450,7 @@ class TestStrategyRunnerBarProcessing:
         mock_order_manager.get_position = AsyncMock(return_value=None)
 
         runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
         bar_data = {
@@ -486,6 +490,7 @@ class TestStrategyRunnerBarProcessing:
         mock_order_manager.get_position = AsyncMock(return_value=position)
 
         runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
         bar_data = {
@@ -530,6 +535,7 @@ class TestStrategyRunnerBarProcessing:
         mock_order_manager.get_position = AsyncMock(return_value=None)
 
         runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
         # Bar that would trigger sell signal (overbought)
@@ -562,6 +568,7 @@ class TestStrategyRunnerBarProcessing:
         mock_order_manager.get_position = AsyncMock(return_value=None)
 
         runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
         bar_data = {

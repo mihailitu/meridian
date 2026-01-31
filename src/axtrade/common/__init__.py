@@ -21,6 +21,7 @@ from .config import (
 from .db import BarRepository, DatabasePool
 from .logging import get_logger, setup_logging
 from .messaging import BarConsumer, BarPublisher, RedisConsumer, RedisPublisher
+from .resilience import LoopSupervisor
 from .types import Bar, SymbolConfig, Tick
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "GatewayConfig",
     "IBKRConfig",
     "IndicatorConfig",
+    "LoopSupervisor",
     "MockConfig",
     "OMSConfig",
     "RedisConfig",

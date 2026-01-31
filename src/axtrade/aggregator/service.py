@@ -10,6 +10,7 @@ from axtrade.common import (
     BarRepository,
     Config,
     DatabasePool,
+    LoopSupervisor,
     RedisConsumer,
     get_logger,
     load_config,
@@ -48,6 +49,7 @@ class AggregatorService:
 
         self._running = False
         self._consumer_name = f"aggregator-{uuid.uuid4().hex[:8]}"
+        self._consume_supervisor: LoopSupervisor | None = None
 
     async def start(self) -> None:
         """Start the aggregator service."""
@@ -69,6 +71,13 @@ class AggregatorService:
             self.config.aggregator.source_stream,
         )
         self.logger.info("Aggregating intervals: %s", self.config.aggregator.intervals)
+
+        # Initialize loop supervisor
+        self._consume_supervisor = LoopSupervisor(
+            name="aggregator_consume",
+            alert_after=3,
+            alert_callback=self._on_loop_failure,
+        )
 
         self._running = True
         await self._consume_loop()
@@ -104,6 +113,9 @@ class AggregatorService:
         self.logger.info("Stopping aggregator service...")
         self._running = False
 
+        if self._consume_supervisor:
+            self._consume_supervisor.stop()
+
         # Flush remaining bars
         completed = self._engine.flush()
         for bar, interval in completed:
@@ -115,18 +127,43 @@ class AggregatorService:
 
         self.logger.info("Aggregator service stopped")
 
+    async def _on_loop_failure(self, loop_name: str, error: Exception) -> None:
+        """Alert on repeated loop failures.
+
+        Args:
+            loop_name: Name of the failing loop
+            error: The exception that caused the failure
+        """
+        self.logger.critical(
+            "Critical loop failure",
+            loop=loop_name,
+            error=str(error),
+            error_type=type(error).__name__,
+        )
+
     async def _consume_loop(self) -> None:
         """Main consumption loop."""
-        try:
-            async for tick in self._consumer.consume(self._consumer_name):
-                if not self._running:
-                    break
+        if not self._consume_supervisor:
+            return
 
-                completed = self._engine.process_tick(tick)
-                for bar, interval in completed:
-                    await self._process_completed_bar(bar, interval)
-        except asyncio.CancelledError:
-            pass
+        while self._running:
+            try:
+                async for tick in self._consumer.consume(self._consumer_name):
+                    if not self._running:
+                        break
+
+                    completed = self._engine.process_tick(tick)
+                    for bar, interval in completed:
+                        await self._process_completed_bar(bar, interval)
+
+                    # Reset errors on successful iteration
+                    self._consume_supervisor.reset_errors()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if not await self._consume_supervisor.handle_error(e):
+                    break
 
     async def _process_completed_bar(self, bar: Bar, interval: str) -> None:
         """Process a completed bar: calculate indicators, persist, publish."""

@@ -4,7 +4,7 @@ import asyncio
 import signal
 from typing import Optional
 
-from ..common import Config, RedisPublisher, get_logger, load_config
+from ..common import Config, LoopSupervisor, RedisPublisher, get_logger, load_config
 from .alpaca import AlpacaAdapter
 from .base import DataAdapter
 from .ibkr import IBKRAdapter
@@ -32,6 +32,7 @@ class GatewayService:
         self._publisher: Optional[RedisPublisher] = None
         self._running = False
         self._last_prices: dict[str, float] = {}
+        self._stream_supervisor: Optional[LoopSupervisor] = None
 
     def _create_adapter(self) -> DataAdapter:
         """Create the appropriate data adapter based on config.
@@ -76,6 +77,13 @@ class GatewayService:
             count=len(self.config.gateway.symbols),
         )
 
+        # Initialize loop supervisor
+        self._stream_supervisor = LoopSupervisor(
+            name="gateway_stream",
+            alert_after=3,
+            alert_callback=self._on_loop_failure,
+        )
+
         self._running = True
         await self._stream_loop()
 
@@ -84,29 +92,60 @@ class GatewayService:
         logger.info("stopping_gateway")
         self._running = False
 
+        if self._stream_supervisor:
+            self._stream_supervisor.stop()
+
         if self._adapter:
             await self._adapter.disconnect()
 
         if self._publisher:
             await self._publisher.disconnect()
 
+    async def _on_loop_failure(self, loop_name: str, error: Exception) -> None:
+        """Alert on repeated loop failures.
+
+        Args:
+            loop_name: Name of the failing loop
+            error: The exception that caused the failure
+        """
+        logger.critical(
+            "Critical loop failure",
+            loop=loop_name,
+            error=str(error),
+            error_type=type(error).__name__,
+        )
+
     async def _stream_loop(self) -> None:
         """Main loop that streams and processes ticks."""
-        async for tick in self._adapter.stream_ticks():
-            if not self._running:
+        if not self._adapter or not self._stream_supervisor:
+            return
+
+        while self._running:
+            try:
+                async for tick in self._adapter.stream_ticks():
+                    if not self._running:
+                        break
+
+                    last_price = self._last_prices.get(tick.symbol)
+                    change = tick.price - last_price if last_price else 0.0
+                    self._last_prices[tick.symbol] = tick.price
+
+                    self._print_tick(tick, change)
+
+                    if self._publisher:
+                        try:
+                            await self._publisher.publish_tick(tick)
+                        except Exception as e:
+                            logger.error("redis_publish_failed", error=str(e))
+
+                    # Reset errors on successful iteration
+                    self._stream_supervisor.reset_errors()
+
+            except asyncio.CancelledError:
                 break
-
-            last_price = self._last_prices.get(tick.symbol)
-            change = tick.price - last_price if last_price else 0.0
-            self._last_prices[tick.symbol] = tick.price
-
-            self._print_tick(tick, change)
-
-            if self._publisher:
-                try:
-                    await self._publisher.publish_tick(tick)
-                except Exception as e:
-                    logger.error("redis_publish_failed", error=str(e))
+            except Exception as e:
+                if not await self._stream_supervisor.handle_error(e):
+                    break
 
     def _print_tick(self, tick, change: float) -> None:
         """Log tick data.

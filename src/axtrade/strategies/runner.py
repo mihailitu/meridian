@@ -9,6 +9,7 @@ from axtrade.common import (
     BarConsumer,
     Config,
     DatabasePool,
+    LoopSupervisor,
     get_logger,
     load_config,
     setup_logging,
@@ -36,6 +37,8 @@ class StrategyRunner:
         self._state_repo: Optional[StrategyStateRepository] = None
         self._control_subscriber: Optional[StrategyControlSubscriber] = None
         self._control_task: Optional[asyncio.Task] = None
+        self._control_supervisor: Optional[LoopSupervisor] = None
+        self._consume_supervisor: Optional[LoopSupervisor] = None
 
     async def start(self) -> None:
         """Start the strategy runner."""
@@ -60,6 +63,18 @@ class StrategyRunner:
 
         # Load existing positions into strategies
         await self._load_positions()
+
+        # Initialize loop supervisors
+        self._control_supervisor = LoopSupervisor(
+            name="strategy_control",
+            alert_after=3,
+            alert_callback=self._on_loop_failure,
+        )
+        self._consume_supervisor = LoopSupervisor(
+            name="strategy_consume",
+            alert_after=3,
+            alert_callback=self._on_loop_failure,
+        )
 
         # Start control subscriber
         self._control_subscriber = StrategyControlSubscriber(
@@ -131,6 +146,12 @@ class StrategyRunner:
         self.logger.info("Stopping strategy runner...")
         self._running = False
 
+        if self._control_supervisor:
+            self._control_supervisor.stop()
+
+        if self._consume_supervisor:
+            self._consume_supervisor.stop()
+
         if self._control_task:
             self._control_task.cancel()
             try:
@@ -169,22 +190,37 @@ class StrategyRunner:
                     enabled=strategy.enabled,
                 )
 
+    async def _on_loop_failure(self, loop_name: str, error: Exception) -> None:
+        """Alert on repeated loop failures.
+
+        Args:
+            loop_name: Name of the failing loop
+            error: The exception that caused the failure
+        """
+        self.logger.critical(
+            "Critical loop failure",
+            loop=loop_name,
+            error=str(error),
+            error_type=type(error).__name__,
+        )
+
     async def _control_loop(self) -> None:
         """Listen for control commands and apply them."""
-        if not self._control_subscriber:
+        if not self._control_subscriber or not self._control_supervisor:
             return
 
-        try:
-            async for command in self._control_subscriber.subscribe():
-                if not self._running:
+        while self._running:
+            try:
+                async for command in self._control_subscriber.subscribe():
+                    if not self._running:
+                        break
+                    self._handle_control_command(command)
+                    self._control_supervisor.reset_errors()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if not await self._control_supervisor.handle_error(e):
                     break
-
-                self._handle_control_command(command)
-
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            self.logger.error("Control loop error", error=str(e))
 
     def _handle_control_command(self, command) -> None:
         """Handle a control command.
@@ -215,53 +251,60 @@ class StrategyRunner:
 
     async def _consume_loop(self) -> None:
         """Main loop consuming bars and feeding strategies."""
-        if not self._bar_consumer or not self._order_manager:
+        if not self._bar_consumer or not self._order_manager or not self._consume_supervisor:
             return
 
-        try:
-            async for bar_data in self._bar_consumer.consume(self._consumer_name):
-                if not self._running:
-                    break
+        while self._running:
+            try:
+                async for bar_data in self._bar_consumer.consume(self._consumer_name):
+                    if not self._running:
+                        break
 
-                # Convert to BarWithIndicators
-                data = BarWithIndicators(
-                    bar=bar_data["bar"],
-                    sma_20=bar_data.get("sma_20"),
-                    rsi_14=bar_data.get("rsi_14"),
-                )
+                    # Convert to BarWithIndicators
+                    data = BarWithIndicators(
+                        bar=bar_data["bar"],
+                        sma_20=bar_data.get("sma_20"),
+                        rsi_14=bar_data.get("rsi_14"),
+                    )
 
-                # Update price cache in order manager
-                self._order_manager.update_price(data.symbol, data.close)
+                    # Update price cache in order manager
+                    self._order_manager.update_price(data.symbol, data.close)
 
-                # Run each strategy
-                for strategy in self._strategies.values():
-                    if not strategy.enabled:
-                        continue
+                    # Run each strategy
+                    for strategy in self._strategies.values():
+                        if not strategy.enabled:
+                            continue
 
-                    try:
-                        order = strategy.on_bar(data)
-                        if order:
-                            self._log_signal(strategy, data, order)
-                            await self._order_manager.submit_order(order)
+                        try:
+                            order = strategy.on_bar(data)
+                            if order:
+                                self._log_signal(strategy, data, order)
+                                await self._order_manager.submit_order(order)
 
-                            # Update local position after fill (in paper mode, immediate)
-                            position = await self._order_manager.get_position(
-                                strategy.strategy_id, order.symbol
+                                # Update local position after fill (in paper mode, immediate)
+                                position = await self._order_manager.get_position(
+                                    strategy.strategy_id, order.symbol
+                                )
+                                if position:
+                                    strategy.update_position(position)
+                                else:
+                                    strategy.clear_position(order.symbol)
+
+                        except Exception as e:
+                            self.logger.error(
+                                "Strategy error: %s - %s",
+                                strategy.name,
+                                str(e),
                             )
-                            if position:
-                                strategy.update_position(position)
-                            else:
-                                strategy.clear_position(order.symbol)
 
-                    except Exception as e:
-                        self.logger.error(
-                            "Strategy error: %s - %s",
-                            strategy.name,
-                            str(e),
-                        )
+                    # Reset errors on successful iteration
+                    self._consume_supervisor.reset_errors()
 
-        except asyncio.CancelledError:
-            pass
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                if not await self._consume_supervisor.handle_error(e):
+                    break
 
     def _log_signal(
         self,
