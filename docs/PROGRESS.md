@@ -54,9 +54,14 @@
   - `GET /api/fills` - Fill history
   - `GET /api/pnl/summary` - Daily and cumulative P&L
   - `GET /ws` - WebSocket for live updates
-- Dark-themed HTML/CSS/JS dashboard
-- Auto-reconnecting WebSocket client
-- `make run-api` to start server at http://localhost:8000
+- React frontend (Vite + TypeScript + Tailwind) at `src/axtrade/web/ui/`:
+  - Overview: P&L cards, P&L chart, positions, alerts panel
+  - Monitor: Orders table, Fills table, live WebSocket feed
+  - Strategies: Strategy cards with status and P&L
+  - Components: OrdersTable, FillsTable, AlertsPanel, PnLChart, AlertBadge
+  - Custom hooks: useOrders, useFills, useAlerts, useHealth, usePnLHistory
+- `make run-api` to start backend at http://localhost:8000
+- `npm run dev` (in web/ui) to start frontend at http://localhost:5173
 
 ### Iteration 7: Additional Strategies (Complete)
 - Bollinger Bands indicator (middle, upper, lower bands, %B, bandwidth)
@@ -133,6 +138,14 @@
 
 ### Recent Additions
 - `LoopSupervisor` for resilient service loops with exponential backoff (`common/resilience.py`)
+- Parallel strategy execution in StrategyRunner consume loop (`strategies/runner.py`)
+- React frontend with Vite + TypeScript + Tailwind (`web/ui/`):
+  - OrdersTable component with status badges
+  - FillsTable component
+  - AlertsPanel with acknowledge functionality
+  - PnLChart using recharts
+  - AlertBadge in header showing unacknowledged count
+  - Custom hooks for API polling (useOrders, useFills, useAlerts, useHealth)
 
 ## Test Coverage
 
@@ -191,6 +204,17 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
                                               LogChannel  ...  (future)
                                                     |
                                              HealthMonitor
+
+                              +------------------+
+                              |   React UI       | <- http://localhost:5173
+                              | (Vite+TS+Tailwind)|
+                              +------------------+
+                              | Overview | Monitor | Strategies |
+                              | - P&L Chart       |
+                              | - Orders Table    |
+                              | - Fills Table     |
+                              | - Alerts Panel    |
+                              +------------------+
 ```
 
 ## Potential Next Iterations

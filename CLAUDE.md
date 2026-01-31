@@ -26,6 +26,13 @@ make run-aggregator         # Run bar aggregator service
 make run-strategy           # Run strategy runner service
 make run-api                # Run web dashboard API server
 
+# Frontend Development
+cd src/axtrade/web/ui
+npm install                 # Install dependencies (first time)
+npm run dev                 # Start Vite dev server at http://localhost:5173
+npm run build               # Build for production
+npm run lint                # Run ESLint
+
 # Testing
 make test                   # Run all tests
 .venv/bin/pytest tests/unit/test_indicators.py -v           # Single test file
@@ -68,7 +75,8 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 - `oms/`: Order Management System - `Order`, `Fill`, `Position` types, `OrderManager`, `BrokerProtocol` with `PaperBroker`/`IBKRBroker`, `RiskManager` for pre-trade checks, `OrderRepository`, `PositionRepository`
 - `backtest/`: Backtesting framework - `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer` for strategy evaluation on historical data
 - `api/`: Web dashboard - FastAPI app with REST endpoints and WebSocket for real-time updates
-- `web/`: Static frontend assets (HTML/CSS/JS) for dashboard UI
+- `web/ui/`: React frontend (Vite + TypeScript + Tailwind) with components for positions, orders, fills, alerts, and P&L chart
+- `web/static/`: Legacy static HTML/CSS/JS dashboard
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
 - `analytics/`: Performance analytics - rolling metrics, drawdown tracking, trade statistics
 
