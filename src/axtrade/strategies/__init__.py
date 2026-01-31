@@ -1,6 +1,13 @@
 """Trading strategies."""
 
 from .base import BarWithIndicators, BaseStrategy, Signal
+from .control import (
+    ControlCommand,
+    StrategyControlPublisher,
+    StrategyControlSubscriber,
+    StrategyState,
+    StrategyStateRepository,
+)
 from .mean_reversion import MeanReversionStrategy
 from .momentum import MomentumBreakout
 from .multi_timeframe import MultiTimeframeStrategy
@@ -17,10 +24,15 @@ STRATEGY_TYPES: dict[str, type[BaseStrategy]] = {
 __all__ = [
     "BarWithIndicators",
     "BaseStrategy",
+    "ControlCommand",
     "MeanReversionStrategy",
     "MomentumBreakout",
     "MultiTimeframeStrategy",
     "PairsStrategy",
     "Signal",
+    "StrategyControlPublisher",
+    "StrategyControlSubscriber",
+    "StrategyState",
+    "StrategyStateRepository",
     "STRATEGY_TYPES",
 ]

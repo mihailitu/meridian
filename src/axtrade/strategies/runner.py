@@ -17,6 +17,7 @@ from axtrade.oms import OrderManager
 
 from . import STRATEGY_TYPES
 from .base import BarWithIndicators, BaseStrategy
+from .control import StrategyControlSubscriber, StrategyStateRepository
 
 
 class StrategyRunner:
@@ -32,6 +33,9 @@ class StrategyRunner:
         self._strategies: dict[str, BaseStrategy] = {}
         self._running = False
         self._consumer_name = f"strategy-runner-{uuid.uuid4().hex[:8]}"
+        self._state_repo: Optional[StrategyStateRepository] = None
+        self._control_subscriber: Optional[StrategyControlSubscriber] = None
+        self._control_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         """Start the strategy runner."""
@@ -50,8 +54,20 @@ class StrategyRunner:
         # Load strategies
         self._load_strategies()
 
+        # Initialize state repository and apply persisted state
+        self._state_repo = StrategyStateRepository(self._db_pool)
+        await self._apply_persisted_state()
+
         # Load existing positions into strategies
         await self._load_positions()
+
+        # Start control subscriber
+        self._control_subscriber = StrategyControlSubscriber(
+            self.config.redis, self.config.strategies
+        )
+        await self._control_subscriber.connect()
+        self._control_task = asyncio.create_task(self._control_loop())
+        self.logger.info("Control subscriber started")
 
         # Connect bar consumer
         self._bar_consumer = BarConsumer(self.config.redis, self.config.strategies)
@@ -115,6 +131,16 @@ class StrategyRunner:
         self.logger.info("Stopping strategy runner...")
         self._running = False
 
+        if self._control_task:
+            self._control_task.cancel()
+            try:
+                await self._control_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._control_subscriber:
+            await self._control_subscriber.disconnect()
+
         if self._bar_consumer:
             await self._bar_consumer.disconnect()
 
@@ -125,6 +151,67 @@ class StrategyRunner:
             await self._db_pool.disconnect()
 
         self.logger.info("Strategy runner stopped")
+
+    async def _apply_persisted_state(self) -> None:
+        """Apply persisted strategy states from database."""
+        if not self._state_repo:
+            return
+
+        states = await self._state_repo.get_all()
+        state_map = {s.strategy_id: s.enabled for s in states}
+
+        for strategy_id, strategy in self._strategies.items():
+            if strategy_id in state_map:
+                strategy.enabled = state_map[strategy_id]
+                self.logger.info(
+                    "Applied persisted state",
+                    strategy_id=strategy_id,
+                    enabled=strategy.enabled,
+                )
+
+    async def _control_loop(self) -> None:
+        """Listen for control commands and apply them."""
+        if not self._control_subscriber:
+            return
+
+        try:
+            async for command in self._control_subscriber.subscribe():
+                if not self._running:
+                    break
+
+                self._handle_control_command(command)
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self.logger.error("Control loop error", error=str(e))
+
+    def _handle_control_command(self, command) -> None:
+        """Handle a control command.
+
+        Args:
+            command: ControlCommand to process
+        """
+        strategy = self._strategies.get(command.strategy_id)
+        if not strategy:
+            self.logger.warning(
+                "Control command for unknown strategy",
+                strategy_id=command.strategy_id,
+            )
+            return
+
+        if command.action == "enable":
+            strategy.enabled = True
+            self.logger.info("Enabled strategy", strategy_id=command.strategy_id)
+        elif command.action == "disable":
+            strategy.enabled = False
+            self.logger.info("Disabled strategy", strategy_id=command.strategy_id)
+        else:
+            self.logger.warning(
+                "Unknown control action",
+                action=command.action,
+                strategy_id=command.strategy_id,
+            )
 
     async def _consume_loop(self) -> None:
         """Main loop consuming bars and feeding strategies."""

@@ -12,9 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor, LogChannel
 from axtrade.common import Config, DatabasePool, get_logger, load_config, setup_logging
 from axtrade.oms.repository import OrderRepository, PositionRepository
+from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
 from .dependencies import state
-from .routes import alerts, analytics, health, orders, pnl, positions, ws
+from .routes import alerts, analytics, health, orders, pnl, positions, strategies, ws
 
 logger = get_logger("api")
 
@@ -50,9 +51,19 @@ async def lifespan(app: FastAPI):
     state.position_repo = PositionRepository(state.db_pool)
     logger.info("Repositories initialized")
 
+    # Initialize strategy control components
+    state.strategies_config = config.strategies
+    state.strategy_state_repo = StrategyStateRepository(state.db_pool)
+    state.strategy_control = StrategyControlPublisher(config.redis, config.strategies)
+    await state.strategy_control.connect()
+    logger.info("Strategy control initialized")
+
     yield
 
     # Cleanup
+    if state.strategy_control:
+        await state.strategy_control.disconnect()
+
     if state.db_pool:
         await state.db_pool.disconnect()
         logger.info("Disconnected from database")
@@ -98,6 +109,7 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(alerts.router, prefix="/api", tags=["alerts"])
     app.include_router(health.router, prefix="/api", tags=["health"])
     app.include_router(analytics.router, prefix="/api", tags=["analytics"])
+    app.include_router(strategies.router, prefix="/api", tags=["strategies"])
     app.include_router(ws.router, tags=["websocket"])
 
     @app.get("/")

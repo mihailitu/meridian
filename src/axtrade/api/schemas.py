@@ -80,3 +80,51 @@ class DashboardData(BaseModel):
     positions: list[PositionResponse]
     pnl: PnLSummary
     timestamp: datetime
+
+
+class StrategyStatusResponse(BaseModel):
+    """Strategy status for list endpoint."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    strategy_id: str
+    name: str
+    type: str
+    enabled: bool
+    position_count: int
+    daily_pnl: Decimal
+
+
+class StrategyDetailResponse(BaseModel):
+    """Detailed strategy information."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    strategy_id: str
+    name: str
+    type: str
+    enabled: bool
+    config: dict
+    position_count: int
+    daily_pnl: Decimal
+    positions: list[PositionResponse]
+    recent_orders: list[OrderResponse]
+
+
+class StrategyPerformanceResponse(BaseModel):
+    """Strategy performance metrics."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    strategy_id: str
+    total_pnl: Decimal
+    trade_count: int
+    win_rate: float
+    avg_trade_pnl: Decimal
+    profit_factor: float
+    sharpe_ratio: float | None
+    sortino_ratio: float | None
+    max_drawdown: float
+    avg_trade_duration_hours: float
+    largest_win: Decimal
+    largest_loss: Decimal

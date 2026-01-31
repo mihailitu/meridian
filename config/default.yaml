@@ -70,6 +70,7 @@ oms:
 strategies:
   bar_stream: "stream:bars:1m:us"
   consumer_group: "strategies"
+  control_channel: "axtrade:strategy:control"
   enabled:
     - type: momentum
       id: momentum_us_01

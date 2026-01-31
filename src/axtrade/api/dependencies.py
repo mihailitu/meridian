@@ -3,8 +3,9 @@
 from typing import Optional
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor
-from axtrade.common import DatabasePool
+from axtrade.common import DatabasePool, StrategiesConfig
 from axtrade.oms.repository import OrderRepository, PositionRepository
+from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
 
 class APIState:
@@ -16,6 +17,9 @@ class APIState:
     alert_repo: Optional[AlertRepository] = None
     alert_service: Optional[AlertService] = None
     health_monitor: Optional[HealthMonitor] = None
+    strategy_state_repo: Optional[StrategyStateRepository] = None
+    strategy_control: Optional[StrategyControlPublisher] = None
+    strategies_config: Optional[StrategiesConfig] = None
 
 
 state = APIState()
@@ -54,3 +58,24 @@ def get_health_monitor() -> HealthMonitor:
     if state.health_monitor is None:
         raise RuntimeError("Health monitor not initialized")
     return state.health_monitor
+
+
+def get_strategy_state_repo() -> StrategyStateRepository:
+    """Get strategy state repository dependency."""
+    if state.strategy_state_repo is None:
+        raise RuntimeError("Strategy state repository not initialized")
+    return state.strategy_state_repo
+
+
+def get_strategy_control() -> StrategyControlPublisher:
+    """Get strategy control publisher dependency."""
+    if state.strategy_control is None:
+        raise RuntimeError("Strategy control publisher not initialized")
+    return state.strategy_control
+
+
+def get_strategies_config() -> StrategiesConfig:
+    """Get strategies configuration dependency."""
+    if state.strategies_config is None:
+        raise RuntimeError("Strategies config not initialized")
+    return state.strategies_config

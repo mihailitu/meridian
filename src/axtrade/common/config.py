@@ -131,6 +131,7 @@ class StrategiesConfig:
 
     bar_stream: str = "stream:bars:1m:us"
     consumer_group: str = "strategies"
+    control_channel: str = "axtrade:strategy:control"
     enabled: list[StrategyInstanceConfig] = field(default_factory=list)
 
 
@@ -255,6 +256,7 @@ def load_config(path: Optional[Path] = None) -> Config:
         strategies=StrategiesConfig(
             bar_stream=strategies_data.get("bar_stream", "stream:bars:1m:us"),
             consumer_group=strategies_data.get("consumer_group", "strategies"),
+            control_channel=strategies_data.get("control_channel", "axtrade:strategy:control"),
             enabled=[
                 StrategyInstanceConfig(
                     type=s["type"],

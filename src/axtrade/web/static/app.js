@@ -32,14 +32,17 @@ class Dashboard {
             currentDrawdown: document.getElementById('current-drawdown'),
             profitFactor: document.getElementById('profit-factor'),
             expectancy: document.getElementById('expectancy'),
+            strategiesGrid: document.getElementById('strategies-grid'),
         };
 
+        this.strategies = [];
         this.setupAlertToggle();
         this.connect();
         this.loadOrders();
         this.loadAlerts();
         this.loadHealth();
         this.loadAnalytics();
+        this.loadStrategies();
     }
 
     setupAlertToggle() {
@@ -455,6 +458,99 @@ class Dashboard {
             element.classList.add('positive');
         } else if (value < 0) {
             element.classList.add('negative');
+        }
+    }
+
+    // Strategies management
+
+    async loadStrategies() {
+        try {
+            const response = await fetch('/api/strategies');
+            if (response.ok) {
+                this.strategies = await response.json();
+                this.renderStrategies();
+            }
+        } catch (e) {
+            console.error('Failed to load strategies:', e);
+            this.elements.strategiesGrid.innerHTML = '<div class="empty-strategies">Failed to load strategies</div>';
+        }
+
+        // Refresh strategies every 10 seconds
+        setTimeout(() => this.loadStrategies(), 10000);
+    }
+
+    renderStrategies() {
+        if (this.strategies.length === 0) {
+            this.elements.strategiesGrid.innerHTML = '<div class="empty-strategies">No strategies configured</div>';
+            return;
+        }
+
+        this.elements.strategiesGrid.innerHTML = this.strategies.map(strategy => {
+            const pnlValue = parseFloat(strategy.daily_pnl);
+            const pnlClass = pnlValue > 0 ? 'positive' : (pnlValue < 0 ? 'negative' : '');
+
+            return `
+                <div class="strategy-card ${strategy.enabled ? '' : 'disabled'}" data-strategy-id="${strategy.strategy_id}">
+                    <div class="strategy-header">
+                        <div class="strategy-info">
+                            <div class="strategy-name">${this.escapeHtml(strategy.name)}</div>
+                            <div class="strategy-id">${this.escapeHtml(strategy.strategy_id)}</div>
+                            <div class="strategy-type">${this.escapeHtml(strategy.type)}</div>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox"
+                                   ${strategy.enabled ? 'checked' : ''}
+                                   onchange="dashboard.toggleStrategy('${strategy.strategy_id}', this.checked)">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="strategy-stats">
+                        <div class="strategy-stat">
+                            <span class="strategy-stat-label">Positions</span>
+                            <span class="strategy-stat-value">${strategy.position_count}</span>
+                        </div>
+                        <div class="strategy-stat">
+                            <span class="strategy-stat-label">Daily P&L</span>
+                            <span class="strategy-stat-value ${pnlClass}">${this.formatCurrency(strategy.daily_pnl)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    async toggleStrategy(strategyId, enabled) {
+        const card = document.querySelector(`[data-strategy-id="${strategyId}"]`);
+        const toggle = card?.querySelector('input[type="checkbox"]');
+
+        // Disable toggle while request is in progress
+        if (toggle) toggle.disabled = true;
+
+        try {
+            const action = enabled ? 'enable' : 'disable';
+            const response = await fetch(`/api/strategies/${strategyId}/${action}`, {
+                method: 'POST',
+            });
+
+            if (response.ok) {
+                const updated = await response.json();
+                // Update local state
+                const strategy = this.strategies.find(s => s.strategy_id === strategyId);
+                if (strategy) {
+                    strategy.enabled = updated.enabled;
+                    strategy.position_count = updated.position_count;
+                    strategy.daily_pnl = updated.daily_pnl;
+                }
+                this.renderStrategies();
+            } else {
+                // Revert toggle on failure
+                if (toggle) toggle.checked = !enabled;
+                console.error('Failed to toggle strategy:', await response.text());
+            }
+        } catch (e) {
+            // Revert toggle on error
+            if (toggle) toggle.checked = !enabled;
+            console.error('Failed to toggle strategy:', e);
         }
     }
 }
