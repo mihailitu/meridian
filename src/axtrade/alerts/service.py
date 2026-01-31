@@ -1,6 +1,6 @@
 """Alert service for dispatching alerts through channels."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import structlog
@@ -114,7 +114,7 @@ class AlertService:
         )
 
         # Record for deduplication
-        self._recent_alerts[key] = datetime.utcnow()
+        self._recent_alerts[key] = datetime.now(timezone.utc)
 
         # Dispatch to channels
         await self._dispatch(alert)
@@ -156,7 +156,7 @@ class AlertService:
         if last_time is None:
             return False
 
-        elapsed = datetime.utcnow() - last_time
+        elapsed = datetime.now(timezone.utc) - last_time
         return elapsed < timedelta(seconds=window_seconds)
 
     def cleanup_dedupe_cache(self, max_age_seconds: int = 3600) -> int:
@@ -168,7 +168,7 @@ class AlertService:
         Returns:
             Number of entries removed
         """
-        cutoff = datetime.utcnow() - timedelta(seconds=max_age_seconds)
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
         old_keys = [k for k, v in self._recent_alerts.items() if v < cutoff]
         for key in old_keys:
             del self._recent_alerts[key]

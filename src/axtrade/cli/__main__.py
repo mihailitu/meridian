@@ -28,7 +28,10 @@ def main() -> None:
 
     # backtest command
     bt_parser = subparsers.add_parser("backtest", help="Run strategy backtest")
-    bt_parser.add_argument("strategy", help="Strategy type (e.g., momentum)")
+    bt_parser.add_argument(
+        "--strategy",
+        help="Strategy type (e.g., momentum). If not specified, uses first enabled from config",
+    )
     bt_parser.add_argument("--symbol", "-s", required=True, help="Symbol to backtest")
     bt_parser.add_argument(
         "--start", required=True, type=parse_date, help="Start date (YYYY-MM-DD)"
@@ -52,6 +55,15 @@ def main() -> None:
     bt_parser.add_argument(
         "--stop-loss", type=float, default=0.02, help="Stop loss percentage (default: 0.02)"
     )
+    bt_parser.add_argument(
+        "--data-dir",
+        help="Directory with historical data files (default: data/historical)",
+    )
+    bt_parser.add_argument(
+        "--use-db",
+        action="store_true",
+        help="Force database usage instead of file-based data",
+    )
 
     args = parser.parse_args()
 
@@ -64,16 +76,18 @@ def main() -> None:
     elif args.command == "backtest":
         asyncio.run(
             backtest_command(
-                strategy=args.strategy,
                 symbol=args.symbol,
                 start=args.start,
                 end=args.end,
+                strategy=args.strategy,
                 interval=args.interval,
                 capital=args.capital,
                 position_size=args.position_size,
                 rsi_oversold=args.rsi_oversold,
                 rsi_overbought=args.rsi_overbought,
                 stop_loss=args.stop_loss,
+                data_dir=args.data_dir,
+                use_db=args.use_db,
             )
         )
 

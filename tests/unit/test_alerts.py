@@ -1,6 +1,6 @@
 """Unit tests for alerts module."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -532,9 +532,9 @@ class TestAlertService:
 
     def test_cleanup_dedupe_cache(self, service: AlertService) -> None:
         # Manually add old entries
-        old_time = datetime.utcnow() - timedelta(hours=2)
+        old_time = datetime.now(timezone.utc) - timedelta(hours=2)
         service._recent_alerts["old-key"] = old_time
-        service._recent_alerts["new-key"] = datetime.utcnow()
+        service._recent_alerts["new-key"] = datetime.now(timezone.utc)
 
         removed = service.cleanup_dedupe_cache(max_age_seconds=3600)
 

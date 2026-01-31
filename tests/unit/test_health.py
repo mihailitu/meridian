@@ -1,6 +1,6 @@
 """Unit tests for health monitoring."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -174,7 +174,7 @@ class TestHealthMonitor:
 
     async def test_check_heartbeats_timeout(self, monitor: HealthMonitor) -> None:
         # Manually set old heartbeat
-        monitor._heartbeats["stale-service"] = datetime.utcnow() - timedelta(minutes=5)
+        monitor._heartbeats["stale-service"] = datetime.now(timezone.utc) - timedelta(minutes=5)
 
         results = await monitor.check_heartbeats()
 

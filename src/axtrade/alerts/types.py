@@ -1,10 +1,15 @@
 """Alert types and data structures."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
+
+
+def _utcnow() -> datetime:
+    """Return current UTC datetime (timezone-aware)."""
+    return datetime.now(timezone.utc)
 
 
 class AlertSeverity(Enum):
@@ -35,7 +40,7 @@ class Alert:
     message: str
     source: str
     id: str = field(default_factory=lambda: str(uuid4()))
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=_utcnow)
     metadata: dict[str, Any] = field(default_factory=dict)
     acknowledged: bool = False
     acknowledged_at: datetime | None = None
@@ -44,7 +49,7 @@ class Alert:
     def acknowledge(self, by: str = "user") -> None:
         """Mark alert as acknowledged."""
         self.acknowledged = True
-        self.acknowledged_at = datetime.utcnow()
+        self.acknowledged_at = datetime.now(timezone.utc)
         self.acknowledged_by = by
 
     def to_dict(self) -> dict[str, Any]:

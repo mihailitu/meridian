@@ -2,49 +2,80 @@
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
+from typing import Optional
 
-from axtrade.backtest import BacktestConfig, BacktestEngine, BacktestResult
+from axtrade.backtest import (
+    BacktestConfig,
+    BacktestEngine,
+    BacktestResult,
+    HistoricalDataLoader,
+)
 from axtrade.common import DatabasePool, load_config
 
 
 async def backtest_command(
-    strategy: str,
     symbol: str,
     start: date,
     end: date,
+    strategy: Optional[str] = None,
     interval: str = "1m",
     capital: float = 100000,
     position_size: int = 100,
     rsi_oversold: int = 40,
     rsi_overbought: int = 70,
     stop_loss: float = 0.02,
+    data_dir: Optional[str] = None,
+    use_db: bool = False,
 ) -> None:
     """Run backtest with given parameters.
 
     Args:
-        strategy: Strategy type (e.g., 'momentum')
         symbol: Symbol to backtest
         start: Start date
         end: End date
+        strategy: Strategy type (e.g., 'momentum'). If None, uses first enabled from config
         interval: Bar interval
         capital: Initial capital
         position_size: Position size in shares
         rsi_oversold: RSI oversold threshold
         rsi_overbought: RSI overbought threshold
         stop_loss: Stop loss percentage
+        data_dir: Directory with historical data files. If None, uses default
+        use_db: Force database usage instead of file-based data
     """
     config = load_config()
 
-    strategy_config = {
-        "rsi_oversold": rsi_oversold,
-        "rsi_overbought": rsi_overbought,
-        "stop_loss_pct": stop_loss,
-        "position_size": position_size,
-    }
+    # Determine strategy type
+    strategy_type = strategy
+    strategy_config = {}
+
+    if strategy_type is None:
+        # Get first enabled strategy from config
+        enabled_strategies = config.strategies.get("enabled", [])
+        for strat in enabled_strategies:
+            if strat.get("enabled", True):
+                strategy_type = strat["type"]
+                strategy_config = strat.get("config", {})
+                print(f"Using strategy from config: {strategy_type}")
+                break
+
+        if strategy_type is None:
+            print("Error: No strategy specified and no enabled strategies in config")
+            return
+
+    # Override config with CLI args if using explicit strategy
+    if strategy is not None:
+        strategy_config = {
+            "rsi_oversold": rsi_oversold,
+            "rsi_overbought": rsi_overbought,
+            "stop_loss_pct": stop_loss,
+            "position_size": position_size,
+        }
 
     bt_config = BacktestConfig(
-        strategy_type=strategy,
-        strategy_id=f"{strategy}_bt",
+        strategy_type=strategy_type,
+        strategy_id=f"{strategy_type}_bt",
         symbol=symbol,
         start_date=start,
         end_date=end,
@@ -53,15 +84,36 @@ async def backtest_command(
         initial_capital=Decimal(str(capital)),
     )
 
-    db_pool = DatabasePool(config.database)
-    await db_pool.connect()
+    # Determine data source
+    data_loader = None
+    db_pool = None
+
+    if not use_db:
+        # Try file-based first
+        default_data_dir = data_dir or "data/historical"
+        data_path = Path(default_data_dir)
+
+        if data_path.exists():
+            loader = HistoricalDataLoader(default_data_dir)
+            # Check if we have data for this symbol/interval/range
+            file_info = loader.find_file(symbol, interval, start, end)
+            if file_info:
+                data_loader = loader
+                print(f"Using file-based data: {file_info['filename']}")
+
+    if data_loader is None:
+        # Fall back to database
+        print("Using database for historical data")
+        db_pool = DatabasePool(config.database)
+        await db_pool.connect()
 
     try:
-        engine = BacktestEngine(bt_config, db_pool)
+        engine = BacktestEngine(bt_config, db_pool=db_pool, data_loader=data_loader)
         result = await engine.run()
         print_results(result)
     finally:
-        await db_pool.disconnect()
+        if db_pool:
+            await db_pool.disconnect()
 
 
 def print_results(result: BacktestResult) -> None:

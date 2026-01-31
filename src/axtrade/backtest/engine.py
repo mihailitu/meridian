@@ -1,26 +1,44 @@
 """Backtest engine for strategy evaluation."""
 
+from typing import Optional
+
 from axtrade.common import BarRepository, DatabasePool
 from axtrade.strategies import STRATEGY_TYPES, BarWithIndicators, BaseStrategy
 
 from .analytics import PerformanceAnalyzer
 from .broker import SimulatedBroker
+from .data_loader import HistoricalDataLoader
 from .types import BacktestConfig, BacktestResult
 
 
 class BacktestEngine:
     """Event-driven backtesting engine."""
 
-    def __init__(self, config: BacktestConfig, db_pool: DatabasePool):
+    def __init__(
+        self,
+        config: BacktestConfig,
+        db_pool: Optional[DatabasePool] = None,
+        data_loader: Optional[HistoricalDataLoader] = None,
+    ):
         """Initialize backtest engine.
 
         Args:
             config: Backtest configuration
-            db_pool: Database connection pool
+            db_pool: Database connection pool (optional)
+            data_loader: Historical data loader for file-based data (optional)
+
+        Note:
+            At least one of db_pool or data_loader must be provided.
+            If both are provided, data_loader takes priority.
         """
         self.config = config
         self.db_pool = db_pool
-        self.bar_repo = BarRepository(db_pool)
+        self.data_loader = data_loader
+
+        if db_pool is None and data_loader is None:
+            raise ValueError("Either db_pool or data_loader must be provided")
+
+        self.bar_repo = BarRepository(db_pool) if db_pool else None
         self.broker: SimulatedBroker | None = None
         self.strategy: BaseStrategy | None = None
 
@@ -40,13 +58,8 @@ class BacktestEngine:
             slippage_bps=self.config.slippage_bps,
         )
 
-        # 3. Load historical bars
-        bars = await self.bar_repo.get_bars_range(
-            symbol=self.config.symbol,
-            interval=self.config.interval,
-            start=self.config.start_date,
-            end=self.config.end_date,
-        )
+        # 3. Load historical bars (file-based takes priority)
+        bars = await self._load_bars()
 
         if not bars:
             # No data, return empty result
@@ -67,7 +80,7 @@ class BacktestEngine:
                 self.strategy.update_position(position)
             else:
                 # Clear position in strategy if broker has none
-                self.strategy._positions.pop(self.config.symbol, None)
+                self.strategy.clear_position(self.config.symbol)
 
             # Get signal from strategy
             order = self.strategy.on_bar(bar_with_indicators)
@@ -99,6 +112,32 @@ class BacktestEngine:
             equity_curve=self.broker.equity_curve,
             **metrics,
         )
+
+    async def _load_bars(self) -> list[dict]:
+        """Load historical bars from file or database.
+
+        Returns:
+            List of bar dictionaries with 'bar', 'sma_20', 'rsi_14' keys
+        """
+        # File-based loader takes priority
+        if self.data_loader is not None:
+            return self.data_loader.load_bars(
+                symbol=self.config.symbol,
+                interval=self.config.interval,
+                start=self.config.start_date,
+                end=self.config.end_date,
+            )
+
+        # Fall back to database
+        if self.bar_repo is not None:
+            return await self.bar_repo.get_bars_range(
+                symbol=self.config.symbol,
+                interval=self.config.interval,
+                start=self.config.start_date,
+                end=self.config.end_date,
+            )
+
+        return []
 
     def _init_strategy(self) -> None:
         """Initialize strategy instance."""

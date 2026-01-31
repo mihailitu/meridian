@@ -3,7 +3,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -21,6 +21,11 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 
+def _utcnow() -> datetime:
+    """Return current UTC datetime (timezone-aware)."""
+    return datetime.now(timezone.utc)
+
+
 class HealthStatus(Enum):
     """Health status levels."""
 
@@ -36,7 +41,7 @@ class ComponentHealth:
     name: str
     status: HealthStatus
     latency_ms: float | None = None
-    last_check: datetime = field(default_factory=datetime.utcnow)
+    last_check: datetime = field(default_factory=_utcnow)
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -58,7 +63,7 @@ class SystemHealth:
 
     overall: HealthStatus
     components: dict[str, ComponentHealth]
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=_utcnow)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -211,7 +216,7 @@ class HealthMonitor:
         Args:
             component: Component name
         """
-        self._heartbeats[component] = datetime.utcnow()
+        self._heartbeats[component] = datetime.now(timezone.utc)
 
     async def check_heartbeats(self) -> list[ComponentHealth]:
         """Check all registered heartbeats for timeouts.
@@ -220,7 +225,7 @@ class HealthMonitor:
             List of component health statuses
         """
         results = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         timeout = timedelta(seconds=self._heartbeat_timeout)
 
         for component, last_beat in self._heartbeats.items():
