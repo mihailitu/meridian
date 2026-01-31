@@ -3,6 +3,8 @@
 import argparse
 import asyncio
 
+from axtrade.common import setup_logging
+
 from .service import run_gateway
 
 
@@ -16,6 +18,8 @@ def main():
         help="Override adapter type",
     )
     args = parser.parse_args()
+
+    setup_logging(log_name="gateway")
 
     try:
         asyncio.run(run_gateway(config_path=args.config, adapter=args.adapter))

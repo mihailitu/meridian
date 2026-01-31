@@ -157,20 +157,24 @@ class AggregatorService:
         sma_20: float | None,
         rsi_14: float | None,
     ) -> None:
-        """Print a bar to console."""
-        timestamp = bar.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-        sma_str = f"{sma_20:.2f}" if sma_20 else "-"
-        rsi_str = f"{rsi_14:.1f}" if rsi_14 else "-"
-        print(
-            f"[{timestamp}] {bar.symbol} {interval}: "
-            f"O={bar.open:.2f} H={bar.high:.2f} L={bar.low:.2f} "
-            f"C={bar.close:.2f} V={bar.volume} SMA={sma_str} RSI={rsi_str}"
+        """Log a completed bar."""
+        self.logger.info(
+            "bar",
+            symbol=bar.symbol,
+            interval=interval,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            sma_20=round(sma_20, 2) if sma_20 else None,
+            rsi_14=round(rsi_14, 1) if rsi_14 else None,
         )
 
 
 async def main() -> None:
     """Main entry point."""
-    setup_logging()
+    setup_logging(log_name="aggregator")
     config = load_config()
     service = AggregatorService(config)
 

@@ -269,21 +269,22 @@ class StrategyRunner:
         data: BarWithIndicators,
         order,
     ) -> None:
-        """Log a trading signal to console."""
+        """Log a trading signal."""
         bar = data.bar
-        rsi_str = f"RSI={data.rsi_14:.1f}" if data.rsi_14 else "RSI=-"
-        sma_str = f"SMA={data.sma_20:.2f}" if data.sma_20 else "SMA=-"
-
-        print(
-            f"[{bar.timestamp:%H:%M:%S}] {strategy.name}: "
-            f"{order.side.value.upper()} signal {bar.symbol} "
-            f"({rsi_str}, {sma_str}, price={bar.close:.2f})"
+        self.logger.info(
+            "signal",
+            strategy=strategy.name,
+            side=order.side.value,
+            symbol=bar.symbol,
+            price=bar.close,
+            rsi_14=round(data.rsi_14, 1) if data.rsi_14 else None,
+            sma_20=round(data.sma_20, 2) if data.sma_20 else None,
         )
 
 
 async def main() -> None:
     """Main entry point."""
-    setup_logging()
+    setup_logging(log_name="strategy")
     config = load_config()
     runner = StrategyRunner(config)
 

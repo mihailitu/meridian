@@ -132,7 +132,7 @@ async def main() -> None:
     """Run the API server."""
     import uvicorn
 
-    setup_logging()
+    setup_logging(log_name="api")
     config = load_config()
 
     logger.info(

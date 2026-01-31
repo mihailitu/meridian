@@ -109,22 +109,18 @@ class GatewayService:
                     logger.error("redis_publish_failed", error=str(e))
 
     def _print_tick(self, tick, change: float) -> None:
-        """Print tick to console with formatting.
+        """Log tick data.
 
         Args:
             tick: Tick data
             change: Price change from last tick
         """
-        timestamp = tick.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-
-        if change > 0:
-            change_str = f"\033[32m+{change:.2f}\033[0m"
-        elif change < 0:
-            change_str = f"\033[31m{change:.2f}\033[0m"
-        else:
-            change_str = f"{change:.2f}"
-
-        print(f"[{timestamp}] {tick.symbol}: {tick.price:.2f} ({change_str})")
+        logger.info(
+            "tick",
+            symbol=tick.symbol,
+            price=tick.price,
+            change=round(change, 2),
+        )
 
 
 async def run_gateway(config_path: Optional[str] = None, adapter: Optional[str] = None) -> None:

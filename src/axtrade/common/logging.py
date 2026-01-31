@@ -2,15 +2,20 @@
 
 import logging
 import sys
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 
 import structlog
 
 
-def setup_logging(level: str = "INFO") -> structlog.BoundLogger:
+def setup_logging(level: str = "INFO", log_name: str | None = None) -> structlog.BoundLogger:
     """Configure structured logging.
 
     Args:
         level: Log level (DEBUG, INFO, WARNING, ERROR)
+        log_name: Optional name for file logging (e.g., "gateway", "aggregator").
+                  If provided, logs will be written to logs/{log_name}.log with
+                  daily rotation at midnight, keeping 30 days of backups.
 
     Returns:
         Configured logger
@@ -36,6 +41,20 @@ def setup_logging(level: str = "INFO") -> structlog.BoundLogger:
         stream=sys.stdout,
         level=getattr(logging, level.upper()),
     )
+
+    # Add file handler if log_name provided
+    if log_name:
+        log_dir = Path(__file__).parent.parent.parent.parent / "logs"
+        log_dir.mkdir(exist_ok=True)
+
+        file_handler = TimedRotatingFileHandler(
+            log_dir / f"{log_name}.log",
+            when="midnight",
+            backupCount=30,
+        )
+        file_handler.setFormatter(logging.Formatter("%(message)s"))
+        file_handler.setLevel(getattr(logging, level.upper()))
+        logging.getLogger().addHandler(file_handler)
 
     return structlog.get_logger()
 
