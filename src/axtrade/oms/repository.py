@@ -274,40 +274,104 @@ class OrderRepository:
     async def get_daily_realized_pnl(
         self, strategy_id: Optional[str] = None
     ) -> Decimal:
-        """Calculate realized P&L from today's fills."""
+        """Calculate realized P&L from today's fills using FIFO matching.
+
+        Realized P&L is calculated by matching sell fills against buy fills
+        in FIFO order for each strategy+symbol combination. Only P&L from
+        sells that occurred today is included.
+
+        Args:
+            strategy_id: Optional strategy filter
+
+        Returns:
+            Total realized P&L for today
+        """
         today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
+        # Fetch all fills to properly match buys and sells
+        # We need historical buys to calculate cost basis for today's sells
         if strategy_id:
             query = """
-                SELECT COALESCE(SUM(
-                    CASE WHEN side = 'sell' THEN quantity * price - commission
-                         ELSE -(quantity * price + commission)
-                    END
-                ), 0) as pnl
+                SELECT strategy_id, symbol, side, quantity, price, commission, filled_at
                 FROM fills
-                WHERE strategy_id = $1 AND filled_at >= $2
+                WHERE strategy_id = $1
+                ORDER BY filled_at ASC
             """
-            params = (strategy_id, today_start)
+            params = (strategy_id,)
         else:
             query = """
-                SELECT COALESCE(SUM(
-                    CASE WHEN side = 'sell' THEN quantity * price - commission
-                         ELSE -(quantity * price + commission)
-                    END
-                ), 0) as pnl
-                FROM fills WHERE filled_at >= $1
+                SELECT strategy_id, symbol, side, quantity, price, commission, filled_at
+                FROM fills
+                ORDER BY filled_at ASC
             """
-            params = (today_start,)
+            params = ()
 
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(query, *params)
+            rows = await conn.fetch(query, *params) if params else await conn.fetch(query)
 
-        return Decimal(str(row["pnl"])) if row else Decimal("0")
+        # Group fills by strategy+symbol and calculate FIFO P&L
+        total_pnl = Decimal("0")
+
+        # Track buy lots per strategy+symbol: {(strategy, symbol): [(qty, price, commission)]}
+        buy_lots: dict[tuple[str, str], list[tuple[Decimal, Decimal, Decimal]]] = {}
+
+        for row in rows:
+            key = (row["strategy_id"], row["symbol"])
+            qty = Decimal(str(row["quantity"]))
+            price = Decimal(str(row["price"]))
+            commission = Decimal(str(row["commission"]))
+            filled_at = row["filled_at"]
+            is_today = filled_at >= today_start
+
+            if row["side"] == "buy":
+                # Add to buy lots (FIFO queue)
+                if key not in buy_lots:
+                    buy_lots[key] = []
+                buy_lots[key].append((qty, price, commission))
+            else:
+                # Sell - match against buys in FIFO order
+                if key not in buy_lots:
+                    continue
+
+                remaining_sell_qty = qty
+                sell_commission = commission
+
+                while remaining_sell_qty > 0 and buy_lots[key]:
+                    buy_qty, buy_price, buy_commission = buy_lots[key][0]
+
+                    # Determine match quantity
+                    match_qty = min(remaining_sell_qty, buy_qty)
+
+                    # Calculate P&L for this match (only if sell is today)
+                    if is_today:
+                        trade_pnl = (price - buy_price) * match_qty
+                        # Proportional commission allocation
+                        buy_comm_portion = buy_commission * (match_qty / buy_qty)
+                        sell_comm_portion = sell_commission * (match_qty / qty)
+                        trade_pnl -= (buy_comm_portion + sell_comm_portion)
+                        total_pnl += trade_pnl
+
+                    # Update remaining quantities
+                    remaining_sell_qty -= match_qty
+
+                    if match_qty >= buy_qty:
+                        # Exhaust this buy lot
+                        buy_lots[key].pop(0)
+                    else:
+                        # Partial match - update the buy lot
+                        new_buy_qty = buy_qty - match_qty
+                        new_buy_commission = buy_commission * (new_buy_qty / buy_qty)
+                        buy_lots[key][0] = (new_buy_qty, buy_price, new_buy_commission)
+
+        return total_pnl
 
     async def get_daily_pnl_series(
         self, limit: int = 30, strategy_id: Optional[str] = None
     ) -> list[Decimal]:
-        """Get daily P&L series for rolling calculations.
+        """Get daily P&L series for rolling calculations using FIFO matching.
+
+        Calculates realized P&L per day by matching sells against buys in FIFO
+        order. Buy lots carry forward across days until matched.
 
         Args:
             limit: Number of days to return
@@ -316,34 +380,77 @@ class OrderRepository:
         Returns:
             List of daily P&L values (most recent first)
         """
+        # Fetch all fills ordered by time
         if strategy_id:
             query = """
-                SELECT DATE(filled_at) as day,
-                       SUM(CASE WHEN side = 'sell' THEN quantity * price - commission
-                                ELSE -(quantity * price + commission) END) as pnl
+                SELECT strategy_id, symbol, side, quantity, price, commission, filled_at
                 FROM fills
                 WHERE strategy_id = $1
-                GROUP BY DATE(filled_at)
-                ORDER BY day DESC
-                LIMIT $2
+                ORDER BY filled_at ASC
             """
-            params = (strategy_id, limit)
+            params = (strategy_id,)
         else:
             query = """
-                SELECT DATE(filled_at) as day,
-                       SUM(CASE WHEN side = 'sell' THEN quantity * price - commission
-                                ELSE -(quantity * price + commission) END) as pnl
+                SELECT strategy_id, symbol, side, quantity, price, commission, filled_at
                 FROM fills
-                GROUP BY DATE(filled_at)
-                ORDER BY day DESC
-                LIMIT $1
+                ORDER BY filled_at ASC
             """
-            params = (limit,)
+            params = ()
 
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(query, *params)
+            rows = await conn.fetch(query, *params) if params else await conn.fetch(query)
 
-        return [Decimal(str(row["pnl"])) for row in rows]
+        # Track buy lots per strategy+symbol
+        buy_lots: dict[tuple[str, str], list[tuple[Decimal, Decimal, Decimal]]] = {}
+        # Track P&L per day
+        daily_pnl: dict[str, Decimal] = {}
+
+        for row in rows:
+            key = (row["strategy_id"], row["symbol"])
+            qty = Decimal(str(row["quantity"]))
+            price = Decimal(str(row["price"]))
+            commission = Decimal(str(row["commission"]))
+            day = row["filled_at"].strftime("%Y-%m-%d")
+
+            if row["side"] == "buy":
+                if key not in buy_lots:
+                    buy_lots[key] = []
+                buy_lots[key].append((qty, price, commission))
+            else:
+                # Sell - match against buys in FIFO order
+                if key not in buy_lots:
+                    continue
+
+                remaining_sell_qty = qty
+                sell_commission = commission
+
+                while remaining_sell_qty > 0 and buy_lots[key]:
+                    buy_qty, buy_price, buy_commission = buy_lots[key][0]
+                    match_qty = min(remaining_sell_qty, buy_qty)
+
+                    # Calculate P&L for this match
+                    trade_pnl = (price - buy_price) * match_qty
+                    buy_comm_portion = buy_commission * (match_qty / buy_qty)
+                    sell_comm_portion = sell_commission * (match_qty / qty)
+                    trade_pnl -= (buy_comm_portion + sell_comm_portion)
+
+                    # Add to day's P&L
+                    if day not in daily_pnl:
+                        daily_pnl[day] = Decimal("0")
+                    daily_pnl[day] += trade_pnl
+
+                    remaining_sell_qty -= match_qty
+
+                    if match_qty >= buy_qty:
+                        buy_lots[key].pop(0)
+                    else:
+                        new_buy_qty = buy_qty - match_qty
+                        new_buy_commission = buy_commission * (new_buy_qty / buy_qty)
+                        buy_lots[key][0] = (new_buy_qty, buy_price, new_buy_commission)
+
+        # Sort by date descending and return limited results
+        sorted_days = sorted(daily_pnl.keys(), reverse=True)[:limit]
+        return [daily_pnl[day] for day in sorted_days]
 
 
 class PositionRepository:

@@ -76,8 +76,8 @@ strategies:
       id: momentum_us_01
       enabled: true
       config:
-        rsi_oversold: 48
-        rsi_overbought: 52
+        rsi_oversold: 30
+        rsi_overbought: 70
         stop_loss_pct: 0.02
         position_size: 100
 
