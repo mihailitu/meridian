@@ -12,7 +12,7 @@ def main():
     parser.add_argument(
         "--adapter",
         "-a",
-        choices=["mock", "ibkr", "alpaca"],
+        choices=["mock", "ibkr", "alpaca", "yahoo"],
         help="Override adapter type",
     )
     args = parser.parse_args()

@@ -1,5 +1,5 @@
 gateway:
-  adapter: mock  # mock | ibkr | alpaca
+  adapter: mock  # mock | ibkr | alpaca | yahoo
 
   mock:
     tick_interval_ms: 500
@@ -15,6 +15,9 @@ gateway:
     secret_key: ""  # Use ALPACA_SECRET_KEY env var
     feed: "iex"  # "iex" (free) or "sip" (paid)
     paper: true
+
+  yahoo:
+    poll_interval_ms: 5000  # Polling interval (no streaming available)
 
   symbols:
     - symbol: AAPL

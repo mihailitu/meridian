@@ -37,6 +37,13 @@ class AlpacaConfig:
 
 
 @dataclass
+class YahooConfig:
+    """Yahoo Finance adapter configuration."""
+
+    poll_interval_ms: int = 5000  # Polling interval in milliseconds
+
+
+@dataclass
 class GatewayConfig:
     """Gateway service configuration."""
 
@@ -44,6 +51,7 @@ class GatewayConfig:
     mock: MockConfig = field(default_factory=MockConfig)
     ibkr: IBKRConfig = field(default_factory=IBKRConfig)
     alpaca: AlpacaConfig = field(default_factory=AlpacaConfig)
+    yahoo: YahooConfig = field(default_factory=YahooConfig)
     symbols: list[SymbolConfig] = field(default_factory=list)
 
 
@@ -184,6 +192,7 @@ def load_config(path: Optional[Path] = None) -> Config:
     mock_data = gateway_data.get("mock", {})
     ibkr_data = gateway_data.get("ibkr", {})
     alpaca_data = gateway_data.get("alpaca", {})
+    yahoo_data = gateway_data.get("yahoo", {})
 
     return Config(
         gateway=GatewayConfig(
@@ -202,6 +211,9 @@ def load_config(path: Optional[Path] = None) -> Config:
                 secret_key=alpaca_data.get("secret_key", ""),
                 feed=alpaca_data.get("feed", "iex"),
                 paper=alpaca_data.get("paper", True),
+            ),
+            yahoo=YahooConfig(
+                poll_interval_ms=yahoo_data.get("poll_interval_ms", 5000),
             ),
             symbols=symbols,
         ),

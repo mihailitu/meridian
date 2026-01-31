@@ -5,6 +5,7 @@ from .base import DataAdapter
 from .ibkr import IBKRAdapter
 from .mock import MockAdapter
 from .service import GatewayService, run_gateway
+from .yahoo import YahooAdapter
 
 __all__ = [
     "AlpacaAdapter",
@@ -12,5 +13,6 @@ __all__ = [
     "GatewayService",
     "IBKRAdapter",
     "MockAdapter",
+    "YahooAdapter",
     "run_gateway",
 ]

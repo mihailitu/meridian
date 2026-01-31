@@ -9,6 +9,7 @@ from .alpaca import AlpacaAdapter
 from .base import DataAdapter
 from .ibkr import IBKRAdapter
 from .mock import MockAdapter
+from .yahoo import YahooAdapter
 
 logger = get_logger(__name__)
 
@@ -46,6 +47,8 @@ class GatewayService:
             return IBKRAdapter(self.config.gateway.ibkr)
         elif adapter_type == "alpaca":
             return AlpacaAdapter(self.config.gateway.alpaca)
+        elif adapter_type == "yahoo":
+            return YahooAdapter(self.config.gateway.yahoo)
         else:
             raise ValueError(f"Unknown adapter type: {adapter_type}")
 

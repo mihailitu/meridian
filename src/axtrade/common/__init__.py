@@ -15,6 +15,7 @@ from .config import (
     RiskConfig,
     StrategiesConfig,
     StrategyInstanceConfig,
+    YahooConfig,
     load_config,
 )
 from .db import BarRepository, DatabasePool
@@ -46,6 +47,7 @@ __all__ = [
     "StrategyInstanceConfig",
     "SymbolConfig",
     "Tick",
+    "YahooConfig",
     "get_logger",
     "load_config",
     "setup_logging",

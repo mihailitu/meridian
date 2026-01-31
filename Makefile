@@ -35,6 +35,9 @@ run-ibkr:
 run-alpaca:
 	.venv/bin/python -m axtrade.gateway --adapter alpaca
 
+run-yahoo:
+	.venv/bin/python -m axtrade.gateway --adapter yahoo
+
 run-aggregator:
 	.venv/bin/python -m axtrade.aggregator
 
