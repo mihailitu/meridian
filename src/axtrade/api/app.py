@@ -2,12 +2,9 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor, LogChannel
 from axtrade.common import Config, DatabasePool, get_logger, load_config, setup_logging
@@ -97,11 +94,6 @@ def create_app(config: Config) -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Static files
-    static_dir = Path(__file__).parent.parent / "web" / "static"
-    if static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-
     # API routes
     app.include_router(positions.router, prefix="/api", tags=["positions"])
     app.include_router(orders.router, prefix="/api", tags=["orders"])
@@ -114,11 +106,8 @@ def create_app(config: Config) -> FastAPI:
 
     @app.get("/")
     async def root():
-        """Serve dashboard."""
-        index_path = static_dir / "index.html"
-        if index_path.exists():
-            return FileResponse(str(index_path))
-        return {"message": "axtrade API", "docs": "/docs"}
+        """API root endpoint."""
+        return {"message": "axtrade API", "docs": "/docs", "ui": "http://localhost:5173"}
 
     @app.get("/health")
     async def health_check():

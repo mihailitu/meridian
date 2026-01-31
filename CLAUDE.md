@@ -76,7 +76,6 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 - `backtest/`: Backtesting framework - `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer` for strategy evaluation on historical data
 - `api/`: Web dashboard - FastAPI app with REST endpoints and WebSocket for real-time updates
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind) with components for positions, orders, fills, alerts, and P&L chart
-- `web/static/`: Legacy static HTML/CSS/JS dashboard
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
 - `analytics/`: Performance analytics - rolling metrics, drawdown tracking, trade statistics
 
