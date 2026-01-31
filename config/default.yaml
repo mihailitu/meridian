@@ -80,43 +80,40 @@ strategies:
         stop_loss_pct: 0.02
         position_size: 100
 
-    # Mean Reversion strategy using Bollinger Bands
-    # - type: mean_reversion
-    #   id: mean_rev_01
-    #   enabled: false
-    #   config:
-    #     bb_period: 20
-    #     bb_std: 2.0
-    #     rsi_oversold: 35
-    #     rsi_overbought: 70
-    #     stop_loss_pct: 0.02
-    #     position_size: 100
+    - type: mean_reversion
+      id: mean_rev_01
+      enabled: true
+      config:
+        bb_period: 20
+        bb_std: 2.0
+        rsi_oversold: 35
+        rsi_overbought: 70
+        stop_loss_pct: 0.02
+        position_size: 100
 
-    # Multi-Timeframe strategy (5m trend + 1m entry)
-    # - type: multi_timeframe
-    #   id: mtf_01
-    #   enabled: false
-    #   config:
-    #     trend_period: 20
-    #     trend_interval_minutes: 5
-    #     rsi_oversold: 40
-    #     rsi_overbought: 60
-    #     stop_loss_pct: 0.015
-    #     take_profit_pct: 0.03
-    #     position_size: 100
+    - type: multi_timeframe
+      id: mtf_01
+      enabled: true
+      config:
+        trend_period: 20
+        trend_interval_minutes: 5
+        rsi_oversold: 40
+        rsi_overbought: 60
+        stop_loss_pct: 0.015
+        take_profit_pct: 0.03
+        position_size: 100
 
-    # Pairs Trading strategy
-    # - type: pairs
-    #   id: pairs_aapl_msft
-    #   enabled: false
-    #   config:
-    #     symbol_a: AAPL
-    #     symbol_b: MSFT
-    #     lookback: 20
-    #     entry_zscore: 2.0
-    #     exit_zscore: 0.5
-    #     stop_loss_pct: 0.03
-    #     position_size: 50
+    - type: pairs
+      id: pairs_aapl_msft
+      enabled: true
+      config:
+        symbol_a: AAPL
+        symbol_b: MSFT
+        lookback: 20
+        entry_zscore: 2.0
+        exit_zscore: 0.5
+        stop_loss_pct: 0.03
+        position_size: 50
 
 api:
   host: "0.0.0.0"
