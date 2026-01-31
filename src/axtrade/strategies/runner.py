@@ -14,7 +14,7 @@ from axtrade.common import (
     load_config,
     setup_logging,
 )
-from axtrade.oms import OrderManager
+from axtrade.oms import OrderManager, Order
 
 from . import STRATEGY_TYPES
 from .base import BarWithIndicators, BaseStrategy
@@ -249,6 +249,28 @@ class StrategyRunner:
                 strategy_id=command.strategy_id,
             )
 
+    async def _run_strategy(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        strategy: BaseStrategy,
+        data: BarWithIndicators,
+    ) -> tuple[BaseStrategy, Optional[Order]]:
+        """Run a strategy in a separate thread.
+
+        Args:
+            loop: Event loop
+            strategy: Strategy to run
+            data: Bar data
+
+        Returns:
+            Tuple of (strategy, resulting_order)
+        """
+        try:
+            order = await loop.run_in_executor(None, strategy.on_bar, data)
+            return strategy, order
+        except Exception as e:
+            raise e
+
     async def _consume_loop(self) -> None:
         """Main loop consuming bars and feeding strategies."""
         if not self._bar_consumer or not self._order_manager or not self._consume_supervisor:
@@ -270,29 +292,47 @@ class StrategyRunner:
                     # Update price cache in order manager
                     self._order_manager.update_price(data.symbol, data.close)
 
-                    # Run each strategy
+                    # Prepare strategy tasks
+                    tasks = []
+                    loop = asyncio.get_running_loop()
+
                     for strategy in self._strategies.values():
                         if not strategy.enabled:
                             continue
+                        tasks.append(self._run_strategy(loop, strategy, data))
+
+                    if not tasks:
+                        continue
+
+                    # Run all strategies in parallel
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+                    # Process results
+                    for result in results:
+                        if isinstance(result, Exception):
+                            self.logger.error("Strategy execution error: %s", str(result))
+                            continue
+
+                        strategy, order = result
+                        if not order:
+                            continue
 
                         try:
-                            order = strategy.on_bar(data)
-                            if order:
-                                self._log_signal(strategy, data, order)
-                                await self._order_manager.submit_order(order)
+                            self._log_signal(strategy, data, order)
+                            await self._order_manager.submit_order(order)
 
-                                # Update local position after fill (in paper mode, immediate)
-                                position = await self._order_manager.get_position(
-                                    strategy.strategy_id, order.symbol
-                                )
-                                if position:
-                                    strategy.update_position(position)
-                                else:
-                                    strategy.clear_position(order.symbol)
+                            # Update local position after fill (in paper mode, immediate)
+                            position = await self._order_manager.get_position(
+                                strategy.strategy_id, order.symbol
+                            )
+                            if position:
+                                strategy.update_position(position)
+                            else:
+                                strategy.clear_position(order.symbol)
 
                         except Exception as e:
                             self.logger.error(
-                                "Strategy error: %s - %s",
+                                "Order submission error: %s - %s",
                                 strategy.name,
                                 str(e),
                             )
