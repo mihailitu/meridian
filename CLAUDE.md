@@ -60,7 +60,7 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 
 ### Key Modules
 
-- `common/`: Shared types (`Tick`, `Bar`), config loading, Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`)
+- `common/`: Shared types (`Tick`, `Bar`), config loading, Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
 - `gateway/`: Data adapters implementing `DataAdapter` base class - `MockAdapter` for testing, `IBKRAdapter` for live
 - `aggregator/`: `BarEngine` for tick-to-bar aggregation, service orchestration
 - `indicators/`: `IndicatorEngine` with rolling buffers, `calculate_sma`, `calculate_rsi`, `calculate_bollinger_bands`
@@ -69,6 +69,8 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 - `backtest/`: Backtesting framework - `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer` for strategy evaluation on historical data
 - `api/`: Web dashboard - FastAPI app with REST endpoints and WebSocket for real-time updates
 - `web/`: Static frontend assets (HTML/CSS/JS) for dashboard UI
+- `alerts/`: Alert system with channels, deduplication, and health monitoring
+- `analytics/`: Performance analytics - rolling metrics, drawdown tracking, trade statistics
 
 ### API Endpoints
 
@@ -77,6 +79,10 @@ The web dashboard runs at `http://localhost:8000`:
 - `GET /api/orders` - Recent orders with status filters
 - `GET /api/fills` - Fill history
 - `GET /api/pnl/summary` - Daily and cumulative P&L
+- `GET /api/alerts` - Recent alerts with filtering
+- `GET /api/alerts/counts` - Alert counts by severity
+- `POST /api/alerts/{id}/acknowledge` - Acknowledge alert
+- `GET /api/health/detailed` - System health status
 - `GET /ws` - WebSocket for real-time position/P&L updates
 - `GET /health` - Health check
 - `GET /docs` - OpenAPI documentation

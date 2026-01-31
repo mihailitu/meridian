@@ -114,14 +114,36 @@
 - `src/axtrade/api/routes/alerts.py`
 - `src/axtrade/api/routes/health.py`
 
+### Iteration 10: Data Source Adapters (Complete)
+- Alpaca adapter for market data
+- Yahoo Finance adapter for historical data
+- Additional gateway adapter implementations
+
+### Iteration 11: Performance Analytics (Complete)
+- Rolling performance metrics (Sharpe ratio, Sortino ratio, volatility)
+- Drawdown analysis with DrawdownTracker
+- Trade statistics (win rate, profit factor, expectancy)
+- Strategy-level analytics and correlation matrix
+- REST API endpoints for analytics data
+- Frontend analytics cards display
+
+**New Files**:
+- `src/axtrade/analytics/` module (metrics.py, drawdown.py, trades.py, strategy.py)
+- `src/axtrade/api/routes/analytics.py`
+
+### Recent Additions
+- `LoopSupervisor` for resilient service loops with exponential backoff (`common/resilience.py`)
+
 ## Test Coverage
 
-Total tests: 282
+Total tests: 618
 
 | Module | Tests |
 |--------|-------|
 | Aggregator | 8 |
 | Alerts | 26 |
+| Alpaca Adapter | 17 |
+| Analytics | 35 |
 | API | 15 |
 | ATR Indicator | 12 |
 | Backtest | 20 |
@@ -133,10 +155,12 @@ Total tests: 282
 | OMS Broker | 16 |
 | Portfolio Risk | 25 |
 | Position Sizer | 18 |
+| Resilience | 10 |
 | Risk | 17 |
 | Strategies | 15 |
 | Strategies Extended | 21 |
-| Other | 20 |
+| Yahoo Adapter | 15 |
+| Other | 279 |
 
 ## Current Architecture
 
@@ -171,7 +195,7 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 
 ## Potential Next Iterations
 
-### Iteration 10: External Alert Channels
+### Iteration 12: External Alert Channels
 **Goal**: Add email, SMS, and Slack notification channels
 
 **Key Components**:
@@ -181,25 +205,16 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 - Channel configuration in YAML
 - Alert routing rules
 
-### Iteration 11: Performance Analytics
-**Goal**: Advanced portfolio and strategy analytics
-
-**Key Components**:
-- Rolling Sharpe/Sortino ratios
-- Drawdown analysis
-- Trade distribution analytics
-- Strategy correlation matrix
-- Performance attribution
-
 ---
 
 ## Completed Plan Documents
 
 Detailed implementation plans for completed iterations:
-- `docs/iteration-3-plan.md` - First Strategy
-- `docs/iteration-4-plan.md` - Backtesting Framework
-- `docs/iteration-5-plan.md` - Live Trading Integration
-- `docs/iteration-6-plan.md` - Web Dashboard
-- `docs/iteration-7-plan.md` - Additional Strategies
-- `docs/iteration-8-plan.md` - Advanced Risk Management
-- `docs/iteration-9-plan.md` - System Health Monitoring
+- `docs/iterations/iteration-3-plan.md` - First Strategy
+- `docs/iterations/iteration-4-plan.md` - Backtesting Framework
+- `docs/iterations/iteration-5-plan.md` - Live Trading Integration
+- `docs/iterations/iteration-6-plan.md` - Web Dashboard
+- `docs/iterations/iteration-7-plan.md` - Additional Strategies
+- `docs/iterations/iteration-8-plan.md` - Advanced Risk Management
+- `docs/iterations/iteration-9-plan.md` - System Health Monitoring
+- `docs/iterations/iteration-11-plan.md` - Performance Analytics
