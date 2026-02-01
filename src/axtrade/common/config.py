@@ -156,6 +156,27 @@ class APIConfig:
 
 
 @dataclass
+class ScreenerInstanceConfig:
+    """Configuration for a single screener instance."""
+
+    type: str  # "momentum", "volatility", "volume", "trend"
+    name: str
+    enabled: bool = True
+    params: dict = field(default_factory=dict)
+
+
+@dataclass
+class DiscoveryConfig:
+    """Discovery service configuration."""
+
+    enabled: bool = True
+    scan_interval_seconds: int = 300  # 5 minutes
+    bar_limit: int = 50
+    interval: str = "1m"
+    screeners: list[ScreenerInstanceConfig] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     """Root configuration."""
 
@@ -167,6 +188,7 @@ class Config:
     oms: OMSConfig = field(default_factory=OMSConfig)
     strategies: StrategiesConfig = field(default_factory=StrategiesConfig)
     api: APIConfig = field(default_factory=APIConfig)
+    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 
 
 def load_config(path: Optional[Path] = None) -> Config:
@@ -192,6 +214,7 @@ def load_config(path: Optional[Path] = None) -> Config:
     oms_data = data.get("oms", {})
     strategies_data = data.get("strategies", {})
     api_data = data.get("api", {})
+    discovery_data = data.get("discovery", {})
 
     symbols = [
         SymbolConfig(
@@ -288,5 +311,20 @@ def load_config(path: Optional[Path] = None) -> Config:
             host=api_data.get("host", "0.0.0.0"),
             port=api_data.get("port", 8000),
             cors_origins=api_data.get("cors_origins", ["*"]),
+        ),
+        discovery=DiscoveryConfig(
+            enabled=discovery_data.get("enabled", True),
+            scan_interval_seconds=discovery_data.get("scan_interval_seconds", 300),
+            bar_limit=discovery_data.get("bar_limit", 50),
+            interval=discovery_data.get("interval", "1m"),
+            screeners=[
+                ScreenerInstanceConfig(
+                    type=s["type"],
+                    name=s["name"],
+                    enabled=s.get("enabled", True),
+                    params=s.get("params", {}),
+                )
+                for s in discovery_data.get("screeners", [])
+            ],
         ),
     )

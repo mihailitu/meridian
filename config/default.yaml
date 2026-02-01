@@ -129,3 +129,38 @@ api:
     - "http://localhost:8000"
     - "http://localhost:5173"
     - "http://127.0.0.1:5173"
+
+discovery:
+  enabled: true
+  scan_interval_seconds: 300
+  bar_limit: 50
+  interval: "1m"
+  screeners:
+    - type: momentum
+      name: momentum_screener
+      enabled: true
+      params:
+        rsi_oversold: 30
+        rsi_overbought: 70
+        min_bars: 20
+
+    - type: volatility
+      name: volatility_screener
+      enabled: true
+      params:
+        min_atr_ratio: 2.0
+        min_bars: 20
+
+    - type: volume
+      name: volume_screener
+      enabled: true
+      params:
+        volume_multiplier: 2.0
+        min_bars: 20
+
+    - type: trend
+      name: trend_screener
+      enabled: true
+      params:
+        min_trend_strength: 50
+        min_bars: 25

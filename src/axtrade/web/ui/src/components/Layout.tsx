@@ -3,7 +3,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { Activity, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import AlertBadge from './AlertBadge';
 
-export type ActiveTab = 'overview' | 'strategies' | 'monitor';
+export type ActiveTab = 'overview' | 'strategies' | 'discovery' | 'monitor';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -69,6 +69,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => 
                 <div className="flex gap-6">
                     <NavTab label="Overview" active={activeTab === 'overview'} onClick={() => onTabChange('overview')} />
                     <NavTab label="Strategies" active={activeTab === 'strategies'} onClick={() => onTabChange('strategies')} />
+                    <NavTab label="Discovery" active={activeTab === 'discovery'} onClick={() => onTabChange('discovery')} />
                     <NavTab label="Live Monitor" active={activeTab === 'monitor'} onClick={() => onTabChange('monitor')} />
                 </div>
             </nav>

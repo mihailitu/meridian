@@ -171,3 +171,45 @@ class RegimeSummaryResponse(BaseModel):
     volatility: str | None
     last_price: float | None
     timestamp: datetime | None
+
+
+class DiscoveredSymbolResponse(BaseModel):
+    """A discovered symbol from screening."""
+
+    symbol: str
+    source: str
+    score: float
+    price: float | None
+    volume: int | None
+    change_pct: float | None
+    discovered_at: str
+    metadata: dict
+
+
+class ScreenerResultResponse(BaseModel):
+    """Result from running a screener."""
+
+    screener_name: str
+    screener_type: str
+    match_count: int
+    total_scanned: int
+    scan_time_ms: float
+    timestamp: str
+    symbols: list[DiscoveredSymbolResponse]
+
+
+class ScreenerSummaryResponse(BaseModel):
+    """Summary info about a screener."""
+
+    name: str
+    type: str
+    params: dict
+
+
+class DiscoveryStateResponse(BaseModel):
+    """Current state of the discovery service."""
+
+    active_screeners: list[str]
+    last_scan: str | None
+    total_discovered: int
+    is_scanning: bool

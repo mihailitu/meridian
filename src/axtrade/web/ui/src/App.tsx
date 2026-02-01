@@ -4,6 +4,7 @@ import Layout, { type ActiveTab } from './components/Layout';
 import Overview from './components/Overview';
 import Strategies from './components/Strategies';
 import Monitor from './components/Monitor';
+import Discovery from './components/Discovery';
 
 function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
@@ -14,6 +15,8 @@ function App() {
         return <Overview />;
       case 'strategies':
         return <Strategies />;
+      case 'discovery':
+        return <Discovery />;
       case 'monitor':
         return <Monitor />;
     }
