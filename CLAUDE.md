@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-axtrade is a Python-based algorithmic trading platform supporting real-time market data ingestion, technical indicator calculation, and multi-strategy execution via IBKR.
+axtrade is a Python-based algorithmic trading platform supporting real-time market data ingestion, technical indicator calculation, and multi-strategy execution. Supports multiple data sources (Mock, IBKR, Alpaca, Yahoo) and paper/live trading modes.
 
 ## Build and Development Commands
 
@@ -59,16 +59,16 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 
 ### Core Data Flow
 
-1. **Gateway** (`gateway/service.py`): Connects to data sources (mock or IBKR via `ib_insync`), publishes ticks to `stream:ticks:us`
+1. **Gateway** (`gateway/service.py`): Connects to data sources (Mock, IBKR, Alpaca, or Yahoo), publishes ticks to `stream:ticks:us`
 2. **Aggregator** (`aggregator/service.py`): Consumes ticks, builds OHLCV bars via `BarEngine`, calculates indicators via `IndicatorEngine`, persists to TimescaleDB, publishes to `stream:bars:{interval}:us`
-3. **StrategyRunner** (`strategies/runner.py`): Consumes bars with indicators, routes to enabled strategies, submits orders via `OrderManager`
+3. **StrategyRunner** (`strategies/runner.py`): Consumes bars with indicators, executes enabled strategies in parallel, submits orders via `OrderManager`
 4. **OrderManager** (`oms/manager.py`): Manages order lifecycle via `BrokerProtocol` (paper or live IBKR), pre-trade risk checks via `RiskManager`, position tracking
 5. **CLI** (`cli/`): Queries historical bars from TimescaleDB
 
 ### Key Modules
 
 - `common/`: Shared types (`Tick`, `Bar`), config loading, Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
-- `gateway/`: Data adapters implementing `DataAdapter` base class - `MockAdapter` for testing, `IBKRAdapter` for live
+- `gateway/`: Data adapters implementing `DataAdapter` base class - `MockAdapter` (testing), `IBKRAdapter` (live via `ib_insync`), `AlpacaAdapter`, `YahooAdapter`
 - `aggregator/`: `BarEngine` for tick-to-bar aggregation, service orchestration
 - `indicators/`: `IndicatorEngine` with rolling buffers, `calculate_sma`, `calculate_rsi`, `calculate_bollinger_bands`
 - `strategies/`: `BaseStrategy` ABC, strategy implementations (`MomentumBreakout`, `MeanReversionStrategy`, `MultiTimeframeStrategy`, `PairsStrategy`), `StrategyRunner` service
@@ -90,6 +90,8 @@ The web dashboard runs at `http://localhost:8000`:
 - `GET /api/alerts/counts` - Alert counts by severity
 - `POST /api/alerts/{id}/acknowledge` - Acknowledge alert
 - `GET /api/health/detailed` - System health status
+- `GET /api/analytics/metrics` - Performance metrics (Sharpe, Sortino, drawdown)
+- `GET /api/analytics/strategies` - Strategy-level analytics
 - `GET /ws` - WebSocket for real-time position/P&L updates
 - `GET /health` - Health check
 - `GET /docs` - OpenAPI documentation
@@ -97,7 +99,7 @@ The web dashboard runs at `http://localhost:8000`:
 ### Configuration
 
 Configuration is loaded from `config/default.yaml` via `load_config()`. Key sections:
-- `gateway.adapter`: "mock" or "ibkr"
+- `gateway.adapter`: "mock", "ibkr", "alpaca", or "yahoo"
 - `gateway.symbols`: List of symbols with base prices
 - `aggregator.intervals`: Bar intervals to aggregate (e.g., "1m", "5m")
 - `database`: TimescaleDB connection settings

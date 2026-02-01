@@ -1,4 +1,4 @@
-.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api test clean db db-stop infra infra-stop
+.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api test clean db db-stop infra infra-stop setup build-ui
 
 install:
 	python3 -m venv .venv
@@ -56,3 +56,9 @@ test:
 clean:
 	rm -rf .venv build *.egg-info src/*.egg-info
 	find . -type d -name __pycache__ -exec rm -rf {} +
+
+setup:
+	./scripts/setup.sh
+
+build-ui:
+	cd src/axtrade/web/ui && npm run build
