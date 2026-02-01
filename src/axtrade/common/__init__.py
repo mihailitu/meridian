@@ -23,6 +23,14 @@ from .config import (
 )
 from .db import BarRepository, DatabasePool
 from .logging import get_logger, setup_logging
+from .markets import (
+    Market,
+    MarketStatus,
+    TradingHours,
+    get_all_market_status,
+    get_market_hours,
+    is_market_open,
+)
 from .messaging import BarConsumer, BarPublisher, RedisConsumer, RedisPublisher
 from .resilience import LoopSupervisor
 from .types import Bar, SymbolConfig, Tick
@@ -43,6 +51,8 @@ __all__ = [
     "IBKRConfig",
     "IndicatorConfig",
     "LoopSupervisor",
+    "Market",
+    "MarketStatus",
     "MockConfig",
     "OMSConfig",
     "RedisConfig",
@@ -55,8 +65,12 @@ __all__ = [
     "StrategyInstanceConfig",
     "SymbolConfig",
     "Tick",
+    "TradingHours",
     "YahooConfig",
+    "get_all_market_status",
     "get_logger",
+    "get_market_hours",
+    "is_market_open",
     "load_config",
     "setup_logging",
 ]

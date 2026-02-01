@@ -15,7 +15,7 @@ from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
 from .dependencies import state
-from .routes import alerts, analytics, discovery, health, orders, pnl, positions, regime, strategies, ws
+from .routes import alerts, analytics, discovery, health, markets, orders, pnl, positions, regime, strategies, ws
 
 logger = get_logger("api")
 
@@ -107,6 +107,7 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(strategies.router, prefix="/api", tags=["strategies"])
     app.include_router(regime.router, prefix="/api", tags=["regime"])
     app.include_router(discovery.router, prefix="/api", tags=["discovery"])
+    app.include_router(markets.router, prefix="/api", tags=["markets"])
     app.include_router(ws.router, tags=["websocket"])
 
     @app.get("/health")

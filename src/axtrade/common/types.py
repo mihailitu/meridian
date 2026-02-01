@@ -19,6 +19,7 @@ class Tick:
     bid: Optional[float] = None
     ask: Optional[float] = None
     volume: Optional[int] = None
+    market: str = "us"  # Market identifier (us, eu, asia, crypto, forex)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -29,6 +30,7 @@ class Tick:
             "bid": str(self.bid) if self.bid else "",
             "ask": str(self.ask) if self.ask else "",
             "volume": str(self.volume) if self.volume else "",
+            "market": self.market,
         }
 
     @property
@@ -48,6 +50,8 @@ class Bar:
     close: float
     volume: int
     timestamp: datetime
+    interval: str = "1m"  # Bar interval (1m, 5m, etc.)
+    market: str = "us"  # Market identifier (us, eu, asia, crypto, forex)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -59,6 +63,8 @@ class Bar:
             "close": str(self.close),
             "volume": str(self.volume),
             "timestamp": self.timestamp.isoformat(),
+            "interval": self.interval,
+            "market": self.market,
         }
 
 
