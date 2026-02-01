@@ -9,6 +9,7 @@ from .control import (
     StrategyStateRepository,
 )
 from .mean_reversion import MeanReversionStrategy
+from .ml_prediction import MLPredictionStrategy
 from .momentum import MomentumBreakout
 from .multi_timeframe import MultiTimeframeStrategy
 from .pairs import PairsStrategy
@@ -19,6 +20,7 @@ STRATEGY_TYPES: dict[str, type[BaseStrategy]] = {
     "mean_reversion": MeanReversionStrategy,
     "multi_timeframe": MultiTimeframeStrategy,
     "pairs": PairsStrategy,
+    "ml_prediction": MLPredictionStrategy,
 }
 
 __all__ = [
@@ -26,6 +28,7 @@ __all__ = [
     "BaseStrategy",
     "ControlCommand",
     "MeanReversionStrategy",
+    "MLPredictionStrategy",
     "MomentumBreakout",
     "MultiTimeframeStrategy",
     "PairsStrategy",

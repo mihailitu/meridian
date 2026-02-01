@@ -4,7 +4,7 @@ import { Activity, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import AlertBadge from './AlertBadge';
 import MarketStatusBar from './MarketStatusBar';
 
-export type ActiveTab = 'overview' | 'strategies' | 'discovery' | 'monitor';
+export type ActiveTab = 'overview' | 'strategies' | 'discovery' | 'ml' | 'monitor';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -74,6 +74,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => 
                     <NavTab label="Overview" active={activeTab === 'overview'} onClick={() => onTabChange('overview')} />
                     <NavTab label="Strategies" active={activeTab === 'strategies'} onClick={() => onTabChange('strategies')} />
                     <NavTab label="Discovery" active={activeTab === 'discovery'} onClick={() => onTabChange('discovery')} />
+                    <NavTab label="ML Models" active={activeTab === 'ml'} onClick={() => onTabChange('ml')} />
                     <NavTab label="Live Monitor" active={activeTab === 'monitor'} onClick={() => onTabChange('monitor')} />
                 </div>
             </nav>
