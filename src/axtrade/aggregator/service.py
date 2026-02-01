@@ -167,8 +167,10 @@ class AggregatorService:
 
     async def _process_completed_bar(self, bar: Bar, interval: str) -> None:
         """Process a completed bar: calculate indicators, persist, publish."""
-        # Calculate indicators
-        result = self._indicator_engine.process_bar(bar.symbol, interval, bar.close)
+        # Calculate indicators (including regime)
+        result = self._indicator_engine.process_bar(
+            bar.symbol, interval, bar.close, high=bar.high, low=bar.low
+        )
 
         # Persist to database
         if self._bar_repo:
@@ -179,13 +181,22 @@ class AggregatorService:
                 rsi_14=result.rsi_14,
             )
 
-        # Publish to Redis (with indicators for strategy consumption)
+        # Publish to Redis (with indicators and regime for strategy consumption)
         await self._publisher.publish_bar(
-            bar, interval, market="us", sma_20=result.sma_20, rsi_14=result.rsi_14
+            bar,
+            interval,
+            market="us",
+            sma_20=result.sma_20,
+            rsi_14=result.rsi_14,
+            regime=result.regime.value if result.regime else None,
+            trend=result.trend.value if result.trend else None,
+            volatility=result.volatility.value if result.volatility else None,
+            trend_strength=result.trend_strength,
+            volatility_percentile=result.volatility_percentile,
         )
 
         # Print to console
-        self._print_bar(bar, interval, result.sma_20, result.rsi_14)
+        self._print_bar(bar, interval, result.sma_20, result.rsi_14, result.regime)
 
     def _print_bar(
         self,
@@ -193,8 +204,11 @@ class AggregatorService:
         interval: str,
         sma_20: float | None,
         rsi_14: float | None,
+        regime: "MarketRegime | None" = None,
     ) -> None:
         """Log a completed bar."""
+        from axtrade.indicators import MarketRegime
+
         self.logger.info(
             "bar",
             symbol=bar.symbol,
@@ -206,6 +220,7 @@ class AggregatorService:
             volume=bar.volume,
             sma_20=round(sma_20, 2) if sma_20 else None,
             rsi_14=round(rsi_14, 1) if rsi_14 else None,
+            regime=regime.value if regime else None,
         )
 
 

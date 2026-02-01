@@ -14,6 +14,7 @@ from axtrade.common import (
     load_config,
     setup_logging,
 )
+from axtrade.indicators import MarketRegime, MarketTrend, VolatilityState
 from axtrade.oms import OrderManager, Order
 
 from . import STRATEGY_TYPES
@@ -282,11 +283,20 @@ class StrategyRunner:
                     if not self._running:
                         break
 
-                    # Convert to BarWithIndicators
+                    # Convert to BarWithIndicators (including regime)
+                    regime_str = bar_data.get("regime")
+                    trend_str = bar_data.get("trend")
+                    volatility_str = bar_data.get("volatility")
+
                     data = BarWithIndicators(
                         bar=bar_data["bar"],
                         sma_20=bar_data.get("sma_20"),
                         rsi_14=bar_data.get("rsi_14"),
+                        regime=MarketRegime(regime_str) if regime_str else None,
+                        trend=MarketTrend(trend_str) if trend_str else None,
+                        volatility=VolatilityState(volatility_str) if volatility_str else None,
+                        trend_strength=bar_data.get("trend_strength"),
+                        volatility_percentile=bar_data.get("volatility_percentile"),
                     )
 
                     # Update price cache in order manager

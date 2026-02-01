@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Optional
 
 from axtrade.common import Bar
+from axtrade.indicators import MarketRegime, MarketTrend, VolatilityState
 from axtrade.oms import Fill, Order, Position
 
 
@@ -25,6 +26,11 @@ class BarWithIndicators:
     bar: Bar
     sma_20: Optional[float] = None
     rsi_14: Optional[float] = None
+    regime: Optional[MarketRegime] = None
+    trend: Optional[MarketTrend] = None
+    volatility: Optional[VolatilityState] = None
+    trend_strength: Optional[float] = None
+    volatility_percentile: Optional[float] = None
 
     @property
     def symbol(self) -> str:
@@ -33,6 +39,21 @@ class BarWithIndicators:
     @property
     def close(self) -> float:
         return self.bar.close
+
+    @property
+    def is_trending_up(self) -> bool:
+        """Check if market is in uptrend regime."""
+        return self.regime == MarketRegime.TRENDING_UP
+
+    @property
+    def is_trending_down(self) -> bool:
+        """Check if market is in downtrend regime."""
+        return self.regime == MarketRegime.TRENDING_DOWN
+
+    @property
+    def is_high_volatility(self) -> bool:
+        """Check if market volatility is high or extreme."""
+        return self.volatility in (VolatilityState.HIGH, VolatilityState.EXTREME)
 
 
 class BaseStrategy(ABC):

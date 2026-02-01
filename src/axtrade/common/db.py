@@ -244,3 +244,81 @@ class BarRepository:
             )
 
         return results
+
+    async def get_recent_bars(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 50,
+    ) -> list[Bar]:
+        """Get recent bars as Bar objects.
+
+        Args:
+            symbol: Symbol to query
+            interval: Bar interval
+            limit: Maximum number of bars to return
+
+        Returns:
+            List of Bar objects, oldest first
+        """
+        query = """
+            SELECT time, symbol, open, high, low, close, volume
+            FROM bars
+            WHERE symbol = $1 AND interval = $2
+            ORDER BY time DESC
+            LIMIT $3
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, symbol, interval, limit)
+
+        # Return oldest first for proper processing order
+        return [
+            Bar(
+                symbol=row["symbol"],
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=row["volume"],
+                timestamp=row["time"],
+            )
+            for row in reversed(rows)
+        ]
+
+    async def get_bars_since(
+        self,
+        symbol: str,
+        interval: str,
+        since: datetime,
+    ) -> list[Bar]:
+        """Get bars since a given timestamp.
+
+        Args:
+            symbol: Symbol to query
+            interval: Bar interval
+            since: Start timestamp (inclusive)
+
+        Returns:
+            List of Bar objects, oldest first
+        """
+        query = """
+            SELECT time, symbol, open, high, low, close, volume
+            FROM bars
+            WHERE symbol = $1 AND interval = $2 AND time >= $3
+            ORDER BY time ASC
+        """
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, symbol, interval, since)
+
+        return [
+            Bar(
+                symbol=row["symbol"],
+                open=float(row["open"]),
+                high=float(row["high"]),
+                low=float(row["low"]),
+                close=float(row["close"]),
+                volume=row["volume"],
+                timestamp=row["time"],
+            )
+            for row in rows
+        ]

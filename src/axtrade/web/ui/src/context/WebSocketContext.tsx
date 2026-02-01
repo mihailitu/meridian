@@ -3,7 +3,7 @@ import type { ConnectionStatus, WebSocketMessage } from '../types/websocket';
 import { WebSocketContext } from './context';
 
 // Valid message types from our backend
-const BACKEND_MESSAGE_TYPES = ['dashboard', 'alert', 'pnl_update', 'position_update', 'order_update', 'heartbeat'];
+const BACKEND_MESSAGE_TYPES = ['dashboard', 'alert', 'pnl_update', 'position_update', 'order_update', 'heartbeat', 'regime_update'];
 
 export const WebSocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [status, setStatus] = useState<ConnectionStatus>('disconnected');

@@ -56,6 +56,11 @@ database:
 indicators:
   sma_period: 20
   rsi_period: 14
+  regime:
+    sma_short_period: 10
+    sma_long_period: 20
+    volatility_lookback: 20
+    atr_period: 14
 
 oms:
   paper_mode: true

@@ -3,6 +3,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import type { DashboardData } from '../types/websocket';
 import PnLChart from './PnLChart';
 import AlertsPanel from './AlertsPanel';
+import RegimePanel from './RegimePanel';
 
 const Overview: React.FC = () => {
     const { status, lastMessage } = useWebSocket();
@@ -79,6 +80,12 @@ const Overview: React.FC = () => {
                         )}
                     </div>
                 </div>
+            </div>
+
+            {/* Market Regime Panel */}
+            <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
+                <h2 className="text-lg font-semibold mb-4">Market Regime</h2>
+                <RegimePanel interval="1m" compact={false} />
             </div>
 
             {/* Alerts Panel */}

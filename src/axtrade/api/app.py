@@ -2,9 +2,12 @@
 
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor, LogChannel
 from axtrade.common import Config, DatabasePool, get_logger, load_config, setup_logging
@@ -12,7 +15,7 @@ from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
 from .dependencies import state
-from .routes import alerts, analytics, health, orders, pnl, positions, strategies, ws
+from .routes import alerts, analytics, health, orders, pnl, positions, regime, strategies, ws
 
 logger = get_logger("api")
 
@@ -102,17 +105,43 @@ def create_app(config: Config) -> FastAPI:
     app.include_router(health.router, prefix="/api", tags=["health"])
     app.include_router(analytics.router, prefix="/api", tags=["analytics"])
     app.include_router(strategies.router, prefix="/api", tags=["strategies"])
+    app.include_router(regime.router, prefix="/api", tags=["regime"])
     app.include_router(ws.router, tags=["websocket"])
-
-    @app.get("/")
-    async def root():
-        """API root endpoint."""
-        return {"message": "axtrade API", "docs": "/docs", "ui": "http://localhost:5173"}
 
     @app.get("/health")
     async def health_check():
         """Health check endpoint."""
         return {"status": "ok"}
+
+    # Serve frontend static files
+    frontend_dist = Path(__file__).parent.parent / "web" / "ui" / "dist"
+    if frontend_dist.exists():
+        # Mount static assets (js, css, etc.)
+        app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")
+
+        @app.get("/")
+        async def serve_spa_root():
+            """Serve frontend index.html at root."""
+            return FileResponse(frontend_dist / "index.html")
+
+        @app.get("/{path:path}")
+        async def serve_spa(path: str):
+            """Serve frontend for SPA routing."""
+            # Check if it's a static file
+            file_path = frontend_dist / path
+            if file_path.exists() and file_path.is_file():
+                return FileResponse(file_path)
+            # Otherwise serve index.html for SPA routing
+            return FileResponse(frontend_dist / "index.html")
+    else:
+        @app.get("/")
+        async def root():
+            """API root endpoint (frontend not built)."""
+            return {
+                "message": "axtrade API",
+                "docs": "/docs",
+                "note": "Frontend not built. Run: cd src/axtrade/web/ui && npm run build",
+            }
 
     return app
 

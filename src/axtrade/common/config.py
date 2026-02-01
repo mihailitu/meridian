@@ -88,11 +88,22 @@ class DatabaseConfig:
 
 
 @dataclass
+class RegimeConfig:
+    """Regime detection configuration."""
+
+    sma_short_period: int = 10
+    sma_long_period: int = 20
+    volatility_lookback: int = 20
+    atr_period: int = 14
+
+
+@dataclass
 class IndicatorConfig:
     """Indicator calculation configuration."""
 
     sma_period: int = 20
     rsi_period: int = 14
+    regime: RegimeConfig = field(default_factory=RegimeConfig)
 
 
 @dataclass
@@ -241,6 +252,12 @@ def load_config(path: Optional[Path] = None) -> Config:
         indicators=IndicatorConfig(
             sma_period=indicators_data.get("sma_period", 20),
             rsi_period=indicators_data.get("rsi_period", 14),
+            regime=RegimeConfig(
+                sma_short_period=indicators_data.get("regime", {}).get("sma_short_period", 10),
+                sma_long_period=indicators_data.get("regime", {}).get("sma_long_period", 20),
+                volatility_lookback=indicators_data.get("regime", {}).get("volatility_lookback", 20),
+                atr_period=indicators_data.get("regime", {}).get("atr_period", 14),
+            ),
         ),
         oms=OMSConfig(
             paper_mode=oms_data.get("paper_mode", True),

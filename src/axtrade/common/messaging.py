@@ -215,6 +215,11 @@ class BarPublisher:
         market: str = "us",
         sma_20: Optional[float] = None,
         rsi_14: Optional[float] = None,
+        regime: Optional[str] = None,
+        trend: Optional[str] = None,
+        volatility: Optional[str] = None,
+        trend_strength: Optional[float] = None,
+        volatility_percentile: Optional[float] = None,
     ) -> str:
         """Publish a bar to Redis Stream.
 
@@ -224,6 +229,11 @@ class BarPublisher:
             market: Market identifier
             sma_20: SMA indicator value
             rsi_14: RSI indicator value
+            regime: Market regime classification
+            trend: Market trend direction
+            volatility: Volatility state
+            trend_strength: Trend strength 0-100
+            volatility_percentile: Volatility percentile 0-100
 
         Returns:
             Stream message ID
@@ -236,6 +246,12 @@ class BarPublisher:
         # Add indicators to message
         data["sma_20"] = str(sma_20) if sma_20 is not None else ""
         data["rsi_14"] = str(rsi_14) if rsi_14 is not None else ""
+        # Add regime data
+        data["regime"] = regime if regime else ""
+        data["trend"] = trend if trend else ""
+        data["volatility"] = volatility if volatility else ""
+        data["trend_strength"] = str(trend_strength) if trend_strength is not None else ""
+        data["volatility_percentile"] = str(volatility_percentile) if volatility_percentile is not None else ""
         message_id = await self._client.xadd(stream_key, data)
         return message_id
 
@@ -352,6 +368,11 @@ class BarConsumer:
                 "bar": bar,
                 "sma_20": float(data["sma_20"]) if data.get("sma_20") else None,
                 "rsi_14": float(data["rsi_14"]) if data.get("rsi_14") else None,
+                "regime": data.get("regime") or None,
+                "trend": data.get("trend") or None,
+                "volatility": data.get("volatility") or None,
+                "trend_strength": float(data["trend_strength"]) if data.get("trend_strength") else None,
+                "volatility_percentile": float(data["volatility_percentile"]) if data.get("volatility_percentile") else None,
             }
         except (KeyError, ValueError):
             return None

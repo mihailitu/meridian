@@ -128,3 +128,46 @@ class StrategyPerformanceResponse(BaseModel):
     avg_trade_duration_hours: float
     largest_win: Decimal
     largest_loss: Decimal
+
+
+class RegimeCurrentResponse(BaseModel):
+    """Current market regime for a symbol."""
+
+    symbol: str
+    interval: str
+    regime: str | None
+    trend: str | None
+    volatility: str | None
+    trend_strength: float | None
+    volatility_percentile: float | None
+    timestamp: datetime
+
+
+class RegimeHistoryPoint(BaseModel):
+    """Single point in regime history."""
+
+    timestamp: datetime
+    regime: str
+    trend: str
+    volatility: str
+    trend_strength: float
+    volatility_percentile: float
+
+
+class RegimeHistoryResponse(BaseModel):
+    """Historical regime data for a symbol."""
+
+    symbol: str
+    interval: str
+    history: list[RegimeHistoryPoint]
+
+
+class RegimeSummaryResponse(BaseModel):
+    """Regime summary for a single symbol."""
+
+    symbol: str
+    regime: str | None
+    trend: str | None
+    volatility: str | None
+    last_price: float | None
+    timestamp: datetime | None
