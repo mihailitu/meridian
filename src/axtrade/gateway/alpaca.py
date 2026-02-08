@@ -57,13 +57,20 @@ class AlpacaAdapter(DataAdapter):
         """Connect to Alpaca WebSocket stream."""
         try:
             from alpaca.data.live import StockDataStream
+            from alpaca.data.enums import DataFeed
 
             api_key, secret_key = self._get_credentials()
+
+            feed_map = {
+                "iex": DataFeed.IEX,
+                "sip": DataFeed.SIP,
+            }
+            feed = feed_map.get(self.config.feed.lower(), DataFeed.IEX)
 
             self._stream = StockDataStream(
                 api_key=api_key,
                 secret_key=secret_key,
-                feed=self.config.feed,
+                feed=feed,
             )
             self._connected = True
             logger.info(
@@ -92,7 +99,7 @@ class AlpacaAdapter(DataAdapter):
         self._connected = False
         logger.info("disconnected_from_alpaca")
 
-    def _handle_trade(self, trade) -> None:
+    async def _handle_trade(self, trade) -> None:
         """Handle incoming trade updates.
 
         Args:
@@ -114,7 +121,7 @@ class AlpacaAdapter(DataAdapter):
         except Exception as e:
             logger.error("alpaca_trade_handler_error", error=str(e))
 
-    def _handle_quote(self, quote) -> None:
+    async def _handle_quote(self, quote) -> None:
         """Handle incoming quote updates.
 
         Args:

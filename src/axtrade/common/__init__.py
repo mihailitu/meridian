@@ -19,8 +19,14 @@ from .config import (
     StrategiesConfig,
     StrategyInstanceConfig,
     YahooConfig,
+    YahooConfig,
     load_config,
 )
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from .db import BarRepository, DatabasePool
 from .logging import get_logger, setup_logging
 from .markets import (

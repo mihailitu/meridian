@@ -22,6 +22,8 @@ make db                     # Start TimescaleDB only
 # Run Services
 make run                    # Run gateway with mock adapter
 make run-ibkr               # Run gateway with IBKR adapter
+make run-alpaca             # Run gateway with Alpaca adapter
+make run-yahoo              # Run gateway with Yahoo adapter
 make run-aggregator         # Run bar aggregator service
 make run-strategy           # Run strategy runner service
 make run-api                # Run web dashboard API server
@@ -70,14 +72,16 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 - `common/`: Shared types (`Tick`, `Bar`), config loading, Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
 - `gateway/`: Data adapters implementing `DataAdapter` base class - `MockAdapter` (testing), `IBKRAdapter` (live via `ib_insync`), `AlpacaAdapter`, `YahooAdapter`
 - `aggregator/`: `BarEngine` for tick-to-bar aggregation, service orchestration
-- `indicators/`: `IndicatorEngine` with rolling buffers, `calculate_sma`, `calculate_rsi`, `calculate_bollinger_bands`
-- `strategies/`: `BaseStrategy` ABC, strategy implementations (`MomentumBreakout`, `MeanReversionStrategy`, `MultiTimeframeStrategy`, `PairsStrategy`), `StrategyRunner` service
-- `oms/`: Order Management System - `Order`, `Fill`, `Position` types, `OrderManager`, `BrokerProtocol` with `PaperBroker`/`IBKRBroker`, `RiskManager` for pre-trade checks, `OrderRepository`, `PositionRepository`
+- `indicators/`: `IndicatorEngine` with rolling buffers, `calculate_sma`, `calculate_rsi`, `calculate_bollinger_bands`, `calculate_atr`, market regime detection
+- `strategies/`: `BaseStrategy` ABC, strategy implementations (`MomentumBreakout`, `MeanReversionStrategy`, `MultiTimeframeStrategy`, `PairsStrategy`, `MLPredictionStrategy`), `StrategyRunner` service with dynamic control via Redis pubsub
+- `oms/`: Order Management System - `Order`, `Fill`, `Position` types, `OrderManager`, `BrokerProtocol` with `PaperBroker`/`IBKRBroker`, `RiskManager` for pre-trade checks, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking, `OrderRepository`, `PositionRepository`
 - `backtest/`: Backtesting framework - `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer` for strategy evaluation on historical data
 - `api/`: Web dashboard - FastAPI app with REST endpoints and WebSocket for real-time updates
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind) with components for positions, orders, fills, alerts, and P&L chart
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
 - `analytics/`: Performance analytics - rolling metrics, drawdown tracking, trade statistics
+- `discovery/`: Symbol screening service with momentum, volatility, volume, and trend screeners
+- `ml/`: ML prediction strategy with feature engineering and model inference
 
 ### API Endpoints
 
@@ -92,6 +96,11 @@ The web dashboard runs at `http://localhost:8000`:
 - `GET /api/health/detailed` - System health status
 - `GET /api/analytics/metrics` - Performance metrics (Sharpe, Sortino, drawdown)
 - `GET /api/analytics/strategies` - Strategy-level analytics
+- `GET /api/strategies` - Strategy status and controls
+- `GET /api/regime` - Current market regime (trend + volatility state)
+- `GET /api/discovery/results` - Symbol screening results
+- `GET /api/markets` - Multi-market data (us, eu, asia, crypto, forex)
+- `GET /api/ml/predictions` - ML model predictions
 - `GET /ws` - WebSocket for real-time position/P&L updates
 - `GET /health` - Health check
 - `GET /docs` - OpenAPI documentation
@@ -103,10 +112,11 @@ Configuration is loaded from `config/default.yaml` via `load_config()`. Key sect
 - `gateway.symbols`: List of symbols with base prices
 - `aggregator.intervals`: Bar intervals to aggregate (e.g., "1m", "5m")
 - `database`: TimescaleDB connection settings
-- `indicators`: SMA/RSI periods
+- `indicators`: SMA/RSI periods, regime detection parameters
 - `oms`: Order management settings - `paper_mode`, `slippage_bps`, `risk` (position/order limits, daily loss limit)
 - `strategies`: Strategy runner config - `bar_stream`, `consumer_group`, `enabled` list with strategy instances
 - `api`: Web API config - `host`, `port`, `cors_origins`
+- `discovery`: Symbol screening config - `scan_interval_seconds`, `screeners` list
 
 ## Code Conventions
 

@@ -1,5 +1,5 @@
 gateway:
-  adapter: mock  # mock | ibkr | alpaca | yahoo
+  adapter: alpaca  # mock | ibkr | alpaca | yahoo
 
   mock:
     tick_interval_ms: 500
