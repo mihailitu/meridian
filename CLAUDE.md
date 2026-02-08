@@ -77,7 +77,7 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 - `oms/`: Order Management System - `Order`, `Fill`, `Position` types, `OrderManager`, `BrokerProtocol` with `PaperBroker`/`IBKRBroker`, `RiskManager` for pre-trade checks, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking, `OrderRepository`, `PositionRepository`
 - `backtest/`: Backtesting framework - `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer` for strategy evaluation on historical data
 - `api/`: Web dashboard - FastAPI app with REST endpoints and WebSocket for real-time updates
-- `web/ui/`: React frontend (Vite + TypeScript + Tailwind) with components for positions, orders, fills, alerts, and P&L chart
+- `web/ui/`: React frontend (Vite + TypeScript + Tailwind) with components for positions, orders, fills, alerts, P&L chart, provider selector, and discovery watchlist
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
 - `analytics/`: Performance analytics - rolling metrics, drawdown tracking, trade statistics
 - `discovery/`: Symbol screening service with momentum, volatility, volume, and trend screeners
@@ -99,6 +99,9 @@ The web dashboard runs at `http://localhost:8000`:
 - `GET /api/strategies` - Strategy status and controls
 - `GET /api/regime` - Current market regime (trend + volatility state)
 - `GET /api/discovery/results` - Symbol screening results
+- `POST /api/discovery/symbols` - Add symbol manually to watchlist
+- `GET /api/gateway/status` - Gateway status and available adapters
+- `POST /api/gateway/preference` - Set preferred gateway adapter
 - `GET /api/markets` - Multi-market data (us, eu, asia, crypto, forex)
 - `GET /api/ml/predictions` - ML model predictions
 - `GET /ws` - WebSocket for real-time position/P&L updates
