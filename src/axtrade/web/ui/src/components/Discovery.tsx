@@ -9,6 +9,7 @@ import {
     Filter,
     Trash2,
     Activity,
+    Plus,
 } from 'lucide-react';
 import {
     useDiscoveryState,
@@ -16,6 +17,7 @@ import {
     useScreeners,
     useScan,
     useClearDiscovered,
+    useAddSymbol,
 } from '../hooks/useDiscovery';
 import type { DiscoveredSymbol } from '../types/discovery';
 import { getSignalDirection } from '../types/discovery';
@@ -25,10 +27,15 @@ const Discovery = () => {
     const { screeners } = useScreeners();
     const { runScan, loading: scanLoading } = useScan();
     const { clearDiscovered, loading: clearLoading } = useClearDiscovered();
+    const { addSymbol, loading: addLoading } = useAddSymbol();
 
     // Filter state
     const [filter, setFilter] = useState<'all' | 'bullish' | 'bearish'>('all');
     const [selectedSource, setSelectedSource] = useState<string>('');
+
+    // Add symbol form state
+    const [newSymbol, setNewSymbol] = useState('');
+    const [newPrice, setNewPrice] = useState('');
 
     const {
         symbols,
@@ -50,6 +57,23 @@ const Discovery = () => {
     const handleClear = async () => {
         await clearDiscovered();
         refetchSymbols();
+    };
+
+    const handleAddSymbol = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!newSymbol.trim()) return;
+
+        try {
+            await addSymbol({
+                symbol: newSymbol.trim(),
+                price: newPrice ? parseFloat(newPrice) : undefined,
+            });
+            setNewSymbol('');
+            setNewPrice('');
+            refetchSymbols();
+        } catch {
+            // Error is handled by the hook
+        }
     };
 
     const formatTime = (isoString: string | null) => {
@@ -108,6 +132,39 @@ const Discovery = () => {
                     </button>
                 </div>
             </div>
+
+            {/* Add Symbol Form */}
+            <form onSubmit={handleAddSymbol} className="flex items-center gap-3 bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div className="flex items-center gap-2">
+                    <Plus className="w-4 h-4 text-slate-400" />
+                    <span className="text-sm text-slate-400">Add Symbol:</span>
+                </div>
+                <input
+                    type="text"
+                    value={newSymbol}
+                    onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
+                    placeholder="TSLA"
+                    className="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm text-slate-200 w-24 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                    maxLength={10}
+                />
+                <input
+                    type="number"
+                    value={newPrice}
+                    onChange={(e) => setNewPrice(e.target.value)}
+                    placeholder="Price (optional)"
+                    step="0.01"
+                    min="0"
+                    className="bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-sm text-slate-200 w-36 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                    type="submit"
+                    disabled={addLoading || !newSymbol.trim()}
+                    className="flex items-center gap-2 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded transition-colors text-sm font-medium"
+                >
+                    <Plus className="w-4 h-4" />
+                    Add
+                </button>
+            </form>
 
             {/* Filters and Screeners */}
             <div className="flex items-center justify-between bg-slate-800 rounded-lg p-4 border border-slate-700">

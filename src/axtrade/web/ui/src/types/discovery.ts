@@ -39,3 +39,9 @@ export function getSignalDirection(score: number): SignalDirection {
     if (score < 0) return 'bearish';
     return 'neutral';
 }
+
+export interface AddSymbolRequest {
+    symbol: string;
+    price?: number;
+    notes?: string;
+}

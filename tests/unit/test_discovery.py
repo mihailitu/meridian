@@ -521,6 +521,38 @@ class TestDiscoveryService:
         assert "v1" in state.active_screeners
         assert state.total_discovered == 1
 
+    def test_add_manual_symbol(self):
+        """Test adding a symbol manually."""
+        service = DiscoveryService(screeners=[])
+        symbol = service.add_manual_symbol("aapl", price=185.50)
+
+        assert symbol.symbol == "AAPL"  # Should be uppercase
+        assert symbol.source == "manual"
+        assert symbol.score == 0.0
+        assert symbol.price == 185.50
+        assert "AAPL" in service._discovered
+
+    def test_add_manual_symbol_with_notes(self):
+        """Test adding a symbol with notes."""
+        service = DiscoveryService(screeners=[])
+        symbol = service.add_manual_symbol("TSLA", price=250.00, notes="Earnings play")
+
+        assert symbol.symbol == "TSLA"
+        assert symbol.metadata["notes"] == "Earnings play"
+
+    def test_add_manual_symbol_overwrites_existing(self):
+        """Test that manual symbol overwrites existing entry."""
+        service = DiscoveryService(screeners=[])
+        service._discovered["AAPL"] = DiscoveredSymbol(
+            symbol="AAPL",
+            source="momentum",
+            score=0.8,
+        )
+
+        symbol = service.add_manual_symbol("AAPL", price=190.00)
+        assert service._discovered["AAPL"].source == "manual"
+        assert service._discovered["AAPL"].price == 190.00
+
     @pytest.mark.asyncio
     async def test_scan_no_screeners(self):
         """Test scanning with no screeners registered."""

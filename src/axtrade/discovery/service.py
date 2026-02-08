@@ -250,6 +250,41 @@ class DiscoveryService:
         self._discovered.clear()
         self.logger.info("Cleared discovered symbols")
 
+    def add_manual_symbol(
+        self,
+        symbol: str,
+        price: Optional[float] = None,
+        notes: Optional[str] = None,
+    ) -> DiscoveredSymbol:
+        """Add a symbol manually to the discovered list.
+
+        Args:
+            symbol: Stock ticker symbol
+            price: Optional current price
+            notes: Optional notes about the symbol
+
+        Returns:
+            The created DiscoveredSymbol
+        """
+        metadata = {}
+        if notes:
+            metadata["notes"] = notes
+
+        discovered = DiscoveredSymbol(
+            symbol=symbol.upper(),
+            source="manual",
+            score=0.0,
+            price=price,
+            metadata=metadata,
+        )
+        self._discovered[discovered.symbol] = discovered
+        self.logger.info(
+            "Added manual symbol",
+            symbol=discovered.symbol,
+            price=price,
+        )
+        return discovered
+
     def get_state(self) -> DiscoveryState:
         """Get current discovery service state."""
         return DiscoveryState(

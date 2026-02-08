@@ -3,6 +3,7 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { Activity, Wifi, WifiOff, Loader2 } from 'lucide-react';
 import AlertBadge from './AlertBadge';
 import MarketStatusBar from './MarketStatusBar';
+import ProviderSelector from './ProviderSelector';
 
 export type ActiveTab = 'overview' | 'strategies' | 'discovery' | 'ml' | 'monitor';
 
@@ -50,11 +51,14 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, onTabChange }) => 
                     {/* Market Status Indicators */}
                     <MarketStatusBar compact />
 
+                    {/* Provider Selector */}
+                    <ProviderSelector />
+
                     {/* Health Indicators - reflect WebSocket status */}
                     <div className="flex gap-2">
                         <HealthDot label="Redis" status={status} />
                         <HealthDot label="DB" status={status} />
-                        <HealthDot label="IBKR" status={status} />
+                        <HealthDot label="Gateway" status={status} />
                     </div>
 
                     {/* Alert Badge */}

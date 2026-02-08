@@ -213,3 +213,26 @@ class DiscoveryStateResponse(BaseModel):
     last_scan: str | None
     total_discovered: int
     is_scanning: bool
+
+
+class AddSymbolRequest(BaseModel):
+    """Request to add a symbol manually."""
+
+    symbol: str
+    price: float | None = None
+    notes: str | None = None
+
+
+class GatewayStatusResponse(BaseModel):
+    """Gateway status and adapter information."""
+
+    current_adapter: str
+    preferred_adapter: str | None
+    available_adapters: list[str]
+    requires_restart: bool
+
+
+class GatewayPreferenceRequest(BaseModel):
+    """Request to set preferred gateway adapter."""
+
+    adapter: str

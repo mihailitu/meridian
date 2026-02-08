@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import type {
+    AddSymbolRequest,
     DiscoveredSymbol,
     DiscoveryState,
     ScreenerResult,
@@ -189,4 +190,30 @@ export function useClearDiscovered() {
     }, []);
 
     return { loading, error, clearDiscovered };
+}
+
+export function useAddSymbol() {
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    const addSymbol = useCallback(async (request: AddSymbolRequest) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const data = await fetchApi<DiscoveredSymbol>('/discovery/symbols', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(request),
+            });
+            return data;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Failed to add symbol';
+            setError(message);
+            throw err;
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    return { loading, error, addSymbol };
 }

@@ -10,6 +10,7 @@ from axtrade.discovery import DiscoveryService
 
 from ..dependencies import state
 from ..schemas import (
+    AddSymbolRequest,
     DiscoveredSymbolResponse,
     DiscoveryStateResponse,
     ScreenerResultResponse,
@@ -156,6 +157,29 @@ async def get_screeners(
                 )
             )
     return results
+
+
+@router.post("/discovery/symbols", response_model=DiscoveredSymbolResponse)
+async def add_symbol(
+    request: AddSymbolRequest,
+    discovery_service: DiscoveryService = Depends(get_discovery_service),
+) -> DiscoveredSymbolResponse:
+    """Add a symbol manually to the watchlist."""
+    symbol = discovery_service.add_manual_symbol(
+        symbol=request.symbol,
+        price=request.price,
+        notes=request.notes,
+    )
+    return DiscoveredSymbolResponse(
+        symbol=symbol.symbol,
+        source=symbol.source,
+        score=symbol.score,
+        price=symbol.price,
+        volume=symbol.volume,
+        change_pct=symbol.change_pct,
+        discovered_at=symbol.discovered_at.isoformat(),
+        metadata=symbol.metadata,
+    )
 
 
 @router.delete("/discovery/symbols")
