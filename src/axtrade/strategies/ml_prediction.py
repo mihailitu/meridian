@@ -1,5 +1,6 @@
 """ML-based prediction strategy."""
 
+import asyncio
 from collections import deque
 from decimal import Decimal
 from typing import Optional
@@ -66,10 +67,17 @@ class MLPredictionStrategy(BaseStrategy):
         self._bar_buffers: dict[str, deque] = {}
         self._models: dict[str, str] = {}  # symbol -> model_id
 
-        # Training data collection
-        self._training_features: dict[str, list] = {}
-        self._training_targets: dict[str, list] = {}
+        # Training data collection.
+        # Use bounded deques to cap memory usage. We keep up to 5x the
+        # required training samples so there is enough history for
+        # retraining while old observations are automatically evicted.
+        self._max_training_samples = self.train_samples * 5
+        self._training_features: dict[str, deque] = {}
+        self._training_targets: dict[str, deque] = {}
         self._last_prices: dict[str, float] = {}
+
+        # Flag to avoid scheduling duplicate background training runs.
+        self._training_in_progress: dict[str, bool] = {}
 
     @property
     def name(self) -> str:
@@ -152,8 +160,8 @@ class MLPredictionStrategy(BaseStrategy):
         from axtrade.ml.features import FeatureSet
 
         if symbol not in self._training_features:
-            self._training_features[symbol] = []
-            self._training_targets[symbol] = []
+            self._training_features[symbol] = deque(maxlen=self._max_training_samples)
+            self._training_targets[symbol] = deque(maxlen=self._max_training_samples)
 
         # If we have a previous price, calculate target
         if symbol in self._last_prices:
@@ -177,59 +185,92 @@ class MLPredictionStrategy(BaseStrategy):
         self._training_features[symbol].append(features)
         self._last_prices[symbol] = current_price
 
-    def _maybe_train_model(self, symbol: str) -> bool:
-        """Train model if enough data is available.
+    def _maybe_train_model(self, symbol: str) -> None:
+        """Schedule model training on a background thread if ready.
 
-        Args:
-            symbol: Symbol to train model for
+        Training is CPU-bound (gradient descent iterations), so running it
+        on the event loop would block tick/bar processing for all strategies.
+        Instead we snapshot the training data and hand it off to a thread via
+        run_in_executor. The model's is_trained flag acts as the
+        synchronisation point -- predict() checks it before using weights,
+        and train() sets it atomically at the end. Python's GIL guarantees
+        dict/float attribute assignments are atomic, so predict() will
+        always see a consistent weights dict (either pre- or post-training).
 
-        Returns:
-            True if training occurred
+        The _training_in_progress flag prevents duplicate concurrent runs
+        for the same symbol.
         """
-        features = self._training_features.get(symbol, [])
-        targets = self._training_targets.get(symbol, [])
+        features = self._training_features.get(symbol, deque())
+        targets = self._training_targets.get(symbol, deque())
 
-        # Need minimum samples
         if len(targets) < self.train_samples:
-            return False
+            return
 
         model_id = self._models.get(symbol)
         if not model_id:
-            return False
+            return
 
         model = self.registry.get_model(model_id)
         if not model:
-            return False
+            return
 
-        # Don't retrain too often (check if already trained recently)
-        if model.is_trained:
-            return False
+        # Already trained or training in progress -- nothing to do.
+        if model.is_trained or self._training_in_progress.get(symbol, False):
+            return
 
-        # Align features and targets
-        train_features = features[: len(targets)]
+        # Snapshot current training data so the background thread works on
+        # an immutable copy while the deques keep collecting new observations.
+        train_features = list(features[: len(targets)])
+        train_targets = list(targets)
+
+        self._training_in_progress[symbol] = True
 
         self.logger.info(
-            "Training ML model",
+            "Scheduling ML model training on background thread",
             symbol=symbol,
-            samples=len(targets),
+            samples=len(train_targets),
         )
 
-        result = model.train(train_features, targets)
+        # Fire-and-forget: hand the CPU-bound work to the default thread
+        # pool executor so the event loop stays responsive.
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            None, model.train, train_features, train_targets
+        )
+        future.add_done_callback(
+            lambda fut: self._on_training_done(symbol, fut)
+        )
 
+    def _on_training_done(self, symbol: str, future: "asyncio.Future") -> None:
+        """Callback invoked when background training completes.
+
+        Runs in the event loop thread (via add_done_callback) so it is safe
+        to touch strategy state here.
+        """
+        self._training_in_progress[symbol] = False
+
+        exc = future.exception()
+        if exc is not None:
+            self.logger.error(
+                "Background model training failed with exception",
+                symbol=symbol,
+                error=str(exc),
+            )
+            return
+
+        result = future.result()
         if result.success:
             self.logger.info(
-                "Model trained successfully",
+                "Model trained successfully (background)",
                 symbol=symbol,
                 accuracy=round(result.test_accuracy * 100, 1),
             )
-            return True
         else:
             self.logger.warning(
                 "Model training failed",
                 symbol=symbol,
                 error=result.error_message,
             )
-            return False
 
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
         """Process bar and generate orders based on ML predictions.
