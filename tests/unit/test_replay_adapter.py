@@ -90,7 +90,8 @@ async def test_subscribe_loads_bars(data_dir):
     await adapter.connect()
     await adapter.subscribe([SymbolConfig(symbol="AAPL", base_price=100.0)])
 
-    assert adapter.total_bars == 3
+    assert len(adapter._file_entries) == 1
+    assert adapter.estimated_bars == 3
 
 
 async def test_subscribe_filters_symbols(data_dir):
@@ -99,7 +100,8 @@ async def test_subscribe_filters_symbols(data_dir):
     # Subscribe to a symbol not in our data
     await adapter.subscribe([SymbolConfig(symbol="MSFT", base_price=200.0)])
 
-    assert adapter.total_bars == 0
+    assert len(adapter._file_entries) == 0
+    assert adapter.estimated_bars == 0
 
 
 async def test_stream_ticks_produces_correct_count(data_dir):
@@ -224,7 +226,8 @@ async def test_multiple_symbols_interleaved(tmp_path):
         SymbolConfig(symbol="MSFT", base_price=200.0),
     ])
 
-    assert adapter.total_bars == 4  # 2 per symbol
+    assert len(adapter._file_entries) == 2
+    assert adapter.estimated_bars == 4  # 2 per symbol
 
     ticks = []
     async for tick in adapter.stream_ticks():
@@ -232,6 +235,7 @@ async def test_multiple_symbols_interleaved(tmp_path):
 
     # 4 bars * 4 ticks = 16 ticks total
     assert len(ticks) == 16
+    assert adapter.total_bars == 4
 
     # Both symbols present
     symbols = set(t.symbol for t in ticks)
@@ -244,10 +248,11 @@ async def test_disconnect_clears_state(data_dir):
     await adapter.subscribe([SymbolConfig(symbol="AAPL", base_price=100.0)])
 
     assert adapter.connected
-    assert adapter.total_bars == 3
+    assert len(adapter._file_entries) == 1
 
     await adapter.disconnect()
     assert not adapter.connected
+    assert len(adapter._file_entries) == 0
 
 
 async def test_adapter_name(data_dir):

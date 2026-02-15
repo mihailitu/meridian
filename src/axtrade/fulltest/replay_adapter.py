@@ -1,8 +1,8 @@
 """Historical data replay adapter for full system backtest."""
 
 import asyncio
+import heapq
 import json
-import math
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,17 +16,36 @@ from axtrade.gateway.base import DataAdapter
 logger = get_logger("fulltest.replay")
 
 
-def _safe_float(value) -> Optional[float]:
-    """Convert a value to float, returning None if NaN or None."""
-    if value is None:
-        return None
-    try:
-        f = float(value)
-        if math.isnan(f):
-            return None
-        return f
-    except (TypeError, ValueError):
-        return None
+def _iter_file_bars(symbol: str, path: Path):
+    """Yield (timestamp, symbol, open, high, low, close, volume) tuples from a parquet file.
+
+    Reads the file into an Arrow table, converts columns to Python lists
+    in batches via table.slice(), and yields lightweight tuples.
+    The Arrow table is deleted after iteration to allow GC.
+    """
+    table = pq.read_table(path)
+    n_rows = table.num_rows
+
+    # Process in batches of 10000 rows to limit peak memory from .to_pylist()
+    batch_size = 10000
+    for offset in range(0, n_rows, batch_size):
+        batch = table.slice(offset, min(batch_size, n_rows - offset))
+        ts_col = batch.column("timestamp").to_pylist()
+        open_col = batch.column("open").to_pylist()
+        high_col = batch.column("high").to_pylist()
+        low_col = batch.column("low").to_pylist()
+        close_col = batch.column("close").to_pylist()
+        vol_col = batch.column("volume").to_pylist()
+
+        for i in range(len(ts_col)):
+            ts = ts_col[i]
+            # Ensure UTC
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            yield (ts, symbol, float(open_col[i]), float(high_col[i]),
+                   float(low_col[i]), float(close_col[i]), int(vol_col[i]))
+
+    del table
 
 
 class ReplayAdapter(DataAdapter):
@@ -36,6 +55,9 @@ class ReplayAdapter(DataAdapter):
     interpolation:
       - Bullish bar (close >= open): O -> L -> H -> C
       - Bearish bar (close < open): O -> H -> L -> C
+
+    Uses a heap-based streaming merge across parquet files to avoid loading
+    all data into memory at once.
     """
 
     def __init__(
@@ -46,10 +68,11 @@ class ReplayAdapter(DataAdapter):
         self._data_dir = Path(data_dir)
         self._ticks_per_bar = max(ticks_per_bar, 4)
         self._manifest: Optional[dict] = None
-        self._bars: list[dict] = []
+        self._file_entries: list[tuple[str, Path]] = []
         self._symbols: list[str] = []
         self._connected = False
         self.completion_event = asyncio.Event()
+        self.estimated_bars = 0
         self.total_bars = 0
         self.total_ticks = 0
 
@@ -67,12 +90,17 @@ class ReplayAdapter(DataAdapter):
     async def disconnect(self) -> None:
         """Disconnect the adapter."""
         self._connected = False
-        self._bars = []
+        self._file_entries = []
 
     async def subscribe(self, symbols: list[SymbolConfig]) -> None:
-        """Load parquet data for the requested symbols."""
+        """Record which parquet files to read for the requested symbols.
+
+        No data is loaded at this stage -- files are streamed lazily in
+        stream_ticks() via heap-based merge.
+        """
         self._symbols = [s.symbol for s in symbols]
-        self._bars = []
+        self._file_entries = []
+        self.estimated_bars = 0
 
         for file_info in self._manifest.get("files", []):
             symbol = file_info["symbol"]
@@ -84,48 +112,25 @@ class ReplayAdapter(DataAdapter):
                 logger.warning("Missing parquet file", path=str(file_path))
                 continue
 
-            table = pq.read_table(file_path)
-            df = table.to_pandas()
-
-            # Ensure UTC timestamps
-            if df["timestamp"].dt.tz is None:
-                df["timestamp"] = df["timestamp"].dt.tz_localize("UTC")
-            else:
-                df["timestamp"] = df["timestamp"].dt.tz_convert("UTC")
-
-            for _, row in df.iterrows():
-                self._bars.append({
-                    "symbol": symbol,
-                    "timestamp": row["timestamp"].to_pydatetime(),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": int(row["volume"]),
-                })
-
-        # Sort all bars chronologically
-        self._bars.sort(key=lambda b: b["timestamp"])
-        self.total_bars = len(self._bars)
+            self._file_entries.append((symbol, file_path))
+            self.estimated_bars += file_info.get("bar_count", 0)
 
         logger.info(
-            "Loaded bars for replay",
+            "Prepared files for replay",
             symbols=len(self._symbols),
-            total_bars=self.total_bars,
+            files=len(self._file_entries),
+            estimated_bars=self.estimated_bars,
         )
 
-    def _bar_to_ticks(self, bar: dict) -> list[Tick]:
+    def _make_ticks(self, symbol: str, ts: datetime,
+                    o: float, h: float, l: float, c: float,
+                    vol: int) -> list[Tick]:
         """Convert a single OHLCV bar to synthetic ticks.
 
         Uses price path interpolation:
           Bullish (close >= open): O -> L -> H -> C
           Bearish (close < open):  O -> H -> L -> C
         """
-        symbol = bar["symbol"]
-        ts = bar["timestamp"]
-        o, h, l, c = bar["open"], bar["high"], bar["low"], bar["close"]
-        vol = bar["volume"]
-
         is_bullish = c >= o
 
         if is_bullish:
@@ -161,7 +166,7 @@ class ReplayAdapter(DataAdapter):
         vol_per_tick = max(vol // len(prices), 1)
 
         ticks = []
-        for i, price in enumerate(prices):
+        for price in prices:
             tick = Tick(
                 symbol=symbol,
                 price=round(price, 4),
@@ -175,13 +180,24 @@ class ReplayAdapter(DataAdapter):
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Stream synthetic ticks from historical data.
 
+        Uses heapq.merge() across per-file iterators for chronological
+        ordering without loading all data into memory.
         Yields ticks without delay. Periodically yields control to the
         event loop for fairness.
         """
-        tick_count = 0
+        iterators = [
+            _iter_file_bars(symbol, path)
+            for symbol, path in self._file_entries
+        ]
 
-        for bar in self._bars:
-            ticks = self._bar_to_ticks(bar)
+        tick_count = 0
+        bar_count = 0
+
+        for bar_tuple in heapq.merge(*iterators):
+            ts, symbol, o, h, l, c, vol = bar_tuple
+            ticks = self._make_ticks(symbol, ts, o, h, l, c, vol)
+            bar_count += 1
+
             for tick in ticks:
                 yield tick
                 tick_count += 1
@@ -190,6 +206,7 @@ class ReplayAdapter(DataAdapter):
                 if tick_count % 100 == 0:
                     await asyncio.sleep(0)
 
+        self.total_bars = bar_count
         self.total_ticks = tick_count
         logger.info(
             "Replay complete",
