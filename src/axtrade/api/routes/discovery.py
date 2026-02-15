@@ -1,11 +1,10 @@
 """Discovery API endpoints."""
 
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from axtrade.common import BarRepository, load_config
+from axtrade.common import load_config
 from axtrade.discovery import DiscoveryService
 
 from ..dependencies import state
@@ -19,16 +18,12 @@ from ..schemas import (
 
 router = APIRouter()
 
-# Global discovery service instance
-_discovery_service: Optional[DiscoveryService] = None
-
 
 def get_discovery_service() -> DiscoveryService:
-    """Get or create discovery service."""
-    global _discovery_service
-    if _discovery_service is None:
-        _discovery_service = DiscoveryService(db_pool=state.db_pool)
-    return _discovery_service
+    """Get discovery service from shared API state."""
+    if state.discovery_service is None:
+        raise RuntimeError("Discovery service not initialized")
+    return state.discovery_service
 
 
 @router.get("/discovery/state", response_model=DiscoveryStateResponse)
@@ -86,13 +81,8 @@ async def run_scan(
 ) -> list[ScreenerResultResponse]:
     """Run screeners on configured symbols.
 
-    Initiates a scan using the configured screeners and returns results.
+    Initiates an on-demand scan using the configured screeners.
     """
-    # Connect if needed
-    if state.db_pool:
-        await discovery_service.connect()
-
-    # Get symbols from config
     config = load_config()
     symbols = [s.symbol for s in config.gateway.symbols]
 

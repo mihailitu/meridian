@@ -4,6 +4,7 @@ from typing import Optional
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor
 from axtrade.common import DatabasePool, StrategiesConfig
+from axtrade.discovery import DiscoveryService
 from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
@@ -20,6 +21,7 @@ class APIState:
     strategy_state_repo: Optional[StrategyStateRepository] = None
     strategy_control: Optional[StrategyControlPublisher] = None
     strategies_config: Optional[StrategiesConfig] = None
+    discovery_service: Optional[DiscoveryService] = None
 
 
 state = APIState()

@@ -128,7 +128,7 @@ class TestAlpacaAdapter:
 
         assert not adapter.connected
 
-    def test_handle_trade(self, adapter):
+    async def test_handle_trade(self, adapter):
         """Test trade handler creates tick correctly."""
         mock_trade = MagicMock()
         mock_trade.symbol = "AAPL"
@@ -136,14 +136,14 @@ class TestAlpacaAdapter:
         mock_trade.timestamp = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
         mock_trade.size = 100
 
-        adapter._handle_trade(mock_trade)
+        await adapter._handle_trade(mock_trade)
 
         tick = adapter._tick_queue.get_nowait()
         assert tick.symbol == "AAPL"
         assert tick.price == 185.50
         assert tick.volume == 100
 
-    def test_handle_quote(self, adapter):
+    async def test_handle_quote(self, adapter):
         """Test quote handler creates tick correctly."""
         mock_quote = MagicMock()
         mock_quote.symbol = "AAPL"
@@ -151,7 +151,7 @@ class TestAlpacaAdapter:
         mock_quote.ask_price = 185.51
         mock_quote.timestamp = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
 
-        adapter._handle_quote(mock_quote)
+        await adapter._handle_quote(mock_quote)
 
         tick = adapter._tick_queue.get_nowait()
         assert tick.symbol == "AAPL"
@@ -159,7 +159,7 @@ class TestAlpacaAdapter:
         assert tick.bid == 185.49
         assert tick.ask == 185.51
 
-    def test_handle_trade_naive_timestamp(self, adapter):
+    async def test_handle_trade_naive_timestamp(self, adapter):
         """Test trade handler handles naive timestamps."""
         mock_trade = MagicMock()
         mock_trade.symbol = "AAPL"
@@ -167,7 +167,7 @@ class TestAlpacaAdapter:
         mock_trade.timestamp = datetime(2024, 1, 15, 9, 30, 0)
         mock_trade.size = None
 
-        adapter._handle_trade(mock_trade)
+        await adapter._handle_trade(mock_trade)
 
         tick = adapter._tick_queue.get_nowait()
         assert tick.timestamp.tzinfo == UTC

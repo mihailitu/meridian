@@ -11,6 +11,7 @@ from starlette.responses import FileResponse
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor, LogChannel
 from axtrade.common import Config, DatabasePool, get_logger, load_config, setup_logging
+from axtrade.discovery import ConfigSymbolProvider, DiscoveryRunner, DiscoveryService
 from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
@@ -58,9 +59,30 @@ async def lifespan(app: FastAPI):
     await state.strategy_control.connect()
     logger.info("Strategy control initialized")
 
+    # Initialize discovery service and background scanner
+    state.discovery_service = DiscoveryService(db_pool=state.db_pool)
+    await state.discovery_service.connect()
+
+    discovery_runner = DiscoveryRunner(
+        config=config,
+        discovery_service=state.discovery_service,
+        symbol_provider=ConfigSymbolProvider(config),
+        alert_service=state.alert_service,
+    )
+    discovery_task = asyncio.create_task(discovery_runner.start())
+    logger.info("Discovery scanner initialized")
+
     yield
 
     # Cleanup
+    discovery_runner_stop = discovery_runner.stop()
+    await discovery_runner_stop
+    discovery_task.cancel()
+    try:
+        await discovery_task
+    except asyncio.CancelledError:
+        pass
+
     if state.strategy_control:
         await state.strategy_control.disconnect()
 
