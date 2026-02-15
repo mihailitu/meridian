@@ -61,8 +61,11 @@ class FullBacktestOrchestrator:
             symbols=len(self._bt_config.symbols),
         )
 
-        # Step 1: Ensure historical data exists
-        await self._ensure_data()
+        # Step 1: Ensure historical data exists (unless skip_download)
+        if not self._bt_config.skip_download:
+            await self._ensure_data()
+        else:
+            logger.info("Skipping data download (using existing data)")
 
         # Step 2: Set up isolated infrastructure
         config = self._build_isolated_config()
