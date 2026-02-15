@@ -397,27 +397,30 @@ class MLPredictionStrategy(BaseStrategy):
         if signal == Signal.CLOSE and position:
             # Close existing position
             side = OrderSide.SELL if position.side == "long" else OrderSide.BUY
-            return Order.create_market(
+            return Order(
+                strategy_id=self.strategy_id,
                 symbol=data.symbol,
                 side=side,
                 quantity=Decimal(str(abs(position.quantity))),
-                strategy_id=self.strategy_id,
+                order_type=OrderType.MARKET,
             )
 
         if signal == Signal.BUY:
-            return Order.create_market(
+            return Order(
+                strategy_id=self.strategy_id,
                 symbol=data.symbol,
                 side=OrderSide.BUY,
                 quantity=Decimal(str(self.position_size)),
-                strategy_id=self.strategy_id,
+                order_type=OrderType.MARKET,
             )
 
         if signal == Signal.SELL:
-            return Order.create_market(
+            return Order(
+                strategy_id=self.strategy_id,
                 symbol=data.symbol,
                 side=OrderSide.SELL,
                 quantity=Decimal(str(self.position_size)),
-                strategy_id=self.strategy_id,
+                order_type=OrderType.MARKET,
             )
 
         return None
