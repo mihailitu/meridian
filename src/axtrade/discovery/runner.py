@@ -1,14 +1,17 @@
 """Background discovery scanner service."""
 
 import asyncio
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from axtrade.alerts import AlertService
 from axtrade.alerts.types import AlertCategory
-from axtrade.common import Config, LoopSupervisor, get_logger
+from axtrade.common import Config, LoopSupervisor, SymbolConfig, get_logger
 
 from .providers import SymbolProvider
 from .service import DiscoveryService
+
+if TYPE_CHECKING:
+    from axtrade.gateway.control import GatewayControlPublisher
 
 
 class DiscoveryRunner:
@@ -24,14 +27,17 @@ class DiscoveryRunner:
         discovery_service: DiscoveryService,
         symbol_provider: SymbolProvider,
         alert_service: Optional[AlertService] = None,
+        gateway_control: Optional["GatewayControlPublisher"] = None,
     ):
         self._config = config
         self._discovery_service = discovery_service
         self._symbol_provider = symbol_provider
         self._alert_service = alert_service
+        self._gateway_control = gateway_control
         self._logger = get_logger("discovery_runner")
         self._running = False
         self._supervisor: Optional[LoopSupervisor] = None
+        self._subscribed_symbols: set[str] = set()
 
     async def start(self) -> None:
         """Start the background scan loop."""
@@ -93,6 +99,10 @@ class DiscoveryRunner:
                 if self._alert_service:
                     await self._send_discovery_alerts(results)
 
+                # Feed discovered symbols to gateway
+                if self._gateway_control and self._config.discovery.auto_subscribe:
+                    await self._feed_gateway()
+
                 self._supervisor.reset_errors()
                 await asyncio.sleep(interval)
 
@@ -101,6 +111,52 @@ class DiscoveryRunner:
             except Exception as e:
                 if not await self._supervisor.handle_error(e):
                     break
+
+    async def _feed_gateway(self) -> None:
+        """Push discovered symbols to gateway for dynamic subscription."""
+        if not self._gateway_control:
+            return
+
+        min_score = self._config.discovery.min_score
+        discovered = self._discovery_service.get_discovered(
+            min_score=min_score,
+            bullish_only=True,
+        )
+        discovered_names = {s.symbol for s in discovered}
+
+        # Static symbols from gateway config should never be removed
+        static_symbols = {s.symbol for s in self._config.gateway.symbols}
+
+        # New symbols to add (discovered but not yet subscribed, not static)
+        new_symbols = discovered_names - self._subscribed_symbols - static_symbols
+        # Stale symbols to remove (previously subscribed but no longer discovered, not static)
+        stale_symbols = self._subscribed_symbols - discovered_names - static_symbols
+
+        if new_symbols:
+            configs = [
+                SymbolConfig(symbol=sym, base_price=100.0)
+                for sym in new_symbols
+            ]
+            try:
+                await self._gateway_control.add_symbols(configs)
+                self._subscribed_symbols |= new_symbols
+                self._logger.info(
+                    "Fed new symbols to gateway",
+                    symbols=list(new_symbols),
+                )
+            except Exception as e:
+                self._logger.error("Failed to add symbols to gateway", error=str(e))
+
+        if stale_symbols:
+            try:
+                await self._gateway_control.remove_symbols(list(stale_symbols))
+                self._subscribed_symbols -= stale_symbols
+                self._logger.info(
+                    "Removed stale symbols from gateway",
+                    symbols=list(stale_symbols),
+                )
+            except Exception as e:
+                self._logger.error("Failed to remove symbols from gateway", error=str(e))
 
     async def _send_discovery_alerts(self, results: list) -> None:
         """Send alerts for high-score discoveries."""

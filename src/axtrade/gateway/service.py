@@ -4,9 +4,10 @@ import asyncio
 import signal
 from typing import Optional
 
-from ..common import Config, LoopSupervisor, RedisPublisher, get_logger, load_config
+from ..common import Config, LoopSupervisor, RedisPublisher, SymbolConfig, get_logger, load_config
 from .alpaca import AlpacaAdapter
 from .base import DataAdapter
+from .control import GatewayControlSubscriber
 from .ibkr import IBKRAdapter
 from .mock import MockAdapter
 from .yahoo import YahooAdapter
@@ -35,6 +36,8 @@ class GatewayService:
         self._running = False
         self._last_prices: dict[str, float] = {}
         self._stream_supervisor: Optional[LoopSupervisor] = None
+        self._control_subscriber: Optional[GatewayControlSubscriber] = None
+        self._control_task: Optional[asyncio.Task] = None
 
     def _create_adapter(self) -> DataAdapter:
         """Create the appropriate data adapter based on config.
@@ -91,6 +94,15 @@ class GatewayService:
             alert_callback=self._on_loop_failure,
         )
 
+        # Start control subscriber for dynamic symbol management
+        if self._publisher:
+            self._control_subscriber = GatewayControlSubscriber(
+                self.config.redis, self.config.gateway
+            )
+            await self._control_subscriber.connect()
+            self._control_task = asyncio.create_task(self._control_loop())
+            logger.info("Gateway control subscriber started")
+
         self._running = True
         await self._stream_loop()
 
@@ -101,6 +113,16 @@ class GatewayService:
 
         if self._stream_supervisor:
             self._stream_supervisor.stop()
+
+        if self._control_task:
+            self._control_task.cancel()
+            try:
+                await self._control_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._control_subscriber:
+            await self._control_subscriber.disconnect()
 
         if self._adapter:
             await self._adapter.disconnect()
@@ -121,6 +143,48 @@ class GatewayService:
             error=str(error),
             error_type=type(error).__name__,
         )
+
+    async def _control_loop(self) -> None:
+        """Listen for gateway control commands and apply them."""
+        if not self._control_subscriber or not self._adapter:
+            return
+
+        while self._running:
+            try:
+                async for command in self._control_subscriber.subscribe():
+                    if not self._running:
+                        break
+                    await self._handle_control_command(command)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Gateway control loop error", error=str(e))
+                await asyncio.sleep(1.0)
+
+    async def _handle_control_command(self, command) -> None:
+        """Handle a gateway control command."""
+        if not self._adapter:
+            return
+
+        if command.action == "add_symbols":
+            configs = [
+                SymbolConfig(
+                    symbol=s["symbol"],
+                    base_price=s.get("base_price", 100.0),
+                )
+                for s in command.symbols
+            ]
+            await self._adapter.add_symbols(configs)
+            logger.info(
+                "Added symbols via control",
+                symbols=[s.symbol for s in configs],
+            )
+        elif command.action == "remove_symbols":
+            names = [s["symbol"] for s in command.symbols]
+            await self._adapter.remove_symbols(names)
+            logger.info("Removed symbols via control", symbols=names)
+        else:
+            logger.warning("Unknown gateway control action", action=command.action)
 
     async def _stream_loop(self) -> None:
         """Main loop that streams and processes ticks."""

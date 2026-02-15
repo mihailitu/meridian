@@ -58,10 +58,10 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
 
 ### Core Data Flow
 
-1. **Gateway** (`gateway/service.py`): Connects to data sources via `DataAdapter` (`gateway/base.py`), publishes ticks to `stream:ticks:us`
+1. **Gateway** (`gateway/service.py`): Connects to data sources via `DataAdapter` (`gateway/base.py`), publishes ticks to `stream:ticks:us`. Supports dynamic symbol add/remove via Redis pubsub channel `axtrade:gateway:control` (`gateway/control.py`)
 2. **Aggregator** (`aggregator/service.py`): Consumes ticks, builds OHLCV bars via `BarEngine`, calculates indicators via `IndicatorEngine`, persists to TimescaleDB, publishes to `stream:bars:{interval}:us`
-3. **StrategyRunner** (`strategies/runner.py`): Consumes bars with indicators, executes enabled strategies in parallel, submits orders via `OrderManager`. Supports runtime enable/disable via Redis pubsub channel `axtrade:strategy:control`
-4. **OrderManager** (`oms/manager.py`): Manages order lifecycle via `BrokerProtocol` (`oms/broker.py`), pre-trade risk checks via `RiskManager`, position tracking
+3. **StrategyRunner** (`strategies/runner.py`): Consumes bars with indicators, executes enabled strategies in parallel, submits orders via `OrderManager`. Supports runtime enable/disable via Redis pubsub channel `axtrade:strategy:control`. Optionally injects `DiscoveryService` into strategies that support it
+4. **OrderManager** (`oms/manager.py`): Manages order lifecycle via `BrokerProtocol` (`oms/broker.py`), pre-trade risk checks via `RiskManager`, position tracking, global max positions guard
 
 ### Redis Streams and Consumer Groups
 
@@ -89,19 +89,21 @@ Each service is runnable as a Python module:
 
 **Adding a symbol source**: Implement `SymbolProvider` protocol in `discovery/providers.py` (`async get_symbols() -> list[str]`). Pass it to `DiscoveryRunner` instead of `ConfigSymbolProvider`.
 
+**Discovery-to-trading bridge**: Set `discovery.auto_subscribe: true` in config. `DiscoveryRunner` pushes high-score symbols to gateway via `GatewayControlPublisher` (Redis pubsub). Gateway dynamically subscribes via `DataAdapter.add_symbols()`. The `discovery_momentum` strategy trades discovered symbols using scores from `DiscoveryService`.
+
 ### Key Modules
 
 - `common/`: Shared types (`Tick`, `Bar` as frozen dataclasses), config loading (`load_config()` from `config/default.yaml`), Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
 - `gateway/`: Data adapters implementing `DataAdapter` - Mock, IBKR (`ib_insync`), Alpaca, Yahoo
 - `indicators/`: `IndicatorEngine` with rolling buffers for SMA, RSI, Bollinger Bands, ATR, and market regime detection
-- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`
+- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
 - `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe
 - `api/`: FastAPI app with route modules in `api/routes/`. OpenAPI docs at `/docs`
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
-- `discovery/`: Symbol screening with momentum, volatility, volume, and trend screeners. `DiscoveryRunner` runs periodic background scans via `LoopSupervisor`. `SymbolProvider` protocol enables pluggable symbol sources (default: `ConfigSymbolProvider` reads from gateway config)
+- `discovery/`: Symbol screening with momentum, volatility, volume, and trend screeners. `DiscoveryRunner` runs periodic background scans via `LoopSupervisor`, optionally feeds discovered symbols to gateway via `GatewayControlPublisher` when `auto_subscribe` is enabled. `SymbolProvider` protocol enables pluggable symbol sources (default: `ConfigSymbolProvider` reads from gateway config)
 
 ### Database
 
@@ -109,7 +111,7 @@ TimescaleDB (PostgreSQL) with schema initialized by `scripts/init-db.sql` (creat
 
 ### Configuration
 
-Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval). Redis `db` field (default 0) enables database isolation for backtesting.
+Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
 
 ### Helper Scripts
 

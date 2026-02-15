@@ -65,6 +65,7 @@ indicators:
 oms:
   paper_mode: true
   slippage_bps: 10
+  max_positions: 20
   risk:
     max_position_size: 1000
     max_position_value: 50000
@@ -121,6 +122,16 @@ strategies:
         stop_loss_pct: 0.03
         position_size: 50
 
+    - type: discovery_momentum
+      id: discovery_momentum_01
+      enabled: false
+      config:
+        min_score: 60
+        position_size: 50
+        stop_loss_pct: 0.03
+        score_decay_exit: 30
+        max_positions: 10
+
 api:
   host: "0.0.0.0"
   port: 8000
@@ -135,6 +146,9 @@ discovery:
   scan_interval_seconds: 300
   bar_limit: 50
   interval: "1m"
+  auto_subscribe: false
+  min_score: 60
+  max_positions: 10
   screeners:
     - type: momentum
       name: momentum_screener

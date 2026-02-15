@@ -46,6 +46,21 @@ class MockAdapter(DataAdapter):
         self._symbols = symbols
         self._prices = {s.symbol: s.base_price for s in symbols}
 
+    async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
+        """Dynamically subscribe to additional symbols."""
+        existing = {s.symbol for s in self._symbols}
+        for s in symbols:
+            if s.symbol not in existing:
+                self._symbols.append(s)
+                self._prices[s.symbol] = s.base_price
+
+    async def remove_symbols(self, symbols: list[str]) -> None:
+        """Dynamically unsubscribe from symbols."""
+        remove_set = set(symbols)
+        self._symbols = [s for s in self._symbols if s.symbol not in remove_set]
+        for sym in symbols:
+            self._prices.pop(sym, None)
+
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Generate simulated ticks.
 

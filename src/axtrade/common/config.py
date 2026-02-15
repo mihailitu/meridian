@@ -53,6 +53,7 @@ class GatewayConfig:
     alpaca: AlpacaConfig = field(default_factory=AlpacaConfig)
     yahoo: YahooConfig = field(default_factory=YahooConfig)
     symbols: list[SymbolConfig] = field(default_factory=list)
+    control_channel: str = "axtrade:gateway:control"
 
 
 @dataclass
@@ -124,6 +125,7 @@ class OMSConfig:
 
     paper_mode: bool = True
     slippage_bps: int = 10  # basis points
+    max_positions: int = 20
     risk: RiskConfig = field(default_factory=RiskConfig)
 
 
@@ -174,6 +176,9 @@ class DiscoveryConfig:
     scan_interval_seconds: int = 300  # 5 minutes
     bar_limit: int = 50
     interval: str = "1m"
+    auto_subscribe: bool = False
+    min_score: float = 60.0
+    max_positions: int = 10
     screeners: list[ScreenerInstanceConfig] = field(default_factory=list)
 
 
@@ -252,6 +257,7 @@ def load_config(path: Optional[Path] = None) -> Config:
                 poll_interval_ms=yahoo_data.get("poll_interval_ms", 5000),
             ),
             symbols=symbols,
+            control_channel=gateway_data.get("control_channel", "axtrade:gateway:control"),
         ),
         redis=RedisConfig(
             host=redis_data.get("host", "localhost"),
@@ -287,6 +293,7 @@ def load_config(path: Optional[Path] = None) -> Config:
         oms=OMSConfig(
             paper_mode=oms_data.get("paper_mode", True),
             slippage_bps=oms_data.get("slippage_bps", 10),
+            max_positions=oms_data.get("max_positions", 20),
             risk=RiskConfig(
                 max_position_size=oms_data.get("risk", {}).get("max_position_size", 1000),
                 max_position_value=oms_data.get("risk", {}).get("max_position_value", 50000.0),
@@ -319,6 +326,9 @@ def load_config(path: Optional[Path] = None) -> Config:
             scan_interval_seconds=discovery_data.get("scan_interval_seconds", 300),
             bar_limit=discovery_data.get("bar_limit", 50),
             interval=discovery_data.get("interval", "1m"),
+            auto_subscribe=discovery_data.get("auto_subscribe", False),
+            min_score=discovery_data.get("min_score", 60.0),
+            max_positions=discovery_data.get("max_positions", 10),
             screeners=[
                 ScreenerInstanceConfig(
                     type=s["type"],

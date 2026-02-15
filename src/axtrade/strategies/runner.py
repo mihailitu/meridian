@@ -14,6 +14,7 @@ from axtrade.common import (
     load_config,
     setup_logging,
 )
+from axtrade.discovery.service import DiscoveryService
 from axtrade.indicators import MarketRegime, MarketTrend, VolatilityState
 from axtrade.oms import OrderManager, Order
 
@@ -25,7 +26,7 @@ from .control import StrategyControlSubscriber, StrategyStateRepository
 class StrategyRunner:
     """Runs trading strategies by consuming bars and routing orders."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, discovery_service: Optional[DiscoveryService] = None):
         self.config = config
         self.logger = get_logger("strategy_runner")
 
@@ -40,6 +41,7 @@ class StrategyRunner:
         self._control_task: Optional[asyncio.Task] = None
         self._control_supervisor: Optional[LoopSupervisor] = None
         self._consume_supervisor: Optional[LoopSupervisor] = None
+        self._discovery_service = discovery_service
 
     async def start(self) -> None:
         """Start the strategy runner."""
@@ -57,6 +59,16 @@ class StrategyRunner:
 
         # Load strategies
         self._load_strategies()
+
+        # Inject discovery service into strategies that support it
+        if self._discovery_service:
+            for strategy in self._strategies.values():
+                if hasattr(strategy, "set_discovery_service"):
+                    strategy.set_discovery_service(self._discovery_service)
+                    self.logger.info(
+                        "Injected discovery service into strategy",
+                        strategy_id=strategy.strategy_id,
+                    )
 
         # Initialize state repository and apply persisted state
         self._state_repo = StrategyStateRepository(self._db_pool)
@@ -379,7 +391,21 @@ async def main() -> None:
     """Main entry point."""
     setup_logging(log_name="strategy")
     config = load_config()
-    runner = StrategyRunner(config)
+
+    # Create discovery service for standalone mode
+    discovery_service: Optional[DiscoveryService] = None
+    db_pool: Optional[DatabasePool] = None
+    has_discovery_strategy = any(
+        s.type == "discovery_momentum" and s.enabled
+        for s in config.strategies.enabled
+    )
+    if has_discovery_strategy:
+        db_pool = DatabasePool(config.database)
+        await db_pool.connect()
+        discovery_service = DiscoveryService(db_pool=db_pool)
+        await discovery_service.connect()
+
+    runner = StrategyRunner(config, discovery_service=discovery_service)
 
     loop = asyncio.get_running_loop()
 

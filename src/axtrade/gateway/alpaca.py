@@ -161,6 +161,38 @@ class AlpacaAdapter(DataAdapter):
 
         logger.info("alpaca_subscribed", symbols=symbol_list)
 
+    async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
+        """Dynamically subscribe to additional symbols."""
+        if not self._stream:
+            raise RuntimeError("Not connected to Alpaca")
+
+        existing = {s.symbol for s in self._symbols}
+        new_symbols = [s for s in symbols if s.symbol not in existing]
+        if not new_symbols:
+            return
+
+        self._symbols.extend(new_symbols)
+        new_names = [s.symbol for s in new_symbols]
+
+        self._stream.subscribe_trades(self._handle_trade, *new_names)
+        self._stream.subscribe_quotes(self._handle_quote, *new_names)
+        logger.info("alpaca_added_symbols", symbols=new_names)
+
+    async def remove_symbols(self, symbols: list[str]) -> None:
+        """Dynamically unsubscribe from symbols."""
+        if not self._stream:
+            return
+
+        remove_set = set(symbols)
+        to_remove = [s for s in symbols if any(sc.symbol == s for sc in self._symbols)]
+        if not to_remove:
+            return
+
+        self._stream.unsubscribe_trades(*to_remove)
+        self._stream.unsubscribe_quotes(*to_remove)
+        self._symbols = [s for s in self._symbols if s.symbol not in remove_set]
+        logger.info("alpaca_removed_symbols", symbols=to_remove)
+
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Stream ticks from Alpaca.
 

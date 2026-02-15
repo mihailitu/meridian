@@ -157,6 +157,24 @@ class OrderManager:
             )
             raise OrderRejectedError(result.reason)
 
+        # Global max positions guard
+        if order.side == OrderSide.BUY:
+            is_new_position = position is None or position.quantity == 0
+            if is_new_position:
+                all_open = await self.get_open_positions()
+                max_pos = self.config.oms.max_positions
+                if len(all_open) >= max_pos:
+                    order.status = OrderStatus.REJECTED
+                    await self._order_repo.insert(order)
+                    reason = f"Max positions ({max_pos}) reached"
+                    self.logger.warning(
+                        "Order rejected: max positions",
+                        order_id=str(order.id),
+                        open_positions=len(all_open),
+                        max_positions=max_pos,
+                    )
+                    raise OrderRejectedError(reason)
+
         # Persist the order
         await self._order_repo.insert(order)
 

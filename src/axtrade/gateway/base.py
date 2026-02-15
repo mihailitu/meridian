@@ -41,6 +41,12 @@ class DataAdapter(ABC):
         """
         pass
 
+    async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
+        """Dynamically subscribe to additional symbols. Override in adapters that support it."""
+
+    async def remove_symbols(self, symbols: list[str]) -> None:
+        """Dynamically unsubscribe from symbols. Override in adapters that support it."""
+
     @property
     @abstractmethod
     def connected(self) -> bool:
