@@ -1,4 +1,4 @@
-.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api test clean db db-stop infra infra-stop setup build-ui
+.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api run-fulltest test clean db db-stop infra infra-stop setup build-ui
 
 install:
 	python3 -m venv .venv
@@ -46,6 +46,9 @@ run-strategy:
 
 run-api:
 	.venv/bin/python -m axtrade.api.app
+
+run-fulltest:
+	.venv/bin/python -m axtrade.fulltest $(ARGS)
 
 bars:
 	.venv/bin/python -m axtrade.cli bars $(SYMBOL) --limit $(or $(LIMIT),10)

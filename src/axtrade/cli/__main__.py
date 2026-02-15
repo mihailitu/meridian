@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import sys
+from datetime import date
 
 from .backtest import backtest_command, parse_date
 from .bars import bars_command
@@ -65,6 +66,37 @@ def main() -> None:
         help="Force database usage instead of file-based data",
     )
 
+    # fulltest command
+    ft_parser = subparsers.add_parser("fulltest", help="Run full system backtest")
+    ft_parser.add_argument(
+        "--start", required=True, type=parse_date, help="Start date (YYYY-MM-DD)"
+    )
+    ft_parser.add_argument(
+        "--end", required=True, type=parse_date, help="End date (YYYY-MM-DD)"
+    )
+    ft_parser.add_argument(
+        "--symbols", nargs="+", default=None, help="Symbols to backtest"
+    )
+    ft_parser.add_argument(
+        "--universe", choices=["sp500"], default=None,
+        help="Use a predefined symbol universe instead of --symbols"
+    )
+    ft_parser.add_argument(
+        "--interval", "-i", default="1m", help="Bar interval (default: 1m)"
+    )
+    ft_parser.add_argument(
+        "--capital", type=float, default=100000, help="Initial capital (default: 100000)"
+    )
+    ft_parser.add_argument(
+        "--data-dir", default="data/historical", help="Historical data directory"
+    )
+    ft_parser.add_argument(
+        "--no-discovery", action="store_true", help="Disable discovery scanning"
+    )
+    ft_parser.add_argument(
+        "--format", choices=["text", "json"], default="text", help="Report format"
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -73,6 +105,37 @@ def main() -> None:
 
     if args.command == "bars":
         asyncio.run(bars_command(args.symbol, args.limit, args.interval))
+    elif args.command == "fulltest":
+        from axtrade.fulltest.orchestrator import FullBacktestOrchestrator
+        from axtrade.fulltest.types import FullBacktestConfig
+
+        if getattr(args, "universe", None) == "sp500":
+            from axtrade.fulltest.universe import SP500SymbolProvider
+            provider = SP500SymbolProvider()
+            symbols = asyncio.run(provider.get_symbols())
+            print(f"Using S&P 500 universe: {len(symbols)} symbols")
+        elif args.symbols:
+            symbols = [s.upper() for s in args.symbols]
+        else:
+            from axtrade.common import load_config
+            config = load_config()
+            symbols = [s.symbol for s in config.gateway.symbols]
+            if not symbols:
+                print("No symbols specified and none in config. Use --symbols or --universe sp500.")
+                sys.exit(1)
+
+        bt_config = FullBacktestConfig(
+            start=args.start,
+            end=args.end,
+            symbols=symbols,
+            interval=args.interval,
+            data_dir=args.data_dir,
+            initial_capital=args.capital,
+            discovery_enabled=not args.no_discovery,
+            report_format=args.format,
+        )
+        orchestrator = FullBacktestOrchestrator(bt_config)
+        asyncio.run(orchestrator.run())
     elif args.command == "backtest":
         asyncio.run(
             backtest_command(

@@ -27,6 +27,7 @@ class RedisPublisher:
         self._client = redis.Redis(
             host=self.config.host,
             port=self.config.port,
+            db=self.config.db,
             decode_responses=True,
         )
         await self._client.ping()
@@ -79,6 +80,7 @@ class RedisConsumer:
         self._client = redis.Redis(
             host=self.config.host,
             port=self.config.port,
+            db=self.config.db,
             decode_responses=True,
         )
         await self._client.ping()
@@ -198,6 +200,7 @@ class BarPublisher:
         self._client = redis.Redis(
             host=self.config.host,
             port=self.config.port,
+            db=self.config.db,
             decode_responses=True,
         )
         await self._client.ping()
@@ -280,6 +283,7 @@ class BarConsumer:
         self._client = redis.Redis(
             host=self.config.host,
             port=self.config.port,
+            db=self.config.db,
             decode_responses=True,
         )
         await self._client.ping()

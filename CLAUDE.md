@@ -40,6 +40,7 @@ make test                   # Run all tests
 # CLI
 python -m axtrade.cli bars AAPL --limit 10 --interval 1m
 python -m axtrade.cli backtest momentum --symbol AAPL --start 2024-01-01 --end 2024-01-31
+python -m axtrade.fulltest --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
 ```
 
 ## Architecture
@@ -96,6 +97,7 @@ Each service is runnable as a Python module:
 - `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
+- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe
 - `api/`: FastAPI app with route modules in `api/routes/`. OpenAPI docs at `/docs`
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
@@ -107,7 +109,7 @@ TimescaleDB (PostgreSQL) with schema initialized by `scripts/init-db.sql` (creat
 
 ### Configuration
 
-Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols), `redis`, `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval).
+Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval). Redis `db` field (default 0) enables database isolation for backtesting.
 
 ### Helper Scripts
 

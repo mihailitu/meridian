@@ -61,6 +61,7 @@ class RedisConfig:
 
     host: str = "localhost"
     port: int = 6379
+    db: int = 0
     stream_prefix: str = "stream:ticks"
 
 
@@ -255,6 +256,7 @@ def load_config(path: Optional[Path] = None) -> Config:
         redis=RedisConfig(
             host=redis_data.get("host", "localhost"),
             port=redis_data.get("port", 6379),
+            db=redis_data.get("db", 0),
             stream_prefix=redis_data.get("stream_prefix", "stream:ticks"),
         ),
         aggregator=AggregatorConfig(

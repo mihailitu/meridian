@@ -136,6 +136,38 @@
 - `src/axtrade/analytics/` module (metrics.py, drawdown.py, trades.py, strategy.py)
 - `src/axtrade/api/routes/analytics.py`
 
+### Full System Backtest (Complete)
+- Full pipeline backtest: gateway, aggregator, strategy runner, discovery
+- ReplayAdapter converts parquet OHLCV data to synthetic ticks with price path interpolation
+- Historical data download via Alpaca API with chunked weekly downloads
+- SP500SymbolProvider for discovery universe (Wikipedia fetch with CSV fallback)
+- Isolated infrastructure: separate Redis DB (db=1) and TimescaleDB database (axtrade_backtest)
+- BacktestInfrastructure manages database creation, schema init, migrations, and Redis flush
+- BacktestDiscoveryRunner triggers scans based on bar count instead of wall-clock time
+- FullBacktestOrchestrator coordinates all services in-process within single asyncio event loop
+- ReportGenerator queries backtest DB for per-strategy P&L, win rate, profit factor, discovery results
+- Text and JSON report formats with console output and file save
+- Redis DB isolation: added `db` field to RedisConfig, passed to all redis.Redis() calls
+- Gateway adapter injection: GatewayService accepts optional DataAdapter parameter
+- CLI: `python -m axtrade.fulltest --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT`
+- CLI subcommand: `python -m axtrade.cli fulltest --start ... --end ...`
+- Makefile: `make run-fulltest ARGS="--start 2025-08-01 --end 2026-02-01 --symbols AAPL"`
+
+**New Files**:
+- `src/axtrade/fulltest/` module (types.py, data.py, universe.py, replay_adapter.py, isolation.py, discovery.py, orchestrator.py, report.py, __main__.py)
+- `data/sp500.csv` - Fallback S&P 500 ticker list
+- `tests/unit/test_replay_adapter.py` - ReplayAdapter tests (12 tests)
+- `tests/unit/test_fulltest_types.py` - Types and report tests (10 tests)
+
+**Modified Files**:
+- `src/axtrade/common/config.py` - Added `db: int = 0` to RedisConfig
+- `src/axtrade/common/messaging.py` - Pass `db=` to all 4 redis.Redis() calls
+- `src/axtrade/strategies/control.py` - Pass `db=` to both redis.Redis() calls
+- `src/axtrade/oms/manager.py` - Pass `db=` to redis.Redis() call
+- `src/axtrade/gateway/service.py` - Accept optional adapter parameter
+- `src/axtrade/cli/__main__.py` - Added fulltest subcommand
+- `Makefile` - Added run-fulltest target
+
 ### Recent Additions
 - `LoopSupervisor` for resilient service loops with exponential backoff (`common/resilience.py`)
 - Parallel strategy execution in StrategyRunner consume loop (`strategies/runner.py`)
@@ -149,7 +181,7 @@
 
 ## Test Coverage
 
-Total tests: 618
+Total tests: 803+
 
 | Module | Tests |
 |--------|-------|

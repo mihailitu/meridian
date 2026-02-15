@@ -21,13 +21,15 @@ class GatewayService:
     publishes them to Redis, and prints to console.
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, adapter: Optional[DataAdapter] = None):
         """Initialize gateway service.
 
         Args:
             config: Application configuration
+            adapter: Optional pre-built data adapter (bypasses config-based creation)
         """
         self.config = config
+        self._injected_adapter = adapter
         self._adapter: Optional[DataAdapter] = None
         self._publisher: Optional[RedisPublisher] = None
         self._running = False
@@ -37,9 +39,14 @@ class GatewayService:
     def _create_adapter(self) -> DataAdapter:
         """Create the appropriate data adapter based on config.
 
+        If an adapter was injected via the constructor, returns that instead.
+
         Returns:
             DataAdapter instance
         """
+        if self._injected_adapter is not None:
+            return self._injected_adapter
+
         adapter_type = self.config.gateway.adapter
 
         if adapter_type == "mock":

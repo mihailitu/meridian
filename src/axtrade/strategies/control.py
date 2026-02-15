@@ -122,6 +122,7 @@ class StrategyControlPublisher:
         self._client = redis.Redis(
             host=self.config.host,
             port=self.config.port,
+            db=self.config.db,
             decode_responses=True,
         )
         await self._client.ping()
@@ -192,6 +193,7 @@ class StrategyControlSubscriber:
         self._client = redis.Redis(
             host=self.config.host,
             port=self.config.port,
+            db=self.config.db,
             decode_responses=True,
         )
         await self._client.ping()

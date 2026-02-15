@@ -61,6 +61,7 @@ class OrderManager:
         self._redis = redis.Redis(
             host=self.config.redis.host,
             port=self.config.redis.port,
+            db=self.config.redis.db,
             decode_responses=True,
         )
         await self._redis.ping()
