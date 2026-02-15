@@ -39,11 +39,18 @@ def parse_date(s: str) -> date:
 
 def _resolve_symbols(args) -> list[str]:
     """Resolve symbol list from args."""
-    if getattr(args, "universe", None) == "sp500":
+    universe = getattr(args, "universe", None)
+    if universe == "sp500":
         from .universe import SP500SymbolProvider
         provider = SP500SymbolProvider()
         symbols = asyncio.run(provider.get_symbols())
         print(f"Using S&P 500 universe: {len(symbols)} symbols")
+        return symbols
+    elif universe == "sp1500":
+        from .universe import SP1500SymbolProvider
+        provider = SP1500SymbolProvider()
+        symbols = asyncio.run(provider.get_symbols())
+        print(f"Using S&P 1500 universe: {len(symbols)} symbols")
         return symbols
     elif args.symbols:
         return [s.upper() for s in args.symbols]
@@ -52,7 +59,7 @@ def _resolve_symbols(args) -> list[str]:
         config = load_config()
         symbols = [s.symbol for s in config.gateway.symbols]
         if not symbols:
-            print("No symbols specified and none in config. Use --symbols or --universe sp500.")
+            print("No symbols specified. Use --symbols, --universe sp500, or --universe sp1500.")
             sys.exit(1)
         return symbols
 
@@ -69,7 +76,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--symbols", nargs="+", default=None, help="Symbols to process"
     )
     parser.add_argument(
-        "--universe", choices=["sp500"], default=None,
+        "--universe", choices=["sp500", "sp1500"], default=None,
         help="Use a predefined symbol universe instead of --symbols"
     )
     parser.add_argument(
