@@ -111,6 +111,13 @@ class FullBacktestOrchestrator:
         report_path.write_text(report_text)
         logger.info("Report saved", path=str(report_path))
 
+        # Always save JSON sidecar for programmatic comparison
+        if self._bt_config.report_format != "json":
+            json_report = format_json_report(result)
+            json_path = output_dir / f"fulltest_{timestamp}.json"
+            json_path.write_text(json_report)
+            logger.info("JSON sidecar saved", path=str(json_path))
+
         return result
 
     async def _ensure_data(self) -> None:

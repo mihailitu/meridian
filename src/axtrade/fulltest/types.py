@@ -53,13 +53,20 @@ class StrategyResult:
     max_drawdown: float = 0.0
     sharpe_ratio: Optional[float] = None
     profit_factor: Optional[float] = None
+    annualized_return: Optional[float] = None
+    total_return: Optional[float] = None
+    avg_winner: Optional[float] = None
+    avg_loser: Optional[float] = None
+    avg_trade_pnl: Optional[float] = None
+    total_commission: Optional[float] = None
     symbols_traded: list[str] = field(default_factory=list)
 
     @property
     def win_rate(self) -> float:
-        if self.trade_count == 0:
+        closed = self.win_count + self.loss_count
+        if closed == 0:
             return 0.0
-        return self.win_count / self.trade_count
+        return self.win_count / closed
 
 
 @dataclass
@@ -86,6 +93,15 @@ class FullBacktestResult:
     final_equity: float = 0.0
     strategy_results: list[StrategyResult] = field(default_factory=list)
     discovery: DiscoveryResultSummary = field(default_factory=DiscoveryResultSummary)
+    overall_sharpe: Optional[float] = None
+    overall_max_drawdown: Optional[float] = None
+    overall_annualized_return: Optional[float] = None
+    overall_total_return: Optional[float] = None
+    overall_profit_factor: Optional[float] = None
+    overall_win_rate: Optional[float] = None
+    overall_total_trades: int = 0
+    overall_avg_trade_pnl: Optional[float] = None
+    overall_total_commission: Optional[float] = None
 
     @property
     def wall_clock_seconds(self) -> float:

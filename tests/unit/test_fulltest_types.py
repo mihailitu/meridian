@@ -119,12 +119,15 @@ def test_text_report_contains_key_sections(result):
     report = format_text_report(result)
 
     assert "FULL SYSTEM BACKTEST REPORT" in report
+    assert "PORTFOLIO ANALYTICS" in report
     assert "STRATEGY RESULTS" in report
     assert "DISCOVERY RESULTS" in report
     assert "momentum-bt" in report
     assert "mean_reversion-bt" in report
     assert "$105,000.00" in report
     assert "AAPL" in report
+    assert "Sharpe Ratio:" in report
+    assert "Max Drawdown:" in report
 
 
 def test_text_report_shows_return_percentage(result):
@@ -143,6 +146,11 @@ def test_json_report_valid(result):
     assert len(data["strategies"]) == 2
     assert data["strategies"][0]["strategy_id"] == "momentum-bt"
     assert data["discovery"]["total_scans"] == 10
+    assert "analytics" in data
+    assert "sharpe_ratio" in data["analytics"]
+    assert "max_drawdown" in data["analytics"]
+    assert "sharpe_ratio" in data["strategies"][0]
+    assert "avg_winner" in data["strategies"][0]
 
 
 def test_json_report_return_pct(result):

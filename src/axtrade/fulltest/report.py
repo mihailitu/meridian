@@ -8,6 +8,7 @@ import asyncpg
 
 from axtrade.common import DatabaseConfig, get_logger
 
+from .analytics import compute_analytics
 from .types import (
     DiscoveryResultSummary,
     FullBacktestConfig,
@@ -57,7 +58,9 @@ class ReportGenerator:
             ) or 0
 
             # Get per-strategy results
-            result.strategy_results = await self._get_strategy_results(conn)
+            result.strategy_results = await self._get_strategy_results(
+                conn, config
+            )
 
             # Calculate final equity
             total_realized_pnl = await conn.fetchval(
@@ -70,13 +73,39 @@ class ReportGenerator:
             # Get discovery results
             result.discovery = await self._get_discovery_results(conn)
 
+            # Compute overall portfolio analytics
+            overall = await compute_analytics(
+                conn,
+                strategy_id=None,
+                initial_capital=config.initial_capital,
+                start_date=config.start,
+                end_date=config.end,
+            )
+            result.overall_sharpe = overall["sharpe_ratio"]
+            result.overall_max_drawdown = overall["max_drawdown"]
+            result.overall_annualized_return = overall["annualized_return"]
+            result.overall_total_return = overall["total_return"]
+            result.overall_profit_factor = overall["profit_factor"]
+            result.overall_win_rate = overall["win_rate"]
+            result.overall_total_trades = overall["total_trades"]
+            result.overall_avg_trade_pnl = (
+                float(overall["avg_trade_pnl"])
+                if overall["avg_trade_pnl"]
+                else None
+            )
+            result.overall_total_commission = (
+                float(overall["total_commission"])
+                if overall["total_commission"]
+                else None
+            )
+
         finally:
             await conn.close()
 
         return result
 
     async def _get_strategy_results(
-        self, conn: asyncpg.Connection
+        self, conn: asyncpg.Connection, config: FullBacktestConfig
     ) -> list[StrategyResult]:
         """Query per-strategy metrics from fills and positions."""
         # Get distinct strategies from fills
@@ -87,12 +116,6 @@ class ReportGenerator:
         results = []
         for row in strategies:
             strategy_id = row["strategy_id"]
-
-            # Count fills (trades)
-            trade_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM fills WHERE strategy_id = $1",
-                strategy_id,
-            ) or 0
 
             # Get realized P&L from positions
             pnl_row = await conn.fetchrow(
@@ -107,49 +130,6 @@ class ReportGenerator:
             )
 
             total_pnl = float(pnl_row["total_pnl"]) if pnl_row else 0.0
-            symbols_count = pnl_row["symbols_count"] if pnl_row else 0
-
-            # Get win/loss counts from closed positions
-            wins = await conn.fetchval(
-                """
-                SELECT COUNT(*) FROM positions
-                WHERE strategy_id = $1
-                    AND closed_at IS NOT NULL
-                    AND realized_pnl > 0
-                """,
-                strategy_id,
-            ) or 0
-
-            losses = await conn.fetchval(
-                """
-                SELECT COUNT(*) FROM positions
-                WHERE strategy_id = $1
-                    AND closed_at IS NOT NULL
-                    AND realized_pnl <= 0
-                """,
-                strategy_id,
-            ) or 0
-
-            # Profit factor
-            gross_profit = await conn.fetchval(
-                """
-                SELECT COALESCE(SUM(realized_pnl), 0) FROM positions
-                WHERE strategy_id = $1 AND realized_pnl > 0
-                """,
-                strategy_id,
-            ) or Decimal(0)
-
-            gross_loss = await conn.fetchval(
-                """
-                SELECT COALESCE(ABS(SUM(realized_pnl)), 0) FROM positions
-                WHERE strategy_id = $1 AND realized_pnl < 0
-                """,
-                strategy_id,
-            ) or Decimal(0)
-
-            profit_factor = None
-            if gross_loss and float(gross_loss) > 0:
-                profit_factor = float(gross_profit) / float(gross_loss)
 
             # Traded symbols
             traded = await conn.fetch(
@@ -161,14 +141,31 @@ class ReportGenerator:
             # Determine strategy type from ID
             strategy_type = strategy_id.split("-")[0] if "-" in strategy_id else strategy_id
 
+            # Compute analytics via FIFO matching
+            metrics = await compute_analytics(
+                conn,
+                strategy_id=strategy_id,
+                initial_capital=config.initial_capital,
+                start_date=config.start,
+                end_date=config.end,
+            )
+
             results.append(StrategyResult(
                 strategy_id=strategy_id,
                 strategy_type=strategy_type,
-                trade_count=trade_count,
-                win_count=wins,
-                loss_count=losses,
+                trade_count=metrics["total_trades"],
+                win_count=metrics["winning_trades"],
+                loss_count=metrics["losing_trades"],
                 total_pnl=total_pnl,
-                profit_factor=profit_factor,
+                max_drawdown=metrics["max_drawdown"],
+                sharpe_ratio=metrics["sharpe_ratio"],
+                profit_factor=metrics["profit_factor"],
+                annualized_return=metrics["annualized_return"],
+                total_return=metrics["total_return"],
+                avg_winner=float(metrics["avg_winner"]) if metrics["avg_winner"] else None,
+                avg_loser=float(metrics["avg_loser"]) if metrics["avg_loser"] else None,
+                avg_trade_pnl=float(metrics["avg_trade_pnl"]) if metrics["avg_trade_pnl"] else None,
+                total_commission=float(metrics["total_commission"]) if metrics["total_commission"] else None,
                 symbols_traded=symbols_traded,
             ))
 
@@ -199,6 +196,27 @@ class ReportGenerator:
                 pass
 
         return summary
+
+
+def _fmt_pct(value: Optional[float]) -> str:
+    """Format a percentage value for display."""
+    if value is None:
+        return "N/A"
+    return f"{value:+.2f}%"
+
+
+def _fmt_dollar(value: Optional[float]) -> str:
+    """Format a dollar value for display."""
+    if value is None:
+        return "N/A"
+    return f"${value:,.2f}"
+
+
+def _fmt_ratio(value: Optional[float]) -> str:
+    """Format a ratio value for display."""
+    if value is None:
+        return "N/A"
+    return f"{value:.2f}"
 
 
 def format_text_report(result: FullBacktestResult) -> str:
@@ -238,24 +256,46 @@ def format_text_report(result: FullBacktestResult) -> str:
     lines.append(f"  Return:           {pct:+.2f}%")
     lines.append("")
 
-    # Per-strategy results
+    # Portfolio analytics
+    lines.append("-" * 70)
+    lines.append("PORTFOLIO ANALYTICS")
+    lines.append("-" * 70)
+    lines.append(f"  Sharpe Ratio:      {_fmt_ratio(result.overall_sharpe)}")
+    lines.append(f"  Max Drawdown:      {_fmt_pct(result.overall_max_drawdown)}")
+    lines.append(f"  Annualized Return: {_fmt_pct(result.overall_annualized_return)}")
+    lines.append(f"  Total Return:      {_fmt_pct(result.overall_total_return)}")
+    lines.append(f"  Profit Factor:     {_fmt_ratio(result.overall_profit_factor)}")
+    lines.append(f"  Total Trades:      {result.overall_total_trades}")
+    win_rate_str = _fmt_pct(result.overall_win_rate) if result.overall_win_rate is not None else "N/A"
+    lines.append(f"  Win Rate:          {win_rate_str}")
+    lines.append(f"  Avg Trade P&L:     {_fmt_dollar(result.overall_avg_trade_pnl)}")
+    lines.append(f"  Total Commission:  {_fmt_dollar(result.overall_total_commission)}")
+    lines.append("")
+
+    # Per-strategy detailed results
     if result.strategy_results:
         lines.append("-" * 70)
         lines.append("STRATEGY RESULTS")
         lines.append("-" * 70)
-        lines.append("")
-        lines.append(
-            f"{'Strategy':<25} {'Trades':>7} {'Win%':>7} {'P&L':>12} {'PF':>7} {'Symbols':>8}"
-        )
-        lines.append("-" * 70)
 
         for sr in result.strategy_results:
-            win_pct = f"{sr.win_rate * 100:.1f}%"
-            pf = f"{sr.profit_factor:.2f}" if sr.profit_factor else "N/A"
-            lines.append(
-                f"{sr.strategy_id:<25} {sr.trade_count:>7} {win_pct:>7} "
-                f"${sr.total_pnl:>10,.2f} {pf:>7} {len(sr.symbols_traded):>8}"
-            )
+            lines.append("")
+            lines.append(f"  {sr.strategy_id} ({sr.strategy_type})")
+            lines.append(f"  {'~' * 40}")
+            lines.append(f"    Trades:          {sr.trade_count} ({sr.win_count}W / {sr.loss_count}L)")
+            lines.append(f"    Win Rate:        {sr.win_rate * 100:.1f}%")
+            lines.append(f"    Total P&L:       {_fmt_dollar(sr.total_pnl)}")
+            lines.append(f"    Sharpe Ratio:    {_fmt_ratio(sr.sharpe_ratio)}")
+            lines.append(f"    Max Drawdown:    {_fmt_pct(sr.max_drawdown)}")
+            lines.append(f"    Annualized Ret:  {_fmt_pct(sr.annualized_return)}")
+            lines.append(f"    Profit Factor:   {_fmt_ratio(sr.profit_factor)}")
+            lines.append(f"    Avg Winner:      {_fmt_dollar(sr.avg_winner)}")
+            lines.append(f"    Avg Loser:       {_fmt_dollar(sr.avg_loser)}")
+            lines.append(f"    Avg Trade P&L:   {_fmt_dollar(sr.avg_trade_pnl)}")
+            lines.append(f"    Commission:      {_fmt_dollar(sr.total_commission)}")
+            lines.append(f"    Symbols:         {', '.join(sr.symbols_traded[:10])}")
+            if len(sr.symbols_traded) > 10:
+                lines.append(f"                     ... and {len(sr.symbols_traded) - 10} more")
 
         lines.append("")
 
@@ -301,6 +341,17 @@ def format_json_report(result: FullBacktestResult) -> str:
             if result.config.initial_capital
             else 0,
         },
+        "analytics": {
+            "sharpe_ratio": result.overall_sharpe,
+            "max_drawdown": result.overall_max_drawdown,
+            "annualized_return": result.overall_annualized_return,
+            "total_return": result.overall_total_return,
+            "profit_factor": result.overall_profit_factor,
+            "win_rate": result.overall_win_rate,
+            "total_trades": result.overall_total_trades,
+            "avg_trade_pnl": result.overall_avg_trade_pnl,
+            "total_commission": result.overall_total_commission,
+        },
         "strategies": [
             {
                 "strategy_id": sr.strategy_id,
@@ -310,7 +361,15 @@ def format_json_report(result: FullBacktestResult) -> str:
                 "loss_count": sr.loss_count,
                 "win_rate": sr.win_rate,
                 "total_pnl": sr.total_pnl,
+                "sharpe_ratio": sr.sharpe_ratio,
+                "max_drawdown": sr.max_drawdown,
+                "annualized_return": sr.annualized_return,
+                "total_return": sr.total_return,
                 "profit_factor": sr.profit_factor,
+                "avg_winner": sr.avg_winner,
+                "avg_loser": sr.avg_loser,
+                "avg_trade_pnl": sr.avg_trade_pnl,
+                "total_commission": sr.total_commission,
                 "symbols_traded": sr.symbols_traded,
             }
             for sr in result.strategy_results
