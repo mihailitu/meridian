@@ -1,6 +1,7 @@
 """Configuration loading and management."""
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
@@ -120,6 +121,15 @@ class RiskConfig:
 
 
 @dataclass
+class CommissionConfig:
+    """Commission model configuration (IBKR Pro Fixed rates)."""
+
+    per_share: Decimal = Decimal("0.005")
+    minimum: Decimal = Decimal("1.00")
+    max_pct: Decimal = Decimal("1.0")  # 1% of trade value
+
+
+@dataclass
 class OMSConfig:
     """Order Management System configuration."""
 
@@ -127,6 +137,7 @@ class OMSConfig:
     slippage_bps: int = 10  # basis points
     max_positions: int = 20
     risk: RiskConfig = field(default_factory=RiskConfig)
+    commission: CommissionConfig = field(default_factory=CommissionConfig)
 
 
 @dataclass
@@ -300,6 +311,11 @@ def load_config(path: Optional[Path] = None) -> Config:
                 max_order_size=oms_data.get("risk", {}).get("max_order_size", 500),
                 max_daily_loss=oms_data.get("risk", {}).get("max_daily_loss", 1000.0),
                 max_open_orders=oms_data.get("risk", {}).get("max_open_orders", 10),
+            ),
+            commission=CommissionConfig(
+                per_share=Decimal(str(oms_data.get("commission", {}).get("per_share", "0.005"))),
+                minimum=Decimal(str(oms_data.get("commission", {}).get("minimum", "1.00"))),
+                max_pct=Decimal(str(oms_data.get("commission", {}).get("max_pct", "1.0"))),
             ),
         ),
         strategies=StrategiesConfig(

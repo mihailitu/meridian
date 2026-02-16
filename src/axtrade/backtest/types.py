@@ -5,6 +5,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
+from axtrade.common import CommissionConfig
+
 
 @dataclass
 class BacktestConfig:
@@ -18,7 +20,7 @@ class BacktestConfig:
     strategy_config: dict = field(default_factory=dict)
     interval: str = "1m"
     initial_capital: Decimal = Decimal("100000")
-    commission_per_trade: Decimal = Decimal("1.00")
+    commission: CommissionConfig = field(default_factory=CommissionConfig)
     slippage_bps: int = 5
 
 

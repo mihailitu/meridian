@@ -66,6 +66,10 @@ oms:
   paper_mode: true
   slippage_bps: 10
   max_positions: 20
+  commission:
+    per_share: 0.005    # IBKR Pro Fixed: $0.005/share
+    minimum: 1.00       # Min $1.00 per order
+    max_pct: 1.0        # Max 1% of trade value
   risk:
     max_position_size: 1000
     max_position_value: 50000

@@ -7,12 +7,30 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID
 
-from axtrade.common import IBKRConfig, get_logger
+from axtrade.common import CommissionConfig, IBKRConfig, get_logger
 
 from .types import Fill, Order, OrderSide, OrderStatus, OrderType, Position
 
 if TYPE_CHECKING:
     from ib_insync import IB, Trade
+
+
+def calculate_commission(
+    quantity: Decimal, price: Decimal, config: CommissionConfig
+) -> Decimal:
+    """Calculate commission using IBKR Pro Fixed rate model.
+
+    Args:
+        quantity: Number of shares
+        price: Execution price per share
+        config: Commission configuration
+
+    Returns:
+        Commission amount (per_share * qty, clamped to [minimum, max_pct% of trade value])
+    """
+    comm = config.per_share * quantity
+    max_comm = price * quantity * config.max_pct / Decimal("100")
+    return max(min(comm, max_comm), config.minimum)
 
 
 class BrokerProtocol(ABC):
@@ -86,13 +104,19 @@ class BrokerProtocol(ABC):
 class PaperBroker(BrokerProtocol):
     """Paper trading broker with simulated fills."""
 
-    def __init__(self, slippage_bps: int = 10):
+    def __init__(
+        self,
+        slippage_bps: int = 10,
+        commission_config: CommissionConfig | None = None,
+    ):
         """Initialize paper broker.
 
         Args:
             slippage_bps: Slippage in basis points (1 bp = 0.01%)
+            commission_config: Commission model configuration
         """
         self.slippage_bps = slippage_bps
+        self.commission_config = commission_config or CommissionConfig()
         self.logger = get_logger("paper_broker")
 
         self._last_prices: dict[str, Decimal] = {}
@@ -148,7 +172,9 @@ class PaperBroker(BrokerProtocol):
             side=order.side,
             quantity=order.quantity,
             price=exec_price,
-            commission=Decimal("1.00"),
+            commission=calculate_commission(
+                order.quantity, exec_price, self.commission_config
+            ),
         )
 
         # Update order status

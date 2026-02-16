@@ -79,7 +79,8 @@ class TestBacktestConfig:
 
         assert config.interval == "1m"
         assert config.initial_capital == Decimal("100000")
-        assert config.commission_per_trade == Decimal("1.00")
+        assert config.commission.per_share == Decimal("0.005")
+        assert config.commission.minimum == Decimal("1.00")
         assert config.slippage_bps == 5
 
 
@@ -90,7 +91,6 @@ class TestSimulatedBroker:
     def broker(self) -> SimulatedBroker:
         return SimulatedBroker(
             initial_capital=Decimal("100000"),
-            commission=Decimal("1.00"),
             slippage_bps=10,
         )
 

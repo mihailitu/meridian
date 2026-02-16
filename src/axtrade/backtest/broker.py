@@ -4,8 +4,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from axtrade.common import Bar
+from axtrade.common import Bar, CommissionConfig
 from axtrade.oms import Fill, Order, OrderSide, OrderStatus, Position
+from axtrade.oms.broker import calculate_commission
 
 from .types import EquityPoint, TradeRecord
 
@@ -16,19 +17,19 @@ class SimulatedBroker:
     def __init__(
         self,
         initial_capital: Decimal,
-        commission: Decimal = Decimal("1.00"),
+        commission_config: CommissionConfig | None = None,
         slippage_bps: int = 5,
     ):
         """Initialize simulated broker.
 
         Args:
             initial_capital: Starting cash amount
-            commission: Commission per trade
+            commission_config: Commission model configuration
             slippage_bps: Slippage in basis points (1 bp = 0.01%)
         """
         self.initial_capital = initial_capital
         self.cash = initial_capital
-        self.commission = commission
+        self.commission_config = commission_config or CommissionConfig()
         self.slippage_bps = slippage_bps
 
         self._positions: dict[str, Position] = {}
@@ -63,9 +64,14 @@ class SimulatedBroker:
 
         exec_price = exec_price.quantize(Decimal("0.01"))
 
+        # Calculate commission for this fill
+        commission = calculate_commission(
+            order.quantity, exec_price, self.commission_config
+        )
+
         # Check sufficient capital for buys
         if order.side == OrderSide.BUY:
-            total_cost = exec_price * order.quantity + self.commission
+            total_cost = exec_price * order.quantity + commission
             if total_cost > self.cash:
                 order.status = OrderStatus.REJECTED
                 return None
@@ -75,7 +81,7 @@ class SimulatedBroker:
 
         if order.side == OrderSide.BUY:
             # Deduct cash
-            self.cash -= exec_price * order.quantity + self.commission
+            self.cash -= exec_price * order.quantity + commission
 
             # Create or add to position
             if order.symbol in self._positions:
@@ -106,19 +112,19 @@ class SimulatedBroker:
 
             # Calculate P&L
             pnl = (exec_price - pos.avg_entry_price) * order.quantity
-            pnl -= self.commission  # Deduct commission from P&L
+            pnl -= commission  # Deduct commission from P&L
 
             # Add proceeds to cash
-            self.cash += exec_price * order.quantity - self.commission
+            self.cash += exec_price * order.quantity - commission
 
             # Update or remove position
             pos.quantity -= order.quantity
             if pos.quantity <= 0:
-                pos.realized_pnl += pnl + self.commission  # Add back for position tracking
+                pos.realized_pnl += pnl + commission  # Add back for position tracking
                 pos.closed_at = bar.timestamp
                 del self._positions[order.symbol]
             else:
-                pos.realized_pnl += pnl + self.commission
+                pos.realized_pnl += pnl + commission
 
         # Update order status
         order.status = OrderStatus.FILLED
@@ -131,7 +137,7 @@ class SimulatedBroker:
             side=order.side.value.upper(),
             quantity=order.quantity,
             price=exec_price,
-            commission=self.commission,
+            commission=commission,
             pnl=pnl,
         )
         self.trades.append(trade)
@@ -144,7 +150,7 @@ class SimulatedBroker:
             side=order.side,
             quantity=order.quantity,
             price=exec_price,
-            commission=self.commission,
+            commission=commission,
             filled_at=bar.timestamp,
         )
 

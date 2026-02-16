@@ -79,7 +79,10 @@ class OrderManager:
 
         # Initialize broker
         if self.config.oms.paper_mode:
-            self._broker = PaperBroker(slippage_bps=self.config.oms.slippage_bps)
+            self._broker = PaperBroker(
+                slippage_bps=self.config.oms.slippage_bps,
+                commission_config=self.config.oms.commission,
+            )
         else:
             self._broker = IBKRBroker(self.config.gateway.ibkr)
 

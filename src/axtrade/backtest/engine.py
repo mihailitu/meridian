@@ -54,7 +54,7 @@ class BacktestEngine:
         # 2. Initialize broker
         self.broker = SimulatedBroker(
             initial_capital=self.config.initial_capital,
-            commission=self.config.commission_per_trade,
+            commission_config=self.config.commission,
             slippage_bps=self.config.slippage_bps,
         )
 
