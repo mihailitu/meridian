@@ -33,14 +33,18 @@ def _make_fill_row(strategy_id, symbol, side, quantity, price, commission, fille
 class FakeConnection:
     """Minimal async connection stub returning preset rows."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, realized_pnl=Decimal("0")):
         self._rows = rows
+        self._realized_pnl = realized_pnl
 
     async def fetch(self, query, *args):
         if args:
             strategy_id = args[0]
             return [r for r in self._rows if r["strategy_id"] == strategy_id]
         return self._rows
+
+    async def fetchval(self, query, *args):
+        return self._realized_pnl
 
 
 @pytest.fixture
@@ -174,6 +178,51 @@ def test_process_fills_empty():
     assert curve == []
 
 
+def test_process_fills_unmatched_sell_does_not_inflate_equity():
+    """Sell without matching buy should not inflate equity beyond initial capital."""
+    rows = [
+        _make_fill_row(
+            "test", "AAPL", "sell", 100, 55, 1.00,
+            datetime(2025, 9, 1, 14, 0, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    initial = Decimal("100000")
+    trades, curve = _process_fills(rows, initial)
+
+    assert len(curve) == 1
+    # Unmatched sell: cash += 55*100 - 1 = 5499, open_position_cost -= 55*100 = -5500
+    # equity = (100000 + 5499) + (-5500) = 99999
+    # Should NOT be 105499 (the old broken behavior)
+    assert curve[0].equity == Decimal("99999")
+
+
+def test_process_fills_partial_unmatched_sell():
+    """Buy 50 then sell 100: first 50 matched, remaining 50 unmatched."""
+    rows = [
+        _make_fill_row(
+            "test", "AAPL", "buy", 50, 50, 1.00,
+            datetime(2025, 9, 1, 10, 0, 0, tzinfo=timezone.utc),
+        ),
+        _make_fill_row(
+            "test", "AAPL", "sell", 100, 55, 1.00,
+            datetime(2025, 9, 1, 14, 0, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    initial = Decimal("100000")
+    trades, curve = _process_fills(rows, initial)
+
+    assert len(curve) == 2
+    # After buy: cash = 100000 - 2501 = 97499, cost = 2500, equity = 99999
+    assert curve[0].equity == Decimal("99999")
+    # After sell: 50 matched (cost_basis_sold = 50*50 = 2500),
+    # 50 unmatched (cost_basis_sold += 55*50 = 2750), total cost_basis_sold = 5250
+    # cash = 97499 + (55*100 - 1) = 102998
+    # open_cost = 2500 - 5250 = -2750
+    # equity = 102998 + (-2750) = 100248
+    # That's (55-50)*50 - 1(buy_comm) - 1(sell_comm) = 248 profit on matched portion
+    assert curve[1].equity == Decimal("100248")
+
+
 # -- standalone build_equity_curve tests --
 
 
@@ -231,13 +280,52 @@ def test_resample_equity_daily_empty():
     assert resample_equity_daily([]) == []
 
 
+def test_resample_equity_daily_prepends_initial_capital():
+    """When start_date precedes first fill, a synthetic day-zero point is prepended."""
+    points = [
+        EquityPoint(
+            timestamp=datetime(2025, 9, 2, 14, 0, tzinfo=timezone.utc),
+            equity=Decimal("100500"),
+            drawdown=Decimal("0"),
+        ),
+    ]
+    daily = resample_equity_daily(
+        points,
+        initial_capital=Decimal("100000"),
+        start_date=date(2025, 9, 1),
+    )
+    assert len(daily) == 2
+    assert daily[0].equity == Decimal("100000")
+    assert daily[1].equity == Decimal("100500")
+
+
+def test_resample_equity_daily_no_duplicate_start():
+    """When fills already start on start_date, no synthetic point is added."""
+    points = [
+        EquityPoint(
+            timestamp=datetime(2025, 9, 1, 14, 0, tzinfo=timezone.utc),
+            equity=Decimal("100500"),
+            drawdown=Decimal("0"),
+        ),
+    ]
+    daily = resample_equity_daily(
+        points,
+        initial_capital=Decimal("100000"),
+        start_date=date(2025, 9, 1),
+    )
+    # Should not duplicate -- fill on Sep 1 already covers that date
+    assert len(daily) == 1
+    assert daily[0].equity == Decimal("100500")
+
+
 # -- compute_analytics end-to-end test --
 
 
 async def test_compute_analytics_end_to_end(simple_fills):
     from axtrade.fulltest.analytics import compute_analytics
 
-    conn = FakeConnection(simple_fills)
+    # P&L = (55-50)*100 - 1 - 1 = 498
+    conn = FakeConnection(simple_fills, realized_pnl=Decimal("498"))
     metrics = await compute_analytics(
         conn,
         strategy_id="momentum-bt",
@@ -260,7 +348,8 @@ async def test_compute_analytics_end_to_end(simple_fills):
     assert metrics["losing_trades"] == 0
     assert metrics["win_rate"] == 100.0
     assert metrics["profit_factor"] == float("inf")
-    assert metrics["total_return"] > 0
+    # total_return now comes from positions table (498 / 100000 * 100 = 0.498%)
+    assert metrics["total_return"] == pytest.approx(0.498, abs=0.001)
 
 
 async def test_compute_analytics_no_fills():
@@ -278,6 +367,37 @@ async def test_compute_analytics_no_fills():
     assert metrics["total_trades"] == 0
     assert metrics["sharpe_ratio"] == 0.0
     assert metrics["max_drawdown"] == 0.0
+
+
+async def test_compute_analytics_short_period_no_overflow():
+    """Short backtest (4 days) should not produce astronomical annualized return."""
+    from axtrade.fulltest.analytics import compute_analytics
+
+    fills = [
+        _make_fill_row(
+            "test-bt", "AAPL", "buy", 100, 200, 1.00,
+            datetime(2025, 9, 1, 10, 0, 0, tzinfo=timezone.utc),
+        ),
+        _make_fill_row(
+            "test-bt", "AAPL", "sell", 100, 198, 1.00,
+            datetime(2025, 9, 4, 14, 0, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    # Loss: (198-200)*100 - 1 - 1 = -202
+    conn = FakeConnection(fills, realized_pnl=Decimal("-202"))
+    metrics = await compute_analytics(
+        conn,
+        strategy_id="test-bt",
+        initial_capital=100000.0,
+        start_date=date(2025, 9, 1),
+        end_date=date(2025, 9, 5),
+    )
+
+    # For 4-day backtest (< 0.25 years), annualized = raw return
+    assert abs(metrics["annualized_return"]) < 1000
+    assert metrics["total_return"] == pytest.approx(-0.202, abs=0.001)
+    # annualized should equal total_return for short periods
+    assert metrics["annualized_return"] == metrics["total_return"]
 
 
 # -- win_rate property fix test --

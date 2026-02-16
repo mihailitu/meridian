@@ -105,7 +105,7 @@ class FullBacktestOrchestrator:
         output_dir = Path(self._bt_config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = start_time.strftime("%Y%m%d_%H%M%S")
+        timestamp = start_time.astimezone().strftime("%Y%m%d_%H%M%S")
         report_ext = "json" if self._bt_config.report_format == "json" else "txt"
         report_path = output_dir / f"fulltest_{timestamp}.{report_ext}"
         report_path.write_text(report_text)

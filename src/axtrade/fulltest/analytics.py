@@ -4,6 +4,7 @@ Transforms fills stored in TimescaleDB into TradeRecord and EquityPoint
 sequences suitable for the existing PerformanceAnalyzer.
 """
 
+import math
 from collections import defaultdict
 from datetime import date, datetime
 from decimal import Decimal
@@ -117,6 +118,11 @@ def _process_fills(
                     new_qty = lot_qty - match_qty
                     new_commission = lot_commission * (new_qty / lot_qty)
                     buy_lots[key][0] = [new_qty, lot_price, new_commission]
+
+            # Track unmatched sell quantity as short liability so equity
+            # does not get inflated by the unmatched proceeds.
+            if remaining > 0:
+                cost_basis_sold += price * remaining
 
             total_pnl -= total_buy_commission + commission
 
@@ -233,13 +239,21 @@ def build_equity_curve(
     return curve
 
 
-def resample_equity_daily(curve: list[EquityPoint]) -> list[EquityPoint]:
+def resample_equity_daily(
+    curve: list[EquityPoint],
+    initial_capital: Optional[Decimal] = None,
+    start_date: Optional[date] = None,
+) -> list[EquityPoint]:
     """Collapse equity curve to one point per calendar day (last point wins).
 
-    Needed for Sharpe calculation with daily frequency.
+    Needed for Sharpe calculation with daily frequency. Optionally prepends
+    an initial-capital point at start_date so that at least one return
+    period exists even for very short backtests.
 
     Args:
         curve: Intraday equity curve
+        initial_capital: If provided with start_date, prepend a day-zero point
+        start_date: Start date for the synthetic day-zero point
 
     Returns:
         Daily equity curve
@@ -251,6 +265,15 @@ def resample_equity_daily(curve: list[EquityPoint]) -> list[EquityPoint]:
     for point in curve:
         day = point.timestamp.date() if isinstance(point.timestamp, datetime) else point.timestamp
         daily[day] = point
+
+    # Prepend initial capital if the curve doesn't already start on start_date
+    if initial_capital is not None and start_date is not None:
+        if start_date not in daily:
+            daily[start_date] = EquityPoint(
+                timestamp=datetime.combine(start_date, datetime.min.time()),
+                equity=initial_capital,
+                drawdown=Decimal("0"),
+            )
 
     return [daily[d] for d in sorted(daily.keys())]
 
@@ -286,7 +309,7 @@ async def compute_analytics(
         )
 
     trades, curve = _process_fills(rows, capital)
-    daily_curve = resample_equity_daily(curve)
+    daily_curve = resample_equity_daily(curve, initial_capital=capital, start_date=start_date)
 
     metrics = PerformanceAnalyzer.calculate_metrics(
         trades, daily_curve, capital, start_date, end_date
@@ -296,5 +319,32 @@ async def compute_analytics(
     metrics["sharpe_ratio"] = PerformanceAnalyzer.calculate_sharpe(
         daily_curve, periods_per_year=252
     )
+
+    # Override return metrics using positions-table realized P&L (source of truth).
+    # The fills-based equity curve can diverge from actual P&L when sells have
+    # no matching buys or open positions are valued at cost basis.
+    if strategy_id:
+        total_realized = await conn.fetchval(
+            "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions WHERE strategy_id = $1",
+            strategy_id,
+        )
+    else:
+        total_realized = await conn.fetchval(
+            "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions"
+        )
+    pnl_return = float(Decimal(str(total_realized)) / capital * 100) if capital else 0.0
+    metrics["total_return"] = pnl_return
+
+    # Recompute annualized return from the corrected total_return
+    days = (end_date - start_date).days
+    years = days / 365.0 if days > 0 else 0.0
+    ratio = 1 + pnl_return / 100
+    if years >= 0.25 and ratio > 0:
+        try:
+            metrics["annualized_return"] = (math.pow(ratio, 1 / years) - 1) * 100
+        except (OverflowError, ValueError):
+            metrics["annualized_return"] = pnl_return
+    else:
+        metrics["annualized_return"] = pnl_return
 
     return metrics

@@ -77,19 +77,21 @@ class PerformanceAnalyzer:
         final_equity = equity_curve[-1].equity if equity_curve else initial_capital
         total_return = float((final_equity - initial_capital) / initial_capital * 100)
 
-        # Annualized return
+        # Annualized return (skip annualization for periods < ~3 months
+        # as the exponentiation produces misleading results)
         days = (end_date - start_date).days
         if days > 0 and final_equity > 0 and initial_capital > 0:
             years = days / 365.0
-            if years > 0:
+            ratio = float(final_equity / initial_capital)
+            if years >= 0.25 and ratio > 0:
                 try:
                     annualized_return = (
-                        math.pow(float(final_equity / initial_capital), 1 / years) - 1
+                        math.pow(ratio, 1 / years) - 1
                     ) * 100
                 except OverflowError:
-                    annualized_return = float("inf") if final_equity > initial_capital else float("-inf")
+                    annualized_return = total_return
             else:
-                annualized_return = 0.0
+                annualized_return = total_return
         else:
             annualized_return = 0.0
 
