@@ -4,11 +4,14 @@ import asyncio
 import copy
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from axtrade.common import (
@@ -169,6 +172,7 @@ class FullBacktestOrchestrator:
         # Discovery settings
         config.discovery.auto_subscribe = True
         config.discovery.enabled = True
+        config.discovery.min_score = 40.0
 
         # Enable all strategies
         config.strategies.enabled = []
@@ -218,95 +222,109 @@ class FullBacktestOrchestrator:
         await db_pool.connect()
         bar_repo = BarRepository(db_pool)
 
-        start_dt = datetime.combine(
-            self._bt_config.start, datetime.min.time()
-        ).replace(tzinfo=timezone.utc)
-        end_dt = datetime.combine(
-            self._bt_config.end, datetime.min.time()
-        ).replace(tzinfo=timezone.utc)
+        start_dt = pd.Timestamp(self._bt_config.start, tz="UTC")
+        end_dt = pd.Timestamp(self._bt_config.end, tz="UTC")
 
-        total_inserted = 0
-        files_processed = 0
         total_files = len(files)
-
         print(f"Pre-seeding universe bars ({total_files} files)...", file=sys.stderr, flush=True)
 
+        # Read and filter all parquet files in parallel using a thread pool
+        loop = asyncio.get_event_loop()
+
+        def _read_one(file_info: dict) -> tuple[str, str, list[tuple]]:
+            """Read a single parquet file with predicate pushdown, return rows."""
+            symbol = file_info["symbol"]
+            interval = file_info.get("interval", "1m")
+            file_path = data_dir / file_info["filename"]
+
+            if not file_path.exists():
+                return symbol, interval, []
+
+            try:
+                table = pq.read_table(
+                    file_path,
+                    filters=[
+                        ("timestamp", ">=", start_dt),
+                        ("timestamp", "<", end_dt),
+                    ],
+                )
+                if table.num_rows == 0:
+                    return symbol, interval, []
+
+                df = table.to_pandas()
+                del table
+
+                # Ensure timezone-aware timestamps
+                ts_series = df["timestamp"]
+                if ts_series.dt.tz is None:
+                    ts_series = ts_series.dt.tz_localize("UTC")
+
+                has_sma = "sma_20" in df.columns
+                has_rsi = "rsi_14" in df.columns
+
+                rows = []
+                ts_vals = ts_series.to_list()
+                open_vals = df["open"].to_list()
+                high_vals = df["high"].to_list()
+                low_vals = df["low"].to_list()
+                close_vals = df["close"].to_list()
+                vol_vals = df["volume"].to_list()
+                sma_vals = df["sma_20"].to_list() if has_sma else [None] * len(ts_vals)
+                rsi_vals = df["rsi_14"].to_list() if has_rsi else [None] * len(ts_vals)
+
+                for i in range(len(ts_vals)):
+                    sma_v = sma_vals[i]
+                    rsi_v = rsi_vals[i]
+                    rows.append((
+                        ts_vals[i],
+                        symbol,
+                        Decimal(str(float(open_vals[i]))),
+                        Decimal(str(float(high_vals[i]))),
+                        Decimal(str(float(low_vals[i]))),
+                        Decimal(str(float(close_vals[i]))),
+                        int(vol_vals[i]),
+                        Decimal(str(float(sma_v))) if sma_v is not None and not pd.isna(sma_v) else None,
+                        Decimal(str(float(rsi_v))) if rsi_v is not None and not pd.isna(rsi_v) else None,
+                    ))
+                return symbol, interval, rows
+            except Exception as e:
+                logger.debug("Failed to pre-seed file", symbol=symbol, error=str(e))
+                return symbol, interval, []
+
         try:
-            for file_info in files:
-                symbol = file_info["symbol"]
-                interval = file_info.get("interval", "1m")
-                file_path = data_dir / file_info["filename"]
+            all_rows: list[tuple] = []
+            files_processed = 0
+            interval = "1m"
+            batch_limit = 50_000  # insert in chunks to avoid huge transactions
 
-                if not file_path.exists():
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    loop.run_in_executor(executor, _read_one, fi)
+                    for fi in files
+                ]
+
+                for coro in asyncio.as_completed(futures):
+                    symbol, intv, rows = await coro
+                    interval = intv
+                    all_rows.extend(rows)
                     files_processed += 1
-                    continue
 
-                try:
-                    table = pq.read_table(file_path)
-                    columns = set(table.column_names)
+                    if total_files > 0:
+                        pct = files_processed * 100 // total_files
+                        print(
+                            f"\rPre-seed: {pct:3d}% ({files_processed}/{total_files} files, {len(all_rows)} rows)  ",
+                            end="", file=sys.stderr, flush=True,
+                        )
 
-                    has_sma = "sma_20" in columns
-                    has_rsi = "rsi_14" in columns
+                    # Flush in batches to bound memory
+                    if len(all_rows) >= batch_limit:
+                        await bar_repo.bulk_insert_bars(all_rows, interval)
+                        all_rows.clear()
 
-                    rows = []
-                    n_rows = table.num_rows
-                    batch_size = 10000
-
-                    for offset in range(0, n_rows, batch_size):
-                        batch = table.slice(offset, min(batch_size, n_rows - offset))
-                        ts_col = batch.column("timestamp").to_pylist()
-                        open_col = batch.column("open").to_pylist()
-                        high_col = batch.column("high").to_pylist()
-                        low_col = batch.column("low").to_pylist()
-                        close_col = batch.column("close").to_pylist()
-                        vol_col = batch.column("volume").to_pylist()
-                        sma_col = batch.column("sma_20").to_pylist() if has_sma else [None] * len(ts_col)
-                        rsi_col = batch.column("rsi_14").to_pylist() if has_rsi else [None] * len(ts_col)
-
-                        for i in range(len(ts_col)):
-                            ts = ts_col[i]
-                            if ts.tzinfo is None:
-                                ts = ts.replace(tzinfo=timezone.utc)
-
-                            # Filter to backtest date range
-                            if ts < start_dt or ts >= end_dt:
-                                continue
-
-                            sma_val = sma_col[i]
-                            rsi_val = rsi_col[i]
-
-                            rows.append((
-                                ts,
-                                symbol,
-                                Decimal(str(float(open_col[i]))),
-                                Decimal(str(float(high_col[i]))),
-                                Decimal(str(float(low_col[i]))),
-                                Decimal(str(float(close_col[i]))),
-                                int(vol_col[i]),
-                                Decimal(str(float(sma_val))) if sma_val is not None else None,
-                                Decimal(str(float(rsi_val))) if rsi_val is not None else None,
-                            ))
-
-                    del table
-
-                    if rows:
-                        inserted = await bar_repo.bulk_insert_bars(rows, interval)
-                        total_inserted += inserted
-
-                except Exception as e:
-                    logger.debug(
-                        "Failed to pre-seed file",
-                        symbol=symbol,
-                        error=str(e),
-                    )
-
-                files_processed += 1
-                if total_files > 0:
-                    pct = files_processed * 100 // total_files
-                    print(
-                        f"\rPre-seed: {pct:3d}% ({files_processed}/{total_files} files) | {symbol} ({total_inserted} rows)  ",
-                        end="", file=sys.stderr, flush=True,
-                    )
+            # Insert remaining rows
+            total_inserted = 0
+            if all_rows:
+                total_inserted = await bar_repo.bulk_insert_bars(all_rows, interval)
 
             print(
                 f"\rPre-seed: 100% ({files_processed}/{total_files} files, {total_inserted} rows) -- done.                    ",
@@ -412,6 +430,8 @@ class FullBacktestOrchestrator:
         if discovery_runner and self._bt_config.discovery_enabled:
             result.discovery.total_scans = discovery_runner.scan_count
             result.discovery.symbols_discovered = discovery_runner.total_matches
+            result.discovery.symbols_fed_to_gateway = len(discovery_runner.symbols_fed)
+            result.discovery.symbols_fed_list = discovery_runner.symbols_fed
 
         if gateway_control:
             await gateway_control.disconnect()

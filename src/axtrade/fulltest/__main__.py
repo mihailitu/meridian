@@ -203,7 +203,7 @@ def main() -> None:
         help="Auto-download missing data before running (default: skip download)"
     )
     run_parser.add_argument(
-        "--log-level", default="WARNING",
+        "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level (default: WARNING)"
     )
