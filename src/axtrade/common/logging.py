@@ -25,7 +25,7 @@ def setup_logging(level: str = "INFO", log_name: str | None = None) -> structlog
             structlog.stdlib.filter_by_level,
             structlog.stdlib.add_logger_name,
             structlog.stdlib.add_log_level,
-            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", utc=False),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             structlog.dev.ConsoleRenderer(colors=True),
