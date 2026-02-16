@@ -309,40 +309,41 @@ class BarRepository:
         ]
 
         async with self.pool.acquire() as conn:
-            # Create temp staging table
-            await conn.execute("""
-                CREATE TEMP TABLE _bars_stage (
-                    time TIMESTAMPTZ,
-                    symbol TEXT,
-                    interval TEXT,
-                    open NUMERIC,
-                    high NUMERIC,
-                    low NUMERIC,
-                    close NUMERIC,
-                    volume BIGINT,
-                    sma_20 NUMERIC,
-                    rsi_14 NUMERIC
-                ) ON COMMIT DROP
-            """)
+            async with conn.transaction():
+                # Create temp staging table
+                await conn.execute("""
+                    CREATE TEMP TABLE _bars_stage (
+                        time TIMESTAMPTZ,
+                        symbol TEXT,
+                        interval TEXT,
+                        open NUMERIC,
+                        high NUMERIC,
+                        low NUMERIC,
+                        close NUMERIC,
+                        volume BIGINT,
+                        sma_20 NUMERIC,
+                        rsi_14 NUMERIC
+                    ) ON COMMIT DROP
+                """)
 
-            # Bulk copy into staging table
-            await conn.copy_records_to_table(
-                "_bars_stage",
-                records=records,
-                columns=["time", "symbol", "interval", "open", "high", "low", "close", "volume", "sma_20", "rsi_14"],
-            )
+                # Bulk copy into staging table
+                await conn.copy_records_to_table(
+                    "_bars_stage",
+                    records=records,
+                    columns=["time", "symbol", "interval", "open", "high", "low", "close", "volume", "sma_20", "rsi_14"],
+                )
 
-            # Upsert from staging into real table
-            result = await conn.execute("""
-                INSERT INTO bars (time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14)
-                SELECT time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14
-                FROM _bars_stage
-                ON CONFLICT (symbol, interval, time) DO NOTHING
-            """)
+                # Upsert from staging into real table
+                result = await conn.execute("""
+                    INSERT INTO bars (time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14)
+                    SELECT time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14
+                    FROM _bars_stage
+                    ON CONFLICT (symbol, interval, time) DO NOTHING
+                """)
 
-            # Parse inserted count from "INSERT 0 N"
-            inserted = int(result.split()[-1]) if result else 0
-            return inserted
+                # Parse inserted count from "INSERT 0 N"
+                inserted = int(result.split()[-1]) if result else 0
+                return inserted
 
     async def get_bars_since(
         self,

@@ -181,7 +181,10 @@ class FullBacktestOrchestrator:
         # Assume worst-case ~$1200/share (high-end S&P), stay well under limit
         safe_position_size = int(max_pos_value / 1200)  # ~41 shares
         config.strategies.enabled = []
+        skip_strategies = {"ml_prediction"}
         for stype, sclass in STRATEGY_TYPES.items():
+            if stype in skip_strategies:
+                continue
             config.strategies.enabled.append(
                 StrategyInstanceConfig(
                     type=stype,
@@ -228,11 +231,12 @@ class FullBacktestOrchestrator:
         await db_pool.connect()
         bar_repo = BarRepository(db_pool)
 
-        start_dt = pd.Timestamp(self._bt_config.start, tz="UTC")
-        end_dt = pd.Timestamp(self._bt_config.end, tz="UTC")
+        start_dt = pd.Timestamp(self._bt_config.start)
+        end_dt = pd.Timestamp(self._bt_config.end)
+        bar_limit = config.discovery.bar_limit  # only keep last N bars per symbol
 
         total_files = len(files)
-        print(f"Pre-seeding universe bars ({total_files} files)...", file=sys.stderr, flush=True)
+        print(f"Pre-seeding universe bars ({total_files} files, tail {bar_limit}/symbol)...", file=sys.stderr, flush=True)
 
         # Read and filter all parquet files in parallel using a thread pool
         loop = asyncio.get_event_loop()
@@ -259,6 +263,9 @@ class FullBacktestOrchestrator:
 
                 df = table.to_pandas()
                 del table
+
+                # Keep only the last N bars per symbol (discovery only needs recent history)
+                df = df.tail(bar_limit)
 
                 # Ensure timezone-aware timestamps
                 ts_series = df["timestamp"]
@@ -300,6 +307,7 @@ class FullBacktestOrchestrator:
         try:
             all_rows: list[tuple] = []
             files_processed = 0
+            total_inserted = 0
             interval = "1m"
             batch_limit = 50_000  # insert in chunks to avoid huge transactions
 
@@ -324,13 +332,12 @@ class FullBacktestOrchestrator:
 
                     # Flush in batches to bound memory
                     if len(all_rows) >= batch_limit:
-                        await bar_repo.bulk_insert_bars(all_rows, interval)
+                        total_inserted += await bar_repo.bulk_insert_bars(all_rows, interval)
                         all_rows.clear()
 
             # Insert remaining rows
-            total_inserted = 0
             if all_rows:
-                total_inserted = await bar_repo.bulk_insert_bars(all_rows, interval)
+                total_inserted += await bar_repo.bulk_insert_bars(all_rows, interval)
 
             print(
                 f"\rPre-seed: 100% ({files_processed}/{total_files} files, {total_inserted} rows) -- done.                    ",
