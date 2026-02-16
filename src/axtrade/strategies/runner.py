@@ -1,6 +1,7 @@
 """Strategy runner service."""
 
 import asyncio
+import re
 import signal
 import uuid
 from typing import Optional
@@ -42,6 +43,7 @@ class StrategyRunner:
         self._control_supervisor: Optional[LoopSupervisor] = None
         self._consume_supervisor: Optional[LoopSupervisor] = None
         self._discovery_service = discovery_service
+        self._logged_errors: set[str] = set()
 
     async def start(self) -> None:
         """Start the strategy runner."""
@@ -332,7 +334,10 @@ class StrategyRunner:
                     # Process results
                     for result in results:
                         if isinstance(result, Exception):
-                            self.logger.error("Strategy execution error: %s", str(result))
+                            err_key = str(result)
+                            if err_key not in self._logged_errors:
+                                self._logged_errors.add(err_key)
+                                self.logger.error("Strategy execution error: %s", err_key)
                             continue
 
                         strategy, order = result
@@ -353,11 +358,14 @@ class StrategyRunner:
                                 strategy.clear_position(order.symbol)
 
                         except Exception as e:
-                            self.logger.error(
-                                "Order submission error: %s - %s",
-                                strategy.name,
-                                str(e),
-                            )
+                            err_key = re.sub(r"\$[\d,.]+", "$X", f"{strategy.name}: {e}")
+                            if err_key not in self._logged_errors:
+                                self._logged_errors.add(err_key)
+                                self.logger.warning(
+                                    "Order submission rejected: %s - %s",
+                                    strategy.name,
+                                    str(e),
+                                )
 
                     # Reset errors on successful iteration
                     self._consume_supervisor.reset_errors()

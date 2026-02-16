@@ -115,7 +115,7 @@ def run_command(args) -> None:
     from .orchestrator import FullBacktestOrchestrator
     from .types import FullBacktestConfig
 
-    setup_logging(log_name="fulltest")
+    setup_logging(level=args.log_level, log_name="fulltest")
     symbols = _resolve_symbols(args)
 
     bt_config = FullBacktestConfig(
@@ -201,6 +201,11 @@ def main() -> None:
     run_parser.add_argument(
         "--download", action="store_true",
         help="Auto-download missing data before running (default: skip download)"
+    )
+    run_parser.add_argument(
+        "--log-level", default="WARNING",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: WARNING)"
     )
 
     args = parser.parse_args()

@@ -186,6 +186,8 @@ class FullBacktestOrchestrator:
         replay = ReplayAdapter(
             data_dir=self._bt_config.data_dir,
             ticks_per_bar=self._bt_config.ticks_per_bar,
+            start_date=self._bt_config.start,
+            end_date=self._bt_config.end,
         )
 
         # Create services with isolated config

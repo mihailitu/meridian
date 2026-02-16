@@ -82,9 +82,12 @@ class PerformanceAnalyzer:
         if days > 0 and final_equity > 0 and initial_capital > 0:
             years = days / 365.0
             if years > 0:
-                annualized_return = (
-                    math.pow(float(final_equity / initial_capital), 1 / years) - 1
-                ) * 100
+                try:
+                    annualized_return = (
+                        math.pow(float(final_equity / initial_capital), 1 / years) - 1
+                    ) * 100
+                except OverflowError:
+                    annualized_return = float("inf") if final_equity > initial_capital else float("-inf")
             else:
                 annualized_return = 0.0
         else:

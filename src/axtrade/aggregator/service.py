@@ -209,7 +209,7 @@ class AggregatorService:
         """Log a completed bar."""
         from axtrade.indicators import MarketRegime
 
-        self.logger.info(
+        self.logger.debug(
             "bar",
             symbol=bar.symbol,
             interval=interval,

@@ -3,8 +3,9 @@
 import asyncio
 import heapq
 import json
+import sys
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -64,9 +65,13 @@ class ReplayAdapter(DataAdapter):
         self,
         data_dir: str,
         ticks_per_bar: int = 4,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
     ):
         self._data_dir = Path(data_dir)
         self._ticks_per_bar = max(ticks_per_bar, 4)
+        self._start_date = start_date
+        self._end_date = end_date
         self._manifest: Optional[dict] = None
         self._file_entries: list[tuple[str, Path]] = []
         self._symbols: list[str] = []
@@ -185,6 +190,14 @@ class ReplayAdapter(DataAdapter):
         Yields ticks without delay. Periodically yields control to the
         event loop for fairness.
         """
+        # Guard against repeated calls after replay is complete (the
+        # gateway's stream loop retries until stopped by the orchestrator).
+        # Park with an async sleep so we don't starve the event loop;
+        # the gateway will cancel us when it shuts down.
+        if self.completion_event.is_set():
+            await asyncio.sleep(86400)
+            return
+
         iterators = [
             _iter_file_bars(symbol, path)
             for symbol, path in self._file_entries
@@ -193,10 +206,32 @@ class ReplayAdapter(DataAdapter):
         tick_count = 0
         bar_count = 0
 
+        # Pre-compute date boundaries as UTC datetimes for fast comparison
+        start_dt = (
+            datetime.combine(self._start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            if self._start_date else None
+        )
+        end_dt = (
+            datetime.combine(self._end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            if self._end_date else None
+        )
+
         for bar_tuple in heapq.merge(*iterators):
             ts, symbol, o, h, l, c, vol = bar_tuple
+
+            # Filter bars outside the requested date range
+            if start_dt and ts < start_dt:
+                continue
+            if end_dt and ts >= end_dt:
+                continue
+
             ticks = self._make_ticks(symbol, ts, o, h, l, c, vol)
             bar_count += 1
+
+            if bar_count % 1000 == 0 and self.estimated_bars > 0:
+                pct = min(bar_count * 100 // self.estimated_bars, 99)
+                date_str = ts.strftime("%Y-%m-%d %H:%M")
+                print(f"\rProgress: {pct:3d}% ({bar_count} bars) | {symbol} {date_str}  ", end="", file=sys.stderr, flush=True)
 
             for tick in ticks:
                 yield tick
@@ -205,6 +240,9 @@ class ReplayAdapter(DataAdapter):
                 # Yield to event loop every 100 ticks
                 if tick_count % 100 == 0:
                     await asyncio.sleep(0)
+
+        if self.estimated_bars > 0:
+            print(f"\rProgress: 100% ({bar_count} bars) -- replay complete.                    ", file=sys.stderr)
 
         self.total_bars = bar_count
         self.total_ticks = tick_count

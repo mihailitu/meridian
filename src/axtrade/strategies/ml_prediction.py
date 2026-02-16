@@ -1,6 +1,5 @@
 """ML-based prediction strategy."""
 
-import asyncio
 from collections import deque
 from decimal import Decimal
 from typing import Optional
@@ -220,57 +219,42 @@ class MLPredictionStrategy(BaseStrategy):
 
         # Snapshot current training data so the background thread works on
         # an immutable copy while the deques keep collecting new observations.
-        train_features = list(features[: len(targets)])
+        train_features = list(features)[:len(targets)]
         train_targets = list(targets)
 
         self._training_in_progress[symbol] = True
 
         self.logger.info(
-            "Scheduling ML model training on background thread",
+            "Training ML model",
             symbol=symbol,
             samples=len(train_targets),
         )
 
-        # Fire-and-forget: hand the CPU-bound work to the default thread
-        # pool executor so the event loop stays responsive.
-        loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(
-            None, model.train, train_features, train_targets
-        )
-        future.add_done_callback(
-            lambda fut: self._on_training_done(symbol, fut)
-        )
-
-    def _on_training_done(self, symbol: str, future: "asyncio.Future") -> None:
-        """Callback invoked when background training completes.
-
-        Runs in the event loop thread (via add_done_callback) so it is safe
-        to touch strategy state here.
-        """
-        self._training_in_progress[symbol] = False
-
-        exc = future.exception()
-        if exc is not None:
+        # on_bar() is already running in a thread pool (via run_in_executor
+        # in StrategyRunner), so run training synchronously here rather than
+        # trying to schedule another executor from a non-event-loop thread.
+        try:
+            result = model.train(train_features, train_targets)
+            if result.success:
+                self.logger.info(
+                    "Model trained successfully",
+                    symbol=symbol,
+                    accuracy=round(result.test_accuracy * 100, 1),
+                )
+            else:
+                self.logger.warning(
+                    "Model training failed",
+                    symbol=symbol,
+                    error=result.error_message,
+                )
+        except Exception as exc:
             self.logger.error(
-                "Background model training failed with exception",
+                "Model training raised exception",
                 symbol=symbol,
                 error=str(exc),
             )
-            return
-
-        result = future.result()
-        if result.success:
-            self.logger.info(
-                "Model trained successfully (background)",
-                symbol=symbol,
-                accuracy=round(result.test_accuracy * 100, 1),
-            )
-        else:
-            self.logger.warning(
-                "Model training failed",
-                symbol=symbol,
-                error=result.error_message,
-            )
+        finally:
+            self._training_in_progress[symbol] = False
 
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
         """Process bar and generate orders based on ML predictions.

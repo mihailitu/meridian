@@ -150,7 +150,7 @@ class OrderManager:
         if not result.approved:
             order.status = OrderStatus.REJECTED
             await self._order_repo.insert(order)
-            self.logger.warning(
+            self.logger.debug(
                 "Order rejected by risk manager",
                 order_id=str(order.id),
                 reason=result.reason,
@@ -167,7 +167,7 @@ class OrderManager:
                     order.status = OrderStatus.REJECTED
                     await self._order_repo.insert(order)
                     reason = f"Max positions ({max_pos}) reached"
-                    self.logger.warning(
+                    self.logger.debug(
                         "Order rejected: max positions",
                         order_id=str(order.id),
                         open_positions=len(all_open),

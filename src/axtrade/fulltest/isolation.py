@@ -89,6 +89,7 @@ class BacktestInfrastructure:
 
         try:
             await self._run_schema(bt_conn)
+            await self._truncate_data(bt_conn)
         finally:
             await bt_conn.close()
 
@@ -141,6 +142,16 @@ class BacktestInfrastructure:
                             name=migration_name,
                             error=str(e),
                         )
+
+    async def _truncate_data(self, conn: asyncpg.Connection) -> None:
+        """Truncate data tables so each backtest starts clean."""
+        tables = ["fills", "orders", "positions", "bars"]
+        for table in tables:
+            try:
+                await conn.execute(f"TRUNCATE {table} CASCADE")
+            except Exception:
+                pass  # Table may not exist yet
+        logger.info("Truncated data tables for clean backtest")
 
     async def _flush_redis(self) -> None:
         """Flush the backtest Redis DB."""

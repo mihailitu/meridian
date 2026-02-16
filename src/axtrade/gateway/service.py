@@ -225,7 +225,7 @@ class GatewayService:
             tick: Tick data
             change: Price change from last tick
         """
-        logger.info(
+        logger.debug(
             "tick",
             symbol=tick.symbol,
             price=tick.price,
