@@ -192,7 +192,6 @@ class FullBacktestOrchestrator:
 
         # Create services with isolated config
         gateway = GatewayService(config, adapter=replay)
-        aggregator = AggregatorService(config)
         strategy_runner = StrategyRunner(config)
 
         # Set up discovery if enabled
@@ -211,6 +210,12 @@ class FullBacktestOrchestrator:
                 symbol_provider=symbol_provider,
                 scan_interval_bars=self._bt_config.discovery_scan_interval_bars,
             )
+
+        # Create aggregator with discovery callback wired in
+        aggregator = AggregatorService(
+            config,
+            on_bar_callback=discovery_runner.on_bar if discovery_runner else None,
+        )
 
         # Run gateway, aggregator, and strategy runner concurrently
         gateway_task = asyncio.create_task(gateway.start())
@@ -249,6 +254,7 @@ class FullBacktestOrchestrator:
         # Clean up discovery
         if discovery_runner and self._bt_config.discovery_enabled:
             result.discovery.total_scans = discovery_runner.scan_count
+            result.discovery.symbols_discovered = discovery_runner.total_matches
             await db_pool.disconnect()
 
         # Populate basic stats

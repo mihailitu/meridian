@@ -70,8 +70,12 @@ class ReportGenerator:
                 total_realized_pnl or 0
             )
 
-            # Get discovery results
-            result.discovery = await self._get_discovery_results(conn)
+            # Get discovery results from DB (supplements in-memory stats)
+            db_discovery = await self._get_discovery_results(conn)
+            if db_discovery.symbols_discovered > result.discovery.symbols_discovered:
+                result.discovery.symbols_discovered = db_discovery.symbols_discovered
+            if db_discovery.top_symbols:
+                result.discovery.top_symbols = db_discovery.top_symbols
 
             # Compute overall portfolio analytics
             overall = await compute_analytics(

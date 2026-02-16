@@ -24,14 +24,16 @@ from .engine import BarEngine
 class AggregatorService:
     """Consumes ticks and produces aggregated bars."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, on_bar_callback=None):
         """Initialize aggregator service.
 
         Args:
             config: Application configuration
+            on_bar_callback: Optional async callback invoked after each bar completes
         """
         self.config = config
         self.logger = get_logger("aggregator")
+        self._on_bar_callback = on_bar_callback
 
         self._consumer = RedisConsumer(config.redis, config.aggregator)
         self._publisher = BarPublisher(
@@ -197,6 +199,9 @@ class AggregatorService:
 
         # Print to console
         self._print_bar(bar, interval, result.sma_20, result.rsi_14, result.regime)
+
+        if self._on_bar_callback:
+            await self._on_bar_callback()
 
     def _print_bar(
         self,

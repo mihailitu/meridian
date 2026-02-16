@@ -107,6 +107,11 @@ class ReplayAdapter(DataAdapter):
         self._file_entries = []
         self.estimated_bars = 0
 
+        backtest_days = (
+            (self._end_date - self._start_date).days
+            if self._start_date and self._end_date else 0
+        )
+
         for file_info in self._manifest.get("files", []):
             symbol = file_info["symbol"]
             if symbol not in self._symbols:
@@ -118,7 +123,18 @@ class ReplayAdapter(DataAdapter):
                 continue
 
             self._file_entries.append((symbol, file_path))
-            self.estimated_bars += file_info.get("bar_count", 0)
+
+            raw_bars = file_info.get("bar_count", 0)
+            # Scale estimate by ratio of backtest range to file range
+            if backtest_days > 0 and file_info.get("start_date") and file_info.get("end_date"):
+                file_start = date.fromisoformat(file_info["start_date"])
+                file_end = date.fromisoformat(file_info["end_date"])
+                file_days = (file_end - file_start).days
+                if file_days > 0:
+                    scale = min(backtest_days / file_days, 1.0)
+                    raw_bars = int(raw_bars * scale)
+
+            self.estimated_bars += raw_bars
 
         logger.info(
             "Prepared files for replay",
