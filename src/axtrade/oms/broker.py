@@ -125,15 +125,12 @@ class PaperBroker(BrokerProtocol):
         # Get current price
         price = self._last_prices.get(order.symbol)
         if price is None:
-            self.logger.warning(
-                "No price available for symbol, using limit price or rejecting",
-                symbol=order.symbol,
-            )
             if order.limit_price:
                 price = order.limit_price
             else:
-                order.status = OrderStatus.REJECTED
-                return str(order.id)
+                raise RuntimeError(
+                    f"No price available for {order.symbol} and no limit price set"
+                )
 
         # Apply slippage
         slippage_mult = Decimal(str(1 + (self.slippage_bps / 10000)))

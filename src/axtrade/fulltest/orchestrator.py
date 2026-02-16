@@ -174,7 +174,12 @@ class FullBacktestOrchestrator:
         config.discovery.enabled = True
         config.discovery.min_score = 40.0
 
-        # Enable all strategies
+        # Enable all strategies with position sizing within risk limits.
+        # Default 100 shares * $500+ stocks exceeds max_position_value ($50K).
+        # Use a conservative share count that works for any S&P price level.
+        max_pos_value = float(config.oms.risk.max_position_value)
+        # Assume worst-case ~$1200/share (high-end S&P), stay well under limit
+        safe_position_size = int(max_pos_value / 1200)  # ~41 shares
         config.strategies.enabled = []
         for stype, sclass in STRATEGY_TYPES.items():
             config.strategies.enabled.append(
@@ -182,6 +187,7 @@ class FullBacktestOrchestrator:
                     type=stype,
                     id=f"{stype}-bt",
                     enabled=True,
+                    config={"position_size": safe_position_size},
                 )
             )
 

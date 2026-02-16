@@ -44,6 +44,7 @@ class StrategyRunner:
         self._consume_supervisor: Optional[LoopSupervisor] = None
         self._discovery_service = discovery_service
         self._logged_errors: set[str] = set()
+        self._current_trading_date: Optional[str] = None
 
     async def start(self) -> None:
         """Start the strategy runner."""
@@ -315,6 +316,20 @@ class StrategyRunner:
 
                     # Update price cache in order manager
                     self._order_manager.update_price(data.symbol, data.close)
+
+                    # Reset daily risk counters at day boundaries
+                    bar_date = data.bar.timestamp.strftime("%Y-%m-%d")
+                    if bar_date != self._current_trading_date:
+                        if self._current_trading_date is not None:
+                            rm = self._order_manager.risk_manager
+                            if rm:
+                                rm.reset_daily()
+                                self._logged_errors.clear()
+                                self.logger.info(
+                                    "New trading day, reset daily risk counters",
+                                    date=bar_date,
+                                )
+                        self._current_trading_date = bar_date
 
                     # Prepare strategy tasks
                     tasks = []

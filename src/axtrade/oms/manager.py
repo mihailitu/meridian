@@ -189,11 +189,14 @@ class OrderManager:
         )
 
         # Submit to broker
+        # Track open order BEFORE broker submission since PaperBroker
+        # fills synchronously (fill callback fires inside submit_order),
+        # which calls order_completed() to decrement the counter.
+        self._risk_manager.order_submitted()
         try:
             broker_order_id = await self._broker.submit_order(order)
             order.status = OrderStatus.SUBMITTED
             await self._order_repo.update(order)
-            self._risk_manager.order_submitted()
 
             self.logger.debug(
                 "Order sent to broker",
@@ -201,6 +204,7 @@ class OrderManager:
                 broker_order_id=broker_order_id,
             )
         except Exception as e:
+            self._risk_manager.order_completed()
             order.status = OrderStatus.REJECTED
             await self._order_repo.update(order)
             self.logger.error("Broker submission failed", error=str(e))
