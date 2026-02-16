@@ -310,6 +310,12 @@ def format_text_report(result: FullBacktestResult) -> str:
         lines.append("-" * 70)
         lines.append(f"  Total Scans:          {result.discovery.total_scans}")
         lines.append(f"  Symbols Discovered:   {result.discovery.symbols_discovered}")
+        lines.append(f"  Symbols Fed to GW:    {result.discovery.symbols_fed_to_gateway}")
+        if result.discovery.symbols_fed_list:
+            fed_str = ", ".join(result.discovery.symbols_fed_list[:20])
+            lines.append(f"  Fed Symbols:          {fed_str}")
+            if len(result.discovery.symbols_fed_list) > 20:
+                lines.append(f"                        ... and {len(result.discovery.symbols_fed_list) - 20} more")
         lines.append("")
 
     lines.append("=" * 70)
@@ -381,6 +387,8 @@ def format_json_report(result: FullBacktestResult) -> str:
         "discovery": {
             "total_scans": result.discovery.total_scans,
             "symbols_discovered": result.discovery.symbols_discovered,
+            "symbols_fed_to_gateway": result.discovery.symbols_fed_to_gateway,
+            "symbols_fed_list": result.discovery.symbols_fed_list,
         },
     }
     return json.dumps(data, indent=2)

@@ -75,6 +75,8 @@ class DiscoveryResultSummary:
 
     total_scans: int = 0
     symbols_discovered: int = 0
+    symbols_fed_to_gateway: int = 0
+    symbols_fed_list: list[str] = field(default_factory=list)
     screener_stats: dict[str, int] = field(default_factory=dict)
     top_symbols: list[dict] = field(default_factory=list)
 

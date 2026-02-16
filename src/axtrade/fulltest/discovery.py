@@ -88,9 +88,16 @@ class BacktestDiscoveryRunner:
         min_score = self._config.discovery.min_score
         discovered = self._discovery_service.get_discovered(
             min_score=min_score,
-            bullish_only=True,
+            bullish_only=False,
         )
         discovered_names = {s.symbol for s in discovered}
+
+        logger.debug(
+            "Discovery feed check",
+            min_score=min_score,
+            total_discovered=len(discovered),
+            symbols=sorted(discovered_names) if discovered_names else [],
+        )
 
         # Static symbols from gateway config should never be removed
         static_symbols = {s.symbol for s in self._config.gateway.symbols}
@@ -116,6 +123,9 @@ class BacktestDiscoveryRunner:
                 )
             except Exception as e:
                 logger.error("Failed to add symbols to gateway", error=str(e))
+
+        if not new_symbols and not discovered_names:
+            logger.debug("No symbols passed discovery filter")
 
         if stale_symbols:
             try:

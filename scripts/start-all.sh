@@ -24,25 +24,25 @@ fi
 
 # Start Gateway (logs to logs/gateway.log with daily rotation)
 echo "Starting Gateway..."
-$VENV -m axtrade.gateway > /dev/null 2>&1 &
+$VENV -m axtrade.gateway --adapter alpaca >> "$LOG_DIR/gateway.log" 2>&1 &
 echo $! > "$LOG_DIR/gateway.pid"
 echo "  PID: $(cat $LOG_DIR/gateway.pid)"
 
 # Start Aggregator (logs to logs/aggregator.log with daily rotation)
 echo "Starting Aggregator..."
-$VENV -m axtrade.aggregator > /dev/null 2>&1 &
+$VENV -m axtrade.aggregator >> "$LOG_DIR/aggregator.log" 2>&1 &
 echo $! > "$LOG_DIR/aggregator.pid"
 echo "  PID: $(cat $LOG_DIR/aggregator.pid)"
 
 # Start Strategy Runner (logs to logs/strategy.log with daily rotation)
 echo "Starting Strategy Runner..."
-$VENV -m axtrade.strategies > /dev/null 2>&1 &
+$VENV -m axtrade.strategies >> "$LOG_DIR/strategy.log" 2>&1 &
 echo $! > "$LOG_DIR/strategy.pid"
 echo "  PID: $(cat $LOG_DIR/strategy.pid)"
 
 # Start API (logs to logs/api.log with daily rotation)
 echo "Starting API..."
-$VENV -m axtrade.api.app > /dev/null 2>&1 &
+$VENV -m axtrade.api.app >> "$LOG_DIR/api.log" 2>&1 &
 echo $! > "$LOG_DIR/api.pid"
 echo "  PID: $(cat $LOG_DIR/api.pid)"
 
