@@ -4,7 +4,9 @@ import asyncio
 import heapq
 import json
 import sys
+import threading
 from collections.abc import AsyncIterator
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -49,6 +51,21 @@ def _iter_file_bars(symbol: str, path: Path):
     del table
 
 
+@dataclass(order=False)
+class _HeapEntry:
+    """Wrapper for heap items that compares by (timestamp, index) to avoid
+    tuple comparison issues when timestamps are equal."""
+    timestamp: datetime
+    idx: int
+    bar_tuple: tuple
+    iterator: object = field(repr=False, compare=False)
+
+    def __lt__(self, other: "_HeapEntry") -> bool:
+        if self.timestamp != other.timestamp:
+            return self.timestamp < other.timestamp
+        return self.idx < other.idx
+
+
 class ReplayAdapter(DataAdapter):
     """DataAdapter that replays historical parquet data as synthetic ticks.
 
@@ -58,7 +75,8 @@ class ReplayAdapter(DataAdapter):
       - Bearish bar (close < open): O -> H -> L -> C
 
     Uses a heap-based streaming merge across parquet files to avoid loading
-    all data into memory at once.
+    all data into memory at once. Supports dynamic add_symbols() for
+    discovery-driven symbol injection during replay.
     """
 
     def __init__(
@@ -80,6 +98,13 @@ class ReplayAdapter(DataAdapter):
         self.estimated_bars = 0
         self.total_bars = 0
         self.total_ticks = 0
+
+        # Dynamic symbol support
+        self._pending_symbols: list[tuple[str, Path]] = []
+        self._pending_lock = threading.Lock()
+        self._current_ts: Optional[datetime] = None
+        self._next_idx = 0
+        self._dynamic_symbols_added: list[str] = []
 
     async def connect(self) -> None:
         """Load manifest and prepare data."""
@@ -143,6 +168,67 @@ class ReplayAdapter(DataAdapter):
             estimated_bars=self.estimated_bars,
         )
 
+    async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
+        """Dynamically add symbols to the replay during streaming.
+
+        Looks up the parquet file for each symbol in the manifest and queues
+        it for the main stream_ticks loop to pick up.
+        """
+        if not self._manifest:
+            return
+
+        # Build a quick lookup: symbol -> file_info
+        manifest_lookup = {
+            fi["symbol"]: fi for fi in self._manifest.get("files", [])
+        }
+
+        added = []
+        for sym_config in symbols:
+            sym = sym_config.symbol
+            file_info = manifest_lookup.get(sym)
+            if not file_info:
+                logger.debug("No parquet file for dynamic symbol", symbol=sym)
+                continue
+
+            file_path = self._data_dir / file_info["filename"]
+            if not file_path.exists():
+                logger.debug("Missing parquet file for dynamic symbol", symbol=sym, path=str(file_path))
+                continue
+
+            with self._pending_lock:
+                self._pending_symbols.append((sym, file_path))
+            added.append(sym)
+
+        if added:
+            logger.info("Queued dynamic symbols for replay", symbols=added)
+
+    def _has_pending(self) -> bool:
+        with self._pending_lock:
+            return len(self._pending_symbols) > 0
+
+    def _drain_pending(self) -> list[tuple[str, Path]]:
+        with self._pending_lock:
+            drained = list(self._pending_symbols)
+            self._pending_symbols.clear()
+        return drained
+
+    def _advance_iterator(self, it) -> Optional[tuple]:
+        """Get the next bar tuple from an iterator, or None if exhausted."""
+        try:
+            return next(it)
+        except StopIteration:
+            return None
+
+    def _fast_forward_iterator(self, it, target_ts: datetime, end_dt: Optional[datetime]) -> Optional[tuple]:
+        """Advance iterator past bars before target_ts and return the first valid bar."""
+        for bar_tuple in it:
+            ts = bar_tuple[0]
+            if end_dt and ts >= end_dt:
+                return None
+            if ts >= target_ts:
+                return bar_tuple
+        return None
+
     def _make_ticks(self, symbol: str, ts: datetime,
                     o: float, h: float, l: float, c: float,
                     vol: int) -> list[Tick]:
@@ -201,26 +287,16 @@ class ReplayAdapter(DataAdapter):
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Stream synthetic ticks from historical data.
 
-        Uses heapq.merge() across per-file iterators for chronological
-        ordering without loading all data into memory.
+        Uses a manual heap across per-file iterators for chronological
+        ordering without loading all data into memory. Supports dynamic
+        symbol injection via add_symbols() during replay.
         Yields ticks without delay. Periodically yields control to the
         event loop for fairness.
         """
-        # Guard against repeated calls after replay is complete (the
-        # gateway's stream loop retries until stopped by the orchestrator).
-        # Park with an async sleep so we don't starve the event loop;
-        # the gateway will cancel us when it shuts down.
+        # Guard against repeated calls after replay is complete
         if self.completion_event.is_set():
             await asyncio.sleep(86400)
             return
-
-        iterators = [
-            _iter_file_bars(symbol, path)
-            for symbol, path in self._file_entries
-        ]
-
-        tick_count = 0
-        bar_count = 0
 
         # Pre-compute date boundaries as UTC datetimes for fast comparison
         start_dt = (
@@ -232,14 +308,77 @@ class ReplayAdapter(DataAdapter):
             if self._end_date else None
         )
 
-        for bar_tuple in heapq.merge(*iterators):
+        loop = asyncio.get_running_loop()
+
+        # Initialize heap from initial file entries
+        heap: list[_HeapEntry] = []
+        for symbol, path in self._file_entries:
+            it = _iter_file_bars(symbol, path)
+            if start_dt:
+                bar_tuple = await loop.run_in_executor(
+                    None, self._fast_forward_iterator, it, start_dt, end_dt
+                )
+            else:
+                bar_tuple = self._advance_iterator(it)
+            if bar_tuple is not None:
+                entry = _HeapEntry(
+                    timestamp=bar_tuple[0],
+                    idx=self._next_idx,
+                    bar_tuple=bar_tuple,
+                    iterator=it,
+                )
+                self._next_idx += 1
+                heapq.heappush(heap, entry)
+
+        tick_count = 0
+        bar_count = 0
+
+        while heap or self._has_pending():
+            # Drain any pending dynamic symbols onto the heap
+            pending = self._drain_pending()
+            for sym, path in pending:
+                it = _iter_file_bars(sym, path)
+                # Fast-forward past already-replayed timestamps
+                ff_ts = self._current_ts or start_dt
+                if ff_ts:
+                    bar_tuple = await loop.run_in_executor(
+                        None, self._fast_forward_iterator, it, ff_ts, end_dt
+                    )
+                else:
+                    bar_tuple = self._advance_iterator(it)
+                if bar_tuple is not None:
+                    entry = _HeapEntry(
+                        timestamp=bar_tuple[0],
+                        idx=self._next_idx,
+                        bar_tuple=bar_tuple,
+                        iterator=it,
+                    )
+                    self._next_idx += 1
+                    heapq.heappush(heap, entry)
+                    self._dynamic_symbols_added.append(sym)
+                    logger.info(
+                        "Dynamic symbol joined replay",
+                        symbol=sym,
+                        start_ts=str(bar_tuple[0]),
+                    )
+
+            if not heap:
+                # No items on heap but pending might arrive later
+                await asyncio.sleep(0.1)
+                continue
+
+            # Pop the earliest entry
+            entry = heapq.heappop(heap)
+            bar_tuple = entry.bar_tuple
             ts, symbol, o, h, l, c, vol = bar_tuple
 
             # Filter bars outside the requested date range
-            if start_dt and ts < start_dt:
-                continue
             if end_dt and ts >= end_dt:
+                # This iterator is past the end -- don't re-push
+                # But keep draining the heap
                 continue
+
+            self._current_ts = ts
 
             ticks = self._make_ticks(symbol, ts, o, h, l, c, vol)
             bar_count += 1
@@ -257,6 +396,20 @@ class ReplayAdapter(DataAdapter):
                 if tick_count % 100 == 0:
                     await asyncio.sleep(0)
 
+            # Advance the iterator and push back onto heap
+            next_bar = self._advance_iterator(entry.iterator)
+            if next_bar is not None:
+                ts_next = next_bar[0]
+                if not (end_dt and ts_next >= end_dt):
+                    new_entry = _HeapEntry(
+                        timestamp=ts_next,
+                        idx=self._next_idx,
+                        bar_tuple=next_bar,
+                        iterator=entry.iterator,
+                    )
+                    self._next_idx += 1
+                    heapq.heappush(heap, new_entry)
+
         if self.estimated_bars > 0:
             print(f"\rProgress: 100% ({bar_count} bars) -- replay complete.                    ", file=sys.stderr)
 
@@ -266,6 +419,7 @@ class ReplayAdapter(DataAdapter):
             "Replay complete",
             total_bars=self.total_bars,
             total_ticks=tick_count,
+            dynamic_symbols=len(self._dynamic_symbols_added),
         )
         self.completion_event.set()
 

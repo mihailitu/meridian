@@ -285,6 +285,65 @@ class BarRepository:
             for row in reversed(rows)
         ]
 
+    async def bulk_insert_bars(
+        self,
+        rows: list[tuple],
+        interval: str,
+    ) -> int:
+        """Bulk insert bars using a staging table and INSERT ... ON CONFLICT DO NOTHING.
+
+        Args:
+            rows: List of 9-tuples (timestamp, symbol, open, high, low, close, volume, sma_20, rsi_14)
+            interval: Bar interval (1m, 5m, etc.) -- prepended to each row
+
+        Returns:
+            Number of rows inserted
+        """
+        if not rows:
+            return 0
+
+        # Build 10-column records: (time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14)
+        records = [
+            (r[0], r[1], interval, r[2], r[3], r[4], r[5], r[6], r[7], r[8])
+            for r in rows
+        ]
+
+        async with self.pool.acquire() as conn:
+            # Create temp staging table
+            await conn.execute("""
+                CREATE TEMP TABLE _bars_stage (
+                    time TIMESTAMPTZ,
+                    symbol TEXT,
+                    interval TEXT,
+                    open NUMERIC,
+                    high NUMERIC,
+                    low NUMERIC,
+                    close NUMERIC,
+                    volume BIGINT,
+                    sma_20 NUMERIC,
+                    rsi_14 NUMERIC
+                ) ON COMMIT DROP
+            """)
+
+            # Bulk copy into staging table
+            await conn.copy_records_to_table(
+                "_bars_stage",
+                records=records,
+                columns=["time", "symbol", "interval", "open", "high", "low", "close", "volume", "sma_20", "rsi_14"],
+            )
+
+            # Upsert from staging into real table
+            result = await conn.execute("""
+                INSERT INTO bars (time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14)
+                SELECT time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14
+                FROM _bars_stage
+                ON CONFLICT (symbol, interval, time) DO NOTHING
+            """)
+
+            # Parse inserted count from "INSERT 0 N"
+            inserted = int(result.split()[-1]) if result else 0
+            return inserted
+
     async def get_bars_since(
         self,
         symbol: str,

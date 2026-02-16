@@ -1,10 +1,13 @@
 """Bar-count-driven discovery runner for backtest."""
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from axtrade.common import Config, get_logger
+from axtrade.common import Config, SymbolConfig, get_logger
 from axtrade.discovery.providers import SymbolProvider
 from axtrade.discovery.service import DiscoveryService
+
+if TYPE_CHECKING:
+    from axtrade.gateway.control import GatewayControlPublisher
 
 logger = get_logger("fulltest.discovery")
 
@@ -14,6 +17,8 @@ class BacktestDiscoveryRunner:
 
     In a backtest, time moves at replay speed. This runner triggers
     scans every N bars (configurable) instead of every N seconds.
+    When gateway_control is provided and auto_subscribe is enabled,
+    feeds discovered symbols to the gateway for dynamic replay.
     """
 
     def __init__(
@@ -22,14 +27,18 @@ class BacktestDiscoveryRunner:
         discovery_service: DiscoveryService,
         symbol_provider: SymbolProvider,
         scan_interval_bars: int = 60,
+        gateway_control: Optional["GatewayControlPublisher"] = None,
     ):
         self._config = config
         self._discovery_service = discovery_service
         self._symbol_provider = symbol_provider
         self._scan_interval_bars = scan_interval_bars
+        self._gateway_control = gateway_control
         self._bar_count = 0
         self._scan_count = 0
         self._total_matches = 0
+        self._subscribed_symbols: set[str] = set()
+        self._symbols_fed: list[str] = []
 
     async def on_bar(self) -> None:
         """Called after each bar is processed by the aggregator.
@@ -67,6 +76,58 @@ class BacktestDiscoveryRunner:
             matches=total_matches,
         )
 
+        # Feed discovered symbols to gateway if configured
+        if self._gateway_control and self._config.discovery.auto_subscribe:
+            await self._feed_gateway()
+
+    async def _feed_gateway(self) -> None:
+        """Push discovered symbols to gateway for dynamic subscription."""
+        if not self._gateway_control:
+            return
+
+        min_score = self._config.discovery.min_score
+        discovered = self._discovery_service.get_discovered(
+            min_score=min_score,
+            bullish_only=True,
+        )
+        discovered_names = {s.symbol for s in discovered}
+
+        # Static symbols from gateway config should never be removed
+        static_symbols = {s.symbol for s in self._config.gateway.symbols}
+
+        # New symbols to add (discovered but not yet subscribed, not static)
+        new_symbols = discovered_names - self._subscribed_symbols - static_symbols
+        # Stale symbols to remove (previously subscribed but no longer discovered, not static)
+        stale_symbols = self._subscribed_symbols - discovered_names - static_symbols
+
+        if new_symbols:
+            configs = [
+                SymbolConfig(symbol=sym, base_price=100.0)
+                for sym in new_symbols
+            ]
+            try:
+                await self._gateway_control.add_symbols(configs)
+                self._subscribed_symbols |= new_symbols
+                self._symbols_fed.extend(new_symbols)
+                logger.info(
+                    "Fed discovered symbols to gateway",
+                    symbols=sorted(new_symbols),
+                    total_fed=len(self._symbols_fed),
+                )
+            except Exception as e:
+                logger.error("Failed to add symbols to gateway", error=str(e))
+
+        if stale_symbols:
+            try:
+                await self._gateway_control.remove_symbols(list(stale_symbols))
+                self._subscribed_symbols -= stale_symbols
+                logger.info(
+                    "Removed stale symbols from gateway",
+                    symbols=sorted(stale_symbols),
+                )
+            except Exception as e:
+                logger.error("Failed to remove symbols from gateway", error=str(e))
+
     @property
     def scan_count(self) -> int:
         return self._scan_count
@@ -74,3 +135,7 @@ class BacktestDiscoveryRunner:
     @property
     def total_matches(self) -> int:
         return self._total_matches
+
+    @property
+    def symbols_fed(self) -> list[str]:
+        return list(self._symbols_fed)

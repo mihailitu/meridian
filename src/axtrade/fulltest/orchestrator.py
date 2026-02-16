@@ -2,11 +2,17 @@
 
 import asyncio
 import copy
-from datetime import datetime, timezone
+import json
+import sys
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 
+import pyarrow.parquet as pq
+
 from axtrade.common import (
+    BarRepository,
     Config,
     DatabasePool,
     StrategyInstanceConfig,
@@ -16,6 +22,7 @@ from axtrade.common import (
 )
 from axtrade.aggregator.service import AggregatorService
 from axtrade.discovery.service import DiscoveryService
+from axtrade.gateway.control import GatewayControlPublisher
 from axtrade.gateway.service import GatewayService
 from axtrade.strategies import STRATEGY_TYPES
 from axtrade.strategies.runner import StrategyRunner
@@ -77,6 +84,10 @@ class FullBacktestOrchestrator:
         await infra.setup()
 
         try:
+            # Step 2.5: Pre-seed universe bars if discovery is enabled
+            if self._bt_config.discovery_enabled:
+                await self._preseed_universe_bars(config)
+
             # Step 3: Create and run services
             result = await self._run_services(config)
         finally:
@@ -152,6 +163,13 @@ class FullBacktestOrchestrator:
         config.strategies.consumer_group = f"{self._bt_config.consumer_group_prefix}strategies"
         config.strategies.control_channel = f"bt:axtrade:strategy:control"
 
+        # Gateway control channel isolation
+        config.gateway.control_channel = "bt:axtrade:gateway:control"
+
+        # Discovery settings
+        config.discovery.auto_subscribe = True
+        config.discovery.enabled = True
+
         # Enable all strategies
         config.strategies.enabled = []
         for stype, sclass in STRATEGY_TYPES.items():
@@ -174,6 +192,134 @@ class FullBacktestOrchestrator:
 
         return config
 
+    async def _preseed_universe_bars(self, config: Config) -> None:
+        """Pre-seed TimescaleDB with bars from all parquet files in the manifest.
+
+        This gives the discovery service data to scan against for the full
+        S&P universe, not just the user-specified backtest symbols.
+        """
+        data_dir = Path(self._bt_config.data_dir)
+        manifest_path = data_dir / "manifest.json"
+
+        if not manifest_path.exists():
+            logger.warning("No manifest found, skipping universe pre-seed")
+            return
+
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        files = manifest.get("files", [])
+        if not files:
+            logger.info("No files in manifest, skipping pre-seed")
+            return
+
+        # Connect to the backtest DB
+        db_pool = DatabasePool(config.database)
+        await db_pool.connect()
+        bar_repo = BarRepository(db_pool)
+
+        start_dt = datetime.combine(
+            self._bt_config.start, datetime.min.time()
+        ).replace(tzinfo=timezone.utc)
+        end_dt = datetime.combine(
+            self._bt_config.end, datetime.min.time()
+        ).replace(tzinfo=timezone.utc)
+
+        total_inserted = 0
+        files_processed = 0
+        total_files = len(files)
+
+        print(f"Pre-seeding universe bars ({total_files} files)...", file=sys.stderr, flush=True)
+
+        try:
+            for file_info in files:
+                symbol = file_info["symbol"]
+                interval = file_info.get("interval", "1m")
+                file_path = data_dir / file_info["filename"]
+
+                if not file_path.exists():
+                    files_processed += 1
+                    continue
+
+                try:
+                    table = pq.read_table(file_path)
+                    columns = set(table.column_names)
+
+                    has_sma = "sma_20" in columns
+                    has_rsi = "rsi_14" in columns
+
+                    rows = []
+                    n_rows = table.num_rows
+                    batch_size = 10000
+
+                    for offset in range(0, n_rows, batch_size):
+                        batch = table.slice(offset, min(batch_size, n_rows - offset))
+                        ts_col = batch.column("timestamp").to_pylist()
+                        open_col = batch.column("open").to_pylist()
+                        high_col = batch.column("high").to_pylist()
+                        low_col = batch.column("low").to_pylist()
+                        close_col = batch.column("close").to_pylist()
+                        vol_col = batch.column("volume").to_pylist()
+                        sma_col = batch.column("sma_20").to_pylist() if has_sma else [None] * len(ts_col)
+                        rsi_col = batch.column("rsi_14").to_pylist() if has_rsi else [None] * len(ts_col)
+
+                        for i in range(len(ts_col)):
+                            ts = ts_col[i]
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+
+                            # Filter to backtest date range
+                            if ts < start_dt or ts >= end_dt:
+                                continue
+
+                            sma_val = sma_col[i]
+                            rsi_val = rsi_col[i]
+
+                            rows.append((
+                                ts,
+                                symbol,
+                                Decimal(str(float(open_col[i]))),
+                                Decimal(str(float(high_col[i]))),
+                                Decimal(str(float(low_col[i]))),
+                                Decimal(str(float(close_col[i]))),
+                                int(vol_col[i]),
+                                Decimal(str(float(sma_val))) if sma_val is not None else None,
+                                Decimal(str(float(rsi_val))) if rsi_val is not None else None,
+                            ))
+
+                    del table
+
+                    if rows:
+                        inserted = await bar_repo.bulk_insert_bars(rows, interval)
+                        total_inserted += inserted
+
+                except Exception as e:
+                    logger.debug(
+                        "Failed to pre-seed file",
+                        symbol=symbol,
+                        error=str(e),
+                    )
+
+                files_processed += 1
+                if total_files > 0:
+                    pct = files_processed * 100 // total_files
+                    print(
+                        f"\rPre-seed: {pct:3d}% ({files_processed}/{total_files} files) | {symbol} ({total_inserted} rows)  ",
+                        end="", file=sys.stderr, flush=True,
+                    )
+
+            print(
+                f"\rPre-seed: 100% ({files_processed}/{total_files} files, {total_inserted} rows) -- done.                    ",
+                file=sys.stderr,
+            )
+            logger.info(
+                "Universe pre-seed complete",
+                files_processed=files_processed,
+                total_rows_inserted=total_inserted,
+            )
+        finally:
+            await db_pool.disconnect()
+
     async def _run_services(self, config: Config) -> FullBacktestResult:
         """Create and run all services, wait for completion."""
         result = FullBacktestResult(
@@ -192,10 +338,13 @@ class FullBacktestOrchestrator:
 
         # Create services with isolated config
         gateway = GatewayService(config, adapter=replay)
-        strategy_runner = StrategyRunner(config)
 
-        # Set up discovery if enabled
+        # Set up discovery and gateway control before strategy runner
         discovery_runner: Optional[BacktestDiscoveryRunner] = None
+        discovery_service: Optional[DiscoveryService] = None
+        gateway_control: Optional[GatewayControlPublisher] = None
+        db_pool: Optional[DatabasePool] = None
+
         if self._bt_config.discovery_enabled:
             db_pool = DatabasePool(config.database)
             await db_pool.connect()
@@ -203,13 +352,21 @@ class FullBacktestOrchestrator:
             discovery_service = DiscoveryService(db_pool=db_pool)
             await discovery_service.connect()
 
+            # Create gateway control publisher for feeding discovered symbols
+            gateway_control = GatewayControlPublisher(config.redis, config.gateway)
+            await gateway_control.connect()
+
             symbol_provider = SP500SymbolProvider()
             discovery_runner = BacktestDiscoveryRunner(
                 config=config,
                 discovery_service=discovery_service,
                 symbol_provider=symbol_provider,
                 scan_interval_bars=self._bt_config.discovery_scan_interval_bars,
+                gateway_control=gateway_control,
             )
+
+        # Create strategy runner with discovery service injected
+        strategy_runner = StrategyRunner(config, discovery_service=discovery_service)
 
         # Create aggregator with discovery callback wired in
         aggregator = AggregatorService(
@@ -251,10 +408,15 @@ class FullBacktestOrchestrator:
                 except asyncio.CancelledError:
                     pass
 
-        # Clean up discovery
+        # Clean up discovery and gateway control
         if discovery_runner and self._bt_config.discovery_enabled:
             result.discovery.total_scans = discovery_runner.scan_count
             result.discovery.symbols_discovered = discovery_runner.total_matches
+
+        if gateway_control:
+            await gateway_control.disconnect()
+
+        if db_pool:
             await db_pool.disconnect()
 
         # Populate basic stats
