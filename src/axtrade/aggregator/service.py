@@ -60,6 +60,11 @@ class AggregatorService:
         # Redis publish buffer for batched bar publishing
         self._publish_buffer: list[tuple] = []
 
+        # Periodic flush task
+        self._flush_task: asyncio.Task | None = None
+        self._db_flush_interval = 5.0  # seconds
+        self._publish_flush_interval = 0.05  # 50ms
+
         # Track symbols that have been warmed up for indicators
         self._warmed_symbols: set[str] = set()
 
@@ -92,6 +97,7 @@ class AggregatorService:
         )
 
         self._running = True
+        self._flush_task = asyncio.create_task(self._periodic_flush_loop())
         await self._consume_loop()
 
     async def _warmup_indicators(self) -> None:
@@ -117,25 +123,47 @@ class AggregatorService:
             self.config.indicators.rsi_period + 1,
         ) + 5
 
-        for symbol in symbols:
-            for interval in self.config.aggregator.intervals:
+        sem = asyncio.Semaphore(10)
+
+        async def warmup_one(symbol: str, interval: str) -> tuple[str, str, list[float]]:
+            async with sem:
                 closes = await self._bar_repo.get_recent_closes(
                     symbol, interval, warmup_count
                 )
-                if closes:
-                    self._indicator_engine.initialize_buffer(symbol, interval, closes)
-                    self.logger.debug(
-                        "Warmed up %s %s buffer with %d prices",
-                        symbol,
-                        interval,
-                        len(closes),
-                    )
+                return symbol, interval, closes or []
+
+        tasks = [
+            warmup_one(symbol, interval)
+            for symbol in symbols
+            for interval in self.config.aggregator.intervals
+        ]
+        results = await asyncio.gather(*tasks)
+
+        for symbol, interval, closes in results:
+            if closes:
+                self._indicator_engine.initialize_buffer(symbol, interval, closes)
+                self.logger.debug(
+                    "Warmed up %s %s buffer with %d prices",
+                    symbol,
+                    interval,
+                    len(closes),
+                )
+
+        for symbol in symbols:
             self._warmed_symbols.add(symbol)
 
     async def stop(self) -> None:
         """Stop the aggregator service."""
         self.logger.info("Stopping aggregator service...")
         self._running = False
+
+        if self._flush_task:
+            self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+            self._flush_task = None
 
         if self._consume_supervisor:
             self._consume_supervisor.stop()
@@ -181,6 +209,25 @@ class AggregatorService:
 
         self._publish_buffer.clear()
 
+    async def _periodic_flush_loop(self) -> None:
+        """Periodically flush publish and DB buffers.
+
+        Publish buffer is flushed every 50ms to naturally batch bars that
+        complete at the same boundary. DB bar buffer gets a safety flush
+        every 5s to avoid data loss on crash.
+        """
+        db_elapsed = 0.0
+        interval = self._publish_flush_interval
+        while self._running:
+            await asyncio.sleep(interval)
+            if self._publish_buffer:
+                await self._flush_publish_buffer()
+            db_elapsed += interval
+            if db_elapsed >= self._db_flush_interval:
+                db_elapsed = 0.0
+                if self._bar_buffer:
+                    await self._flush_bar_buffer()
+
     async def _consume_loop(self) -> None:
         """Main consumption loop."""
         if not self._consume_supervisor:
@@ -199,10 +246,6 @@ class AggregatorService:
                     completed = self._engine.process_tick(tick)
                     for bar, interval in completed:
                         await self._process_completed_bar(bar, interval)
-
-                    # Flush any buffered bar publishes after processing tick batch
-                    if self._publish_buffer:
-                        await self._flush_publish_buffer()
 
                     # Reset errors on successful iteration
                     self._consume_supervisor.reset_errors()

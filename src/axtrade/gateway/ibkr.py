@@ -30,6 +30,7 @@ class IBKRAdapter(DataAdapter):
         self._contracts: dict[str, object] = {}
         self._tick_queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=50_000)
         self._running = False
+        self._dropped_ticks: int = 0
 
     async def connect(self) -> None:
         """Connect to TWS/IB Gateway."""
@@ -86,6 +87,14 @@ class IBKRAdapter(DataAdapter):
                 logger.info("subscribed", symbol=symbol_config.symbol)
             else:
                 logger.warning("failed_to_qualify", symbol=symbol_config.symbol)
+
+        if len(self._contracts) > 100:
+            logger.warning(
+                "ibkr_streaming_lines_limit",
+                active_lines=len(self._contracts),
+                msg="IBKR limits concurrent streaming to 100 lines by default. "
+                    "Request additional market data subscriptions if needed.",
+            )
 
     async def subscribe(self, symbols: list[SymbolConfig]) -> None:
         """Subscribe to market data.
@@ -155,7 +164,13 @@ class IBKRAdapter(DataAdapter):
                 try:
                     self._tick_queue.put_nowait(tick)
                 except asyncio.QueueFull:
-                    pass
+                    self._dropped_ticks += 1
+                    if self._dropped_ticks % 1000 == 0:
+                        logger.warning(
+                            "tick_queue_full",
+                            dropped_total=self._dropped_ticks,
+                            queue_size=self._tick_queue.maxsize,
+                        )
 
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Stream ticks from IBKR.
