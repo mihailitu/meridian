@@ -5,7 +5,7 @@ import heapq
 import json
 import sys
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -13,7 +13,7 @@ from typing import Optional
 
 import pyarrow.parquet as pq
 
-from axtrade.common import SymbolConfig, Tick, get_logger
+from axtrade.common import Bar, SymbolConfig, Tick, get_logger
 from axtrade.gateway.base import DataAdapter
 
 logger = get_logger("fulltest.replay")
@@ -419,6 +419,146 @@ class ReplayAdapter(DataAdapter):
             "Replay complete",
             total_bars=self.total_bars,
             total_ticks=tick_count,
+            dynamic_symbols=len(self._dynamic_symbols_added),
+        )
+        self.completion_event.set()
+
+    def add_symbols_sync(self, symbols: list[str]) -> None:
+        """Synchronously queue symbols for injection into stream_bars().
+
+        Used by the direct pipeline when discovery finds new symbols.
+        Looks up parquet files in the manifest and queues them.
+        """
+        if not self._manifest:
+            return
+
+        manifest_lookup = {
+            fi["symbol"]: fi for fi in self._manifest.get("files", [])
+        }
+
+        for sym in symbols:
+            file_info = manifest_lookup.get(sym)
+            if not file_info:
+                continue
+            file_path = self._data_dir / file_info["filename"]
+            if not file_path.exists():
+                continue
+            with self._pending_lock:
+                self._pending_symbols.append((sym, file_path))
+
+    def stream_bars(self) -> Iterator[Bar]:
+        """Synchronous generator that yields Bar objects directly from parquet.
+
+        Heap-merges across all symbol files by timestamp, same ordering
+        as stream_ticks() but skipping tick generation entirely.
+        Supports dynamic symbol injection via add_symbols_sync().
+        """
+        start_dt = (
+            datetime.combine(self._start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            if self._start_date else None
+        )
+        end_dt = (
+            datetime.combine(self._end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+            if self._end_date else None
+        )
+
+        # Initialize heap from initial file entries
+        heap: list[_HeapEntry] = []
+        for symbol, path in self._file_entries:
+            it = _iter_file_bars(symbol, path)
+            if start_dt:
+                bar_tuple = self._fast_forward_iterator(it, start_dt, end_dt)
+            else:
+                bar_tuple = self._advance_iterator(it)
+            if bar_tuple is not None:
+                entry = _HeapEntry(
+                    timestamp=bar_tuple[0],
+                    idx=self._next_idx,
+                    bar_tuple=bar_tuple,
+                    iterator=it,
+                )
+                self._next_idx += 1
+                heapq.heappush(heap, entry)
+
+        bar_count = 0
+
+        while heap or self._has_pending():
+            # Drain any pending dynamic symbols onto the heap
+            pending = self._drain_pending()
+            for sym, path in pending:
+                it = _iter_file_bars(sym, path)
+                ff_ts = self._current_ts or start_dt
+                if ff_ts:
+                    bar_tuple = self._fast_forward_iterator(it, ff_ts, end_dt)
+                else:
+                    bar_tuple = self._advance_iterator(it)
+                if bar_tuple is not None:
+                    entry = _HeapEntry(
+                        timestamp=bar_tuple[0],
+                        idx=self._next_idx,
+                        bar_tuple=bar_tuple,
+                        iterator=it,
+                    )
+                    self._next_idx += 1
+                    heapq.heappush(heap, entry)
+                    self._dynamic_symbols_added.append(sym)
+                    logger.info(
+                        "Dynamic symbol joined replay",
+                        symbol=sym,
+                        start_ts=str(bar_tuple[0]),
+                    )
+
+            if not heap:
+                break
+
+            entry = heapq.heappop(heap)
+            bar_tuple = entry.bar_tuple
+            ts, symbol, o, h, l, c, vol = bar_tuple
+
+            if end_dt and ts >= end_dt:
+                continue
+
+            self._current_ts = ts
+            bar_count += 1
+
+            if bar_count % 1000 == 0 and self.estimated_bars > 0:
+                pct = min(bar_count * 100 // self.estimated_bars, 99)
+                date_str = ts.strftime("%Y-%m-%d %H:%M")
+                print(f"\rProgress: {pct:3d}% ({bar_count} bars) | {symbol} {date_str}  ", end="", file=sys.stderr, flush=True)
+
+            yield Bar(
+                symbol=symbol,
+                open=o,
+                high=h,
+                low=l,
+                close=c,
+                volume=vol,
+                timestamp=ts,
+                interval="1m",
+            )
+
+            # Advance the iterator and push back onto heap
+            next_bar = self._advance_iterator(entry.iterator)
+            if next_bar is not None:
+                ts_next = next_bar[0]
+                if not (end_dt and ts_next >= end_dt):
+                    new_entry = _HeapEntry(
+                        timestamp=ts_next,
+                        idx=self._next_idx,
+                        bar_tuple=next_bar,
+                        iterator=entry.iterator,
+                    )
+                    self._next_idx += 1
+                    heapq.heappush(heap, new_entry)
+
+        if self.estimated_bars > 0:
+            print(f"\rProgress: 100% ({bar_count} bars) -- replay complete.                    ", file=sys.stderr)
+
+        self.total_bars = bar_count
+        self.total_ticks = 0
+        logger.info(
+            "Replay complete (direct)",
+            total_bars=self.total_bars,
             dynamic_symbols=len(self._dynamic_symbols_added),
         )
         self.completion_event.set()

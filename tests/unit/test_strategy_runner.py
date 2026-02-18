@@ -384,25 +384,35 @@ class TestStrategyRunnerBarProcessing:
         runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
-        # Create async generator that yields one bar then stops
-        bar_data = {
+        # Two bars: first primes prev RSI below 50, second crosses above 50
+        bar_data_prime = {
             "bar": sample_bar,
-            "sma_20": 184.0,  # Below price = bullish
-            "rsi_14": 35.0,  # Oversold = buy signal
+            "sma_20": 184.0,
+            "rsi_14": 45.0,  # Below rsi_entry (50) — primes crossover
+            "regime": "trending_up",
+            "trend_strength": 50.0,
+        }
+        bar_data_signal = {
+            "bar": sample_bar,
+            "sma_20": 184.0,
+            "rsi_14": 52.0,  # Above rsi_entry (50) — triggers crossover buy
+            "regime": "trending_up",
+            "trend_strength": 50.0,
         }
 
-        async def consume_one(consumer_name):
-            yield bar_data
+        async def consume_two(consumer_name):
+            yield bar_data_prime
+            yield bar_data_signal
             runner._running = False
 
         mock_bar_consumer = MagicMock()
-        mock_bar_consumer.consume.return_value = consume_one("test")
+        mock_bar_consumer.consume.return_value = consume_two("test")
 
         runner._bar_consumer = mock_bar_consumer
 
         await runner._consume_loop()
 
-        # Order should be submitted (momentum buy signal)
+        # Order should be submitted (momentum buy signal on second bar)
         mock_order_manager.submit_order.assert_called_once()
         order = mock_order_manager.submit_order.call_args[0][0]
         assert order.side == OrderSide.BUY
@@ -493,18 +503,29 @@ class TestStrategyRunnerBarProcessing:
         runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
-        bar_data = {
+        # Two bars for RSI crossover
+        bar_data_prime = {
             "bar": sample_bar,
             "sma_20": 184.0,
-            "rsi_14": 35.0,
+            "rsi_14": 45.0,
+            "regime": "trending_up",
+            "trend_strength": 50.0,
+        }
+        bar_data_signal = {
+            "bar": sample_bar,
+            "sma_20": 184.0,
+            "rsi_14": 52.0,
+            "regime": "trending_up",
+            "trend_strength": 50.0,
         }
 
-        async def consume_one(consumer_name):
-            yield bar_data
+        async def consume_two(consumer_name):
+            yield bar_data_prime
+            yield bar_data_signal
             runner._running = False
 
         mock_bar_consumer = MagicMock()
-        mock_bar_consumer.consume.return_value = consume_one("test")
+        mock_bar_consumer.consume.return_value = consume_two("test")
 
         runner._bar_consumer = mock_bar_consumer
 

@@ -75,6 +75,7 @@ class AggregatorConfig:
     source_stream: str = "stream:ticks:us"
     consumer_group: str = "aggregator"
     bar_stream_prefix: str = "stream:bars"
+    market: str = "us"
 
 
 @dataclass
@@ -281,6 +282,7 @@ def load_config(path: Optional[Path] = None) -> Config:
             source_stream=aggregator_data.get("source_stream", "stream:ticks:us"),
             consumer_group=aggregator_data.get("consumer_group", "aggregator"),
             bar_stream_prefix=aggregator_data.get("bar_stream_prefix", "stream:bars"),
+            market=aggregator_data.get("market", "us"),
         ),
         database=DatabaseConfig(
             host=database_data.get("host", "localhost"),

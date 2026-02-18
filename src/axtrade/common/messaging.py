@@ -284,6 +284,40 @@ class BarPublisher:
         message_id = await self._client.xadd(stream_key, data)
         return message_id
 
+    async def publish_bar_batch(
+        self,
+        bars_with_indicators: list[tuple[Bar, str, str, dict]],
+    ) -> list[str]:
+        """Publish multiple bars using a Redis pipeline.
+
+        Args:
+            bars_with_indicators: List of (bar, interval, market, indicators_dict) tuples.
+                indicators_dict keys: sma_20, rsi_14, regime, trend, volatility,
+                trend_strength, volatility_percentile.
+
+        Returns:
+            List of stream message IDs
+        """
+        if not self._client:
+            raise RuntimeError("Not connected to Redis")
+        if not bars_with_indicators:
+            return []
+
+        async with self._client.pipeline(transaction=False) as pipe:
+            for bar, interval, market, indicators in bars_with_indicators:
+                stream_key = f"{self.bar_stream_prefix}:{interval}:{market}"
+                data = bar.to_dict()
+                data["sma_20"] = str(indicators.get("sma_20", "")) if indicators.get("sma_20") is not None else ""
+                data["rsi_14"] = str(indicators.get("rsi_14", "")) if indicators.get("rsi_14") is not None else ""
+                data["regime"] = indicators.get("regime") or ""
+                data["trend"] = indicators.get("trend") or ""
+                data["volatility"] = indicators.get("volatility") or ""
+                data["trend_strength"] = str(indicators.get("trend_strength", "")) if indicators.get("trend_strength") is not None else ""
+                data["volatility_percentile"] = str(indicators.get("volatility_percentile", "")) if indicators.get("volatility_percentile") is not None else ""
+                pipe.xadd(stream_key, data)
+            results = await pipe.execute()
+        return results
+
     @property
     def connected(self) -> bool:
         """Check if connected to Redis."""

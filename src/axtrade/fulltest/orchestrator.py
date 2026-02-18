@@ -14,6 +14,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+import re
+
 from axtrade.common import (
     BarRepository,
     Config,
@@ -27,7 +29,10 @@ from axtrade.aggregator.service import AggregatorService
 from axtrade.discovery.service import DiscoveryService
 from axtrade.gateway.control import GatewayControlPublisher
 from axtrade.gateway.service import GatewayService
+from axtrade.indicators.engine import IndicatorEngine
+from axtrade.oms import OrderManager
 from axtrade.strategies import STRATEGY_TYPES
+from axtrade.strategies.base import BarWithIndicators, BaseStrategy
 from axtrade.strategies.runner import StrategyRunner
 
 from .data import download_historical_alpaca
@@ -36,7 +41,7 @@ from .isolation import BacktestInfrastructure
 from .replay_adapter import ReplayAdapter
 from .report import ReportGenerator, format_json_report, format_text_report
 from .types import FullBacktestConfig, FullBacktestResult
-from .universe import SP500SymbolProvider
+from .universe import SP1500SymbolProvider
 
 logger = get_logger("fulltest.orchestrator")
 
@@ -352,108 +357,195 @@ class FullBacktestOrchestrator:
             await db_pool.disconnect()
 
     async def _run_services(self, config: Config) -> FullBacktestResult:
-        """Create and run all services, wait for completion."""
+        """Run the direct pipeline — no Redis, no tick generation."""
+        return await self._run_direct(config)
+
+    async def _run_direct(self, config: Config) -> FullBacktestResult:
+        """Direct pipeline: parquet -> indicators -> strategies -> OrderManager.
+
+        Replaces the 3-service Redis architecture with a single loop.
+        """
         result = FullBacktestResult(
             config=self._bt_config,
             start_time=datetime.now(timezone.utc),
             end_time=datetime.now(timezone.utc),
         )
 
-        # Create replay adapter
+        # Create replay adapter (reuse for stream_bars())
         replay = ReplayAdapter(
             data_dir=self._bt_config.data_dir,
             ticks_per_bar=self._bt_config.ticks_per_bar,
             start_date=self._bt_config.start,
             end_date=self._bt_config.end,
         )
+        await replay.connect()
+        await replay.subscribe([
+            SymbolConfig(symbol=s, base_price=100.0)
+            for s in self._bt_config.symbols
+        ])
 
-        # Create services with isolated config
-        gateway = GatewayService(config, adapter=replay)
+        # Database for OrderManager and bar persistence
+        db_pool = DatabasePool(config.database)
+        await db_pool.connect()
+        bar_repo = BarRepository(db_pool)
 
-        # Set up discovery and gateway control before strategy runner
+        # Indicator engine
+        indicator_engine = IndicatorEngine(
+            sma_period=config.indicators.sma_period,
+            rsi_period=config.indicators.rsi_period,
+        )
+
+        # Order manager (uses DB for positions/orders/fills)
+        order_manager = OrderManager(config, db_pool)
+        await order_manager.connect()
+
+        # Discovery setup
         discovery_runner: Optional[BacktestDiscoveryRunner] = None
         discovery_service: Optional[DiscoveryService] = None
-        gateway_control: Optional[GatewayControlPublisher] = None
-        db_pool: Optional[DatabasePool] = None
 
         if self._bt_config.discovery_enabled:
-            db_pool = DatabasePool(config.database)
-            await db_pool.connect()
-
             discovery_service = DiscoveryService(db_pool=db_pool)
             await discovery_service.connect()
 
-            # Create gateway control publisher for feeding discovered symbols
-            gateway_control = GatewayControlPublisher(config.redis, config.gateway)
-            await gateway_control.connect()
-
-            symbol_provider = SP500SymbolProvider()
+            symbol_provider = SP1500SymbolProvider()
             discovery_runner = BacktestDiscoveryRunner(
                 config=config,
                 discovery_service=discovery_service,
                 symbol_provider=symbol_provider,
                 scan_interval_bars=self._bt_config.discovery_scan_interval_bars,
-                gateway_control=gateway_control,
+                add_symbols_callback=replay.add_symbols_sync,
             )
 
-        # Create strategy runner with discovery service injected
-        strategy_runner = StrategyRunner(config, discovery_service=discovery_service)
+        # Load strategies
+        strategies: list[BaseStrategy] = []
+        skip_strategies = {"ml_prediction"}
+        for strat_config in config.strategies.enabled:
+            if not strat_config.enabled:
+                continue
+            strategy_class = STRATEGY_TYPES.get(strat_config.type)
+            if not strategy_class:
+                continue
+            strategy = strategy_class(
+                strategy_id=strat_config.id,
+                config=strat_config.config,
+            )
+            # Inject discovery service if supported
+            if discovery_service and hasattr(strategy, "set_discovery_service"):
+                strategy.set_discovery_service(discovery_service)
+            strategies.append(strategy)
 
-        # Create aggregator with discovery callback wired in
-        aggregator = AggregatorService(
-            config,
-            on_bar_callback=discovery_runner.on_bar if discovery_runner else None,
+        logger.info(
+            "Direct pipeline ready",
+            strategies=len(strategies),
+            symbols=len(self._bt_config.symbols),
         )
 
-        # Run gateway, aggregator, and strategy runner concurrently
-        gateway_task = asyncio.create_task(gateway.start())
-        aggregator_task = asyncio.create_task(aggregator.start())
-        strategy_task = asyncio.create_task(strategy_runner.start())
+        # Run one discovery scan up front using pre-seeded bar data.
+        # The pre-seed already loaded recent bars for the full universe,
+        # so scanning once discovers the same symbols that repeated scans
+        # would find (the pre-seeded bars don't change during replay).
+        if discovery_runner:
+            discovery_runner._bar_count = self._bt_config.discovery_scan_interval_bars - 1
+            await discovery_runner.on_bar()
+            logger.info(
+                "Initial discovery scan complete",
+                symbols_fed=len(discovery_runner.symbols_fed),
+            )
 
-        logger.info("All services started, waiting for replay completion...")
+        # Main loop — pure computation, no DB writes except OrderManager
+        bar_count = 0
+        current_trading_date: Optional[str] = None
+        logged_errors: set[str] = set()
 
-        # Wait for replay to finish
-        await replay.completion_event.wait()
-        logger.info("Replay complete, draining pipeline...")
+        for bar in replay.stream_bars():
+            bar_count += 1
 
-        # Give aggregator time to process remaining ticks
-        await asyncio.sleep(2)
-        await aggregator.stop()
-        logger.info("Aggregator stopped")
+            # Compute indicators
+            indicators = indicator_engine.process_bar(
+                symbol=bar.symbol,
+                interval=bar.interval,
+                close=bar.close,
+                high=bar.high,
+                low=bar.low,
+            )
 
-        # Give strategy runner time to process remaining bars
-        await asyncio.sleep(2)
-        await strategy_runner.stop()
-        logger.info("Strategy runner stopped")
+            data = BarWithIndicators(
+                bar=bar,
+                sma_20=indicators.sma_20,
+                rsi_14=indicators.rsi_14,
+                regime=indicators.regime,
+                trend=indicators.trend,
+                volatility=indicators.volatility,
+                trend_strength=indicators.trend_strength,
+                volatility_percentile=indicators.volatility_percentile,
+            )
 
-        # Stop gateway
-        await gateway.stop()
-        logger.info("Gateway stopped")
+            # Update price cache + reset daily risk counters
+            order_manager.update_price(bar.symbol, bar.close)
 
-        # Cancel any remaining tasks
-        for task in [gateway_task, aggregator_task, strategy_task]:
-            if not task.done():
-                task.cancel()
+            bar_date = bar.timestamp.strftime("%Y-%m-%d")
+            if bar_date != current_trading_date:
+                if current_trading_date is not None:
+                    rm = order_manager.risk_manager
+                    if rm:
+                        rm.reset_daily()
+                        logged_errors.clear()
+                        logger.info("New trading day, reset daily risk", date=bar_date)
+                current_trading_date = bar_date
+
+            # Run all strategies
+            for strategy in strategies:
+                if not strategy.enabled:
+                    continue
                 try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+                    order = strategy.on_bar(data)
+                except Exception as e:
+                    err_key = str(e)
+                    if err_key not in logged_errors:
+                        logged_errors.add(err_key)
+                        logger.error("Strategy error: %s", err_key)
+                    continue
 
-        # Clean up discovery and gateway control
+                if not order:
+                    continue
+
+                try:
+                    await order_manager.submit_order(order)
+                    position = await order_manager.get_position(
+                        strategy.strategy_id, order.symbol
+                    )
+                    if position:
+                        strategy.update_position(position)
+                    else:
+                        strategy.clear_position(order.symbol)
+                except Exception as e:
+                    err_key = re.sub(r"\$[\d,.]+", "$X", f"{strategy.name}: {e}")
+                    if err_key not in logged_errors:
+                        logged_errors.add(err_key)
+                        logger.warning("Order rejected: %s", err_key)
+
+            # Yield to event loop periodically (for DB writes in OrderManager)
+            if bar_count % 1000 == 0:
+                await asyncio.sleep(0)
+
+        # Populate discovery stats
         if discovery_runner and self._bt_config.discovery_enabled:
             result.discovery.total_scans = discovery_runner.scan_count
             result.discovery.symbols_discovered = discovery_runner.total_matches
             result.discovery.symbols_fed_to_gateway = len(discovery_runner.symbols_fed)
             result.discovery.symbols_fed_list = discovery_runner.symbols_fed
 
-        if gateway_control:
-            await gateway_control.disconnect()
+        # Clean up
+        await order_manager.disconnect()
+        await db_pool.disconnect()
 
-        if db_pool:
-            await db_pool.disconnect()
-
-        # Populate basic stats
         result.total_bars_processed = replay.total_bars
-        result.total_ticks_generated = replay.total_ticks
+        result.total_ticks_generated = 0
+
+        logger.info(
+            "Direct pipeline complete",
+            bars=bar_count,
+            strategies=len(strategies),
+        )
 
         return result

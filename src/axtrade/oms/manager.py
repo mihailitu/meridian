@@ -56,6 +56,9 @@ class OrderManager:
         # In-memory open position counter to avoid DB scan on every BUY
         self._open_position_count: int = 0
 
+        # In-memory position cache: (strategy_id, symbol) -> Position|None
+        self._position_cache: dict[tuple[str, str], Optional[Position]] = {}
+
     async def connect(self) -> None:
         """Initialize repositories, broker, and connections."""
         self._order_repo = OrderRepository(self._pool)
@@ -80,9 +83,11 @@ class OrderManager:
         )
         self._risk_manager = RiskManager(limits)
 
-        # Initialize open position counter from DB
+        # Initialize open position counter and cache from DB
         all_open = await self._position_repo.get_open_positions()
         self._open_position_count = len(all_open)
+        for pos in all_open:
+            self._position_cache[(pos.strategy_id, pos.symbol)] = pos
 
         # Initialize broker
         if self.config.oms.paper_mode:
@@ -149,32 +154,17 @@ class OrderManager:
         if not self._order_repo or not self._broker or not self._risk_manager:
             raise RuntimeError("OrderManager not connected")
 
-        # Get current position for risk check
-        position = await self._position_repo.get(order.strategy_id, order.symbol)
+        # Use in-memory position cache (avoids DB SELECT per order)
+        cache_key = (order.strategy_id, order.symbol)
+        position = self._position_cache.get(cache_key)
 
-        # Get current price for risk check
-        price = self._last_prices.get(order.symbol, Decimal("0"))
-
-        # Run risk checks
-        result = self._risk_manager.check_order(order, position, price)
-        if not result.approved:
-            order.status = OrderStatus.REJECTED
-            await self._order_repo.insert(order)
-            self.logger.debug(
-                "Order rejected by risk manager",
-                order_id=str(order.id),
-                reason=result.reason,
-            )
-            raise OrderRejectedError(result.reason)
-
-        # Global max positions guard (uses in-memory counter)
+        # In-memory pre-checks before any DB I/O
+        # Global max positions guard
         if order.side == OrderSide.BUY:
             is_new_position = position is None or position.quantity == 0
             if is_new_position:
                 max_pos = self.config.oms.max_positions
                 if self._open_position_count >= max_pos:
-                    order.status = OrderStatus.REJECTED
-                    await self._order_repo.insert(order)
                     reason = f"Max positions ({max_pos}) reached"
                     self.logger.debug(
                         "Order rejected: max positions",
@@ -184,7 +174,20 @@ class OrderManager:
                     )
                     raise OrderRejectedError(reason)
 
-        # Persist the order
+        # Get current price for risk check
+        price = self._last_prices.get(order.symbol, Decimal("0"))
+
+        # Run risk checks (in-memory, no DB)
+        result = self._risk_manager.check_order(order, position, price)
+        if not result.approved:
+            self.logger.debug(
+                "Order rejected by risk manager",
+                order_id=str(order.id),
+                reason=result.reason,
+            )
+            raise OrderRejectedError(result.reason)
+
+        # Persist the order (only for approved orders)
         await self._order_repo.insert(order)
 
         self.logger.info(
@@ -354,6 +357,10 @@ class OrderManager:
             position.closed_at = datetime.now(UTC)
 
         await self._position_repo.upsert(position)
+
+        # Update in-memory position cache
+        cache_key = (position.strategy_id, position.symbol)
+        self._position_cache[cache_key] = position
 
         # Update in-memory open position counter
         is_now_open = position.quantity > 0

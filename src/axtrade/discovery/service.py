@@ -171,7 +171,7 @@ class DiscoveryService:
         interval: str,
         limit: int,
     ) -> dict:
-        """Fetch bar data for multiple symbols.
+        """Fetch bar data for multiple symbols concurrently.
 
         Args:
             symbols: List of symbols
@@ -185,15 +185,18 @@ class DiscoveryService:
             self.logger.warning("No database connection, returning empty data")
             return {}
 
-        bars_data = {}
-        for symbol in symbols:
-            try:
-                bars = await self._bar_repo.get_bars(symbol, interval, limit)
-                # Sort by time ascending (oldest first) for analysis
-                bars_data[symbol] = sorted(bars, key=lambda b: b["time"])
-            except Exception as e:
-                self.logger.debug("Failed to fetch bars", symbol=symbol, error=str(e))
+        semaphore = asyncio.Semaphore(20)
+        bars_data: dict = {}
 
+        async def fetch_one(symbol: str) -> None:
+            async with semaphore:
+                try:
+                    bars = await self._bar_repo.get_bars(symbol, interval, limit)
+                    bars_data[symbol] = sorted(bars, key=lambda b: b["time"])
+                except Exception as e:
+                    self.logger.debug("Failed to fetch bars", symbol=symbol, error=str(e))
+
+        await asyncio.gather(*(fetch_one(s) for s in symbols))
         return bars_data
 
     def _update_discovered(self, symbol: DiscoveredSymbol) -> None:

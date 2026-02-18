@@ -187,9 +187,18 @@ class GatewayService:
             logger.warning("Unknown gateway control action", action=command.action)
 
     async def _stream_loop(self) -> None:
-        """Main loop that streams and processes ticks."""
+        """Main loop that streams and processes ticks.
+
+        Batches ticks before publishing to Redis to reduce round-trips.
+        Flushes when batch reaches 200 ticks or 50ms have elapsed.
+        """
         if not self._adapter or not self._stream_supervisor:
             return
+
+        batch: list[Tick] = []
+        batch_deadline: float = 0.0
+        BATCH_MAX = 200
+        BATCH_TIMEOUT = 0.05  # 50ms
 
         while self._running:
             try:
@@ -204,13 +213,39 @@ class GatewayService:
                     self._print_tick(tick, change)
 
                     if self._publisher:
-                        try:
-                            await self._publisher.publish_tick(tick)
-                        except Exception as e:
-                            logger.error("redis_publish_failed", error=str(e))
+                        if not batch:
+                            batch_deadline = asyncio.get_event_loop().time() + BATCH_TIMEOUT
+                        batch.append(tick)
+
+                        now = asyncio.get_event_loop().time()
+                        if len(batch) >= BATCH_MAX or now >= batch_deadline:
+                            try:
+                                # Group by market for multi-market support
+                                by_market: dict[str, list[Tick]] = {}
+                                for t in batch:
+                                    market = getattr(t, "market", "us") or "us"
+                                    by_market.setdefault(market, []).append(t)
+                                for market, ticks in by_market.items():
+                                    await self._publisher.publish_tick_batch(ticks, market=market)
+                            except Exception as e:
+                                logger.error("redis_publish_failed", error=str(e))
+                            batch.clear()
 
                     # Reset errors on successful iteration
                     self._stream_supervisor.reset_errors()
+
+                # Flush remaining batch when stream ends
+                if batch and self._publisher:
+                    try:
+                        by_market = {}
+                        for t in batch:
+                            market = getattr(t, "market", "us") or "us"
+                            by_market.setdefault(market, []).append(t)
+                        for market, ticks in by_market.items():
+                            await self._publisher.publish_tick_batch(ticks, market=market)
+                    except Exception as e:
+                        logger.error("redis_publish_failed", error=str(e))
+                    batch.clear()
 
             except asyncio.CancelledError:
                 break

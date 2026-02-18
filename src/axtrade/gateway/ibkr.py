@@ -28,7 +28,7 @@ class IBKRAdapter(DataAdapter):
         self._connected = False
         self._symbols: list[SymbolConfig] = []
         self._contracts: dict[str, object] = {}
-        self._tick_queue: asyncio.Queue[Tick] = asyncio.Queue()
+        self._tick_queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=50_000)
         self._running = False
 
     async def connect(self) -> None:
@@ -61,6 +61,32 @@ class IBKRAdapter(DataAdapter):
         self._connected = False
         logger.info("disconnected_from_ibkr")
 
+    async def _qualify_and_subscribe(self, symbol_configs: list[SymbolConfig]) -> None:
+        """Batch-qualify contracts and subscribe to market data.
+
+        Args:
+            symbol_configs: List of symbol configs to qualify and subscribe
+        """
+        if not self._ib or not symbol_configs:
+            return
+
+        from ib_insync import Stock
+
+        contracts = [
+            Stock(sc.symbol, sc.exchange, sc.currency)
+            for sc in symbol_configs
+        ]
+
+        qualified = await self._ib.qualifyContractsAsync(*contracts)
+
+        for contract, symbol_config in zip(qualified, symbol_configs):
+            if contract.conId:
+                self._contracts[symbol_config.symbol] = contract
+                self._ib.reqMktData(contract)
+                logger.info("subscribed", symbol=symbol_config.symbol)
+            else:
+                logger.warning("failed_to_qualify", symbol=symbol_config.symbol)
+
     async def subscribe(self, symbols: list[SymbolConfig]) -> None:
         """Subscribe to market data.
 
@@ -70,25 +96,43 @@ class IBKRAdapter(DataAdapter):
         if not self._ib:
             raise RuntimeError("Not connected to IBKR")
 
-        from ib_insync import Stock
-
         self._symbols = symbols
-
-        for symbol_config in symbols:
-            contract = Stock(
-                symbol_config.symbol,
-                symbol_config.exchange,
-                symbol_config.currency,
-            )
-            qualified = await self._ib.qualifyContractsAsync(contract)
-            if qualified:
-                self._contracts[symbol_config.symbol] = qualified[0]
-                self._ib.reqMktData(qualified[0])
-                logger.info("subscribed", symbol=symbol_config.symbol)
-            else:
-                logger.warning("failed_to_qualify", symbol=symbol_config.symbol)
-
+        await self._qualify_and_subscribe(symbols)
         self._ib.pendingTickersEvent += self._on_pending_tickers
+
+    async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
+        """Dynamically subscribe to additional symbols.
+
+        Args:
+            symbols: List of symbols to add
+        """
+        if not self._ib:
+            raise RuntimeError("Not connected to IBKR")
+
+        new_symbols = [s for s in symbols if s.symbol not in self._contracts]
+        if not new_symbols:
+            return
+
+        await self._qualify_and_subscribe(new_symbols)
+        self._symbols.extend(new_symbols)
+        logger.info("added_symbols", count=len(new_symbols))
+
+    async def remove_symbols(self, symbols: list[str]) -> None:
+        """Dynamically unsubscribe from symbols.
+
+        Args:
+            symbols: List of symbol names to remove
+        """
+        if not self._ib:
+            return
+
+        for symbol in symbols:
+            contract = self._contracts.pop(symbol, None)
+            if contract:
+                self._ib.cancelMktData(contract)
+                logger.info("unsubscribed", symbol=symbol)
+
+        self._symbols = [s for s in self._symbols if s.symbol not in symbols]
 
     def _on_pending_tickers(self, tickers: list) -> None:
         """Handle incoming ticker updates.
@@ -98,10 +142,12 @@ class IBKRAdapter(DataAdapter):
         """
         for ticker in tickers:
             if ticker.last and ticker.last > 0:
+                # Use exchange timestamp when available, fall back to local time
+                ts = ticker.time if ticker.time else datetime.now(UTC)
                 tick = Tick(
                     symbol=ticker.contract.symbol,
                     price=ticker.last,
-                    timestamp=datetime.now(UTC),
+                    timestamp=ts,
                     bid=ticker.bid if ticker.bid > 0 else None,
                     ask=ticker.ask if ticker.ask > 0 else None,
                     volume=ticker.volume if ticker.volume > 0 else None,

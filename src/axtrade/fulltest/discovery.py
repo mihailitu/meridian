@@ -1,5 +1,6 @@
 """Bar-count-driven discovery runner for backtest."""
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
 from axtrade.common import Config, SymbolConfig, get_logger
@@ -19,6 +20,8 @@ class BacktestDiscoveryRunner:
     scans every N bars (configurable) instead of every N seconds.
     When gateway_control is provided and auto_subscribe is enabled,
     feeds discovered symbols to the gateway for dynamic replay.
+    When add_symbols_callback is provided, uses it instead of
+    gateway_control for direct pipeline symbol injection.
     """
 
     def __init__(
@@ -28,12 +31,14 @@ class BacktestDiscoveryRunner:
         symbol_provider: SymbolProvider,
         scan_interval_bars: int = 60,
         gateway_control: Optional["GatewayControlPublisher"] = None,
+        add_symbols_callback: Optional[Callable[[list[str]], None]] = None,
     ):
         self._config = config
         self._discovery_service = discovery_service
         self._symbol_provider = symbol_provider
         self._scan_interval_bars = scan_interval_bars
         self._gateway_control = gateway_control
+        self._add_symbols_callback = add_symbols_callback
         self._bar_count = 0
         self._scan_count = 0
         self._total_matches = 0
@@ -76,9 +81,12 @@ class BacktestDiscoveryRunner:
             matches=total_matches,
         )
 
-        # Feed discovered symbols to gateway if configured
-        if self._gateway_control and self._config.discovery.auto_subscribe:
-            await self._feed_gateway()
+        # Feed discovered symbols via callback (direct pipeline) or gateway
+        if self._config.discovery.auto_subscribe:
+            if self._add_symbols_callback:
+                self._feed_via_callback()
+            elif self._gateway_control:
+                await self._feed_gateway()
 
     async def _feed_gateway(self) -> None:
         """Push discovered symbols to gateway for dynamic subscription."""
@@ -137,6 +145,31 @@ class BacktestDiscoveryRunner:
                 )
             except Exception as e:
                 logger.error("Failed to remove symbols from gateway", error=str(e))
+
+    def _feed_via_callback(self) -> None:
+        """Push discovered symbols via the direct pipeline callback."""
+        if not self._add_symbols_callback:
+            return
+
+        min_score = self._config.discovery.min_score
+        discovered = self._discovery_service.get_discovered(
+            min_score=min_score,
+            bullish_only=False,
+        )
+        discovered_names = {s.symbol for s in discovered}
+
+        static_symbols = {s.symbol for s in self._config.gateway.symbols}
+        new_symbols = discovered_names - self._subscribed_symbols - static_symbols
+
+        if new_symbols:
+            self._add_symbols_callback(sorted(new_symbols))
+            self._subscribed_symbols |= new_symbols
+            self._symbols_fed.extend(new_symbols)
+            logger.info(
+                "Fed discovered symbols via callback",
+                symbols=sorted(new_symbols),
+                total_fed=len(self._symbols_fed),
+            )
 
     @property
     def scan_count(self) -> int:

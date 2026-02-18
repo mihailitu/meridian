@@ -115,15 +115,13 @@ class TestOrderManager:
         """Test successful order submission flow."""
         # Setup mocks
         mock_order_repo = AsyncMock()
-        mock_position_repo = AsyncMock()
-        mock_position_repo.get.return_value = None
         mock_broker = AsyncMock()
         mock_broker.submit_order.return_value = "broker-123"
         mock_risk_manager = MagicMock()
         mock_risk_manager.check_order.return_value = RiskCheckResult(approved=True)
 
         manager._order_repo = mock_order_repo
-        manager._position_repo = mock_position_repo
+        manager._position_repo = AsyncMock()
         manager._broker = mock_broker
         manager._risk_manager = mock_risk_manager
 
@@ -141,7 +139,7 @@ class TestOrderManager:
     async def test_submit_order_risk_rejected(
         self, manager: OrderManager, sample_order: Order
     ) -> None:
-        """Test order rejection by risk manager."""
+        """Test order rejection by risk manager — no DB writes for rejections."""
         mock_order_repo = AsyncMock()
         mock_position_repo = AsyncMock()
         mock_position_repo.get.return_value = None
@@ -158,8 +156,8 @@ class TestOrderManager:
         with pytest.raises(OrderRejectedError, match="Position size exceeds limit"):
             await manager.submit_order(sample_order)
 
-        assert sample_order.status == OrderStatus.REJECTED
-        mock_order_repo.insert.assert_called_once()
+        # Rejected orders should NOT be persisted to DB
+        mock_order_repo.insert.assert_not_called()
 
     async def test_submit_order_broker_failure(
         self, manager: OrderManager, sample_order: Order
@@ -671,3 +669,90 @@ class TestOrderManager:
     def test_risk_manager_property_none(self, manager: OrderManager) -> None:
         """Test risk_manager property returns None before connect."""
         assert manager.risk_manager is None
+
+    async def test_submit_order_max_positions_rejected_no_db(
+        self, manager: OrderManager, sample_order: Order
+    ) -> None:
+        """Test max positions rejection does zero DB writes."""
+        mock_order_repo = AsyncMock()
+        mock_risk_manager = MagicMock()
+        mock_risk_manager.check_order.return_value = RiskCheckResult(approved=True)
+
+        manager._order_repo = mock_order_repo
+        manager._position_repo = AsyncMock()
+        manager._broker = AsyncMock()
+        manager._risk_manager = mock_risk_manager
+
+        # Simulate max positions reached
+        manager._open_position_count = manager.config.oms.max_positions
+
+        with pytest.raises(OrderRejectedError, match="Max positions"):
+            await manager.submit_order(sample_order)
+
+        # No DB writes for rejected orders
+        mock_order_repo.insert.assert_not_called()
+        mock_order_repo.update.assert_not_called()
+
+    async def test_position_cache_populated_on_connect(
+        self, manager: OrderManager, mock_pool: MagicMock
+    ) -> None:
+        """Test position cache is populated during connect()."""
+        mock_redis = AsyncMock()
+        mock_broker = AsyncMock()
+
+        position = Position(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal("100"),
+            avg_entry_price=Decimal("185.00"),
+        )
+
+        with patch("axtrade.oms.manager.redis.Redis", return_value=mock_redis):
+            with patch("axtrade.oms.manager.PaperBroker", return_value=mock_broker):
+                with patch("axtrade.oms.manager.PositionRepository") as MockPosRepo:
+                    mock_pos_repo = AsyncMock()
+                    mock_pos_repo.get_open_positions.return_value = [position]
+                    MockPosRepo.return_value = mock_pos_repo
+
+                    with patch("axtrade.oms.manager.OrderRepository"):
+                        await manager.connect()
+
+        assert ("momentum_01", "AAPL") in manager._position_cache
+        assert manager._position_cache[("momentum_01", "AAPL")] == position
+        assert manager._open_position_count == 1
+
+    async def test_position_cache_used_for_risk_check(
+        self, manager: OrderManager, sample_order: Order
+    ) -> None:
+        """Test submit_order uses position cache instead of DB lookup."""
+        mock_order_repo = AsyncMock()
+        mock_position_repo = AsyncMock()
+        mock_broker = AsyncMock()
+        mock_broker.submit_order.return_value = "broker-123"
+        mock_risk_manager = MagicMock()
+        mock_risk_manager.check_order.return_value = RiskCheckResult(approved=True)
+
+        manager._order_repo = mock_order_repo
+        manager._position_repo = mock_position_repo
+        manager._broker = mock_broker
+        manager._risk_manager = mock_risk_manager
+
+        # Pre-populate cache
+        cached_position = Position(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal("50"),
+            avg_entry_price=Decimal("180.00"),
+        )
+        manager._position_cache[("momentum_01", "AAPL")] = cached_position
+
+        await manager.submit_order(sample_order)
+
+        # Risk check should have received the cached position
+        mock_risk_manager.check_order.assert_called_once()
+        call_args = mock_risk_manager.check_order.call_args[0]
+        assert call_args[1] == cached_position
+        # position_repo.get should NOT have been called
+        mock_position_repo.get.assert_not_called()

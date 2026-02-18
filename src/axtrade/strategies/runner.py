@@ -265,6 +265,38 @@ class StrategyRunner:
                 strategy_id=command.strategy_id,
             )
 
+    async def _submit_and_update(self, strategy: BaseStrategy, order: Order) -> None:
+        """Submit an order and update strategy position state.
+
+        Args:
+            strategy: Strategy that generated the order
+            order: Order to submit
+        """
+        if not self._order_manager:
+            return
+
+        try:
+            await self._order_manager.submit_order(order)
+
+            # Update local position after fill (in paper mode, immediate)
+            position = await self._order_manager.get_position(
+                strategy.strategy_id, order.symbol
+            )
+            if position:
+                strategy.update_position(position)
+            else:
+                strategy.clear_position(order.symbol)
+
+        except Exception as e:
+            err_key = re.sub(r"\$[\d,.]+", "$X", f"{strategy.name}: {e}")
+            if err_key not in self._logged_errors:
+                self._logged_errors.add(err_key)
+                self.logger.warning(
+                    "Order submission rejected: %s - %s",
+                    strategy.name,
+                    str(e),
+                )
+
     def _run_strategy(
         self,
         strategy: BaseStrategy,
@@ -326,7 +358,9 @@ class StrategyRunner:
                                 )
                         self._current_trading_date = bar_date
 
-                    # Run strategies directly (pure Python, no I/O)
+                    # Run strategies directly (pure Python, no I/O),
+                    # collect orders, then submit concurrently
+                    pending_orders: list[tuple[BaseStrategy, Order]] = []
                     for strategy in self._strategies.values():
                         if not strategy.enabled:
                             continue
@@ -340,31 +374,18 @@ class StrategyRunner:
                                 self.logger.error("Strategy execution error: %s", err_key)
                             continue
 
-                        if not order:
-                            continue
-
-                        try:
+                        if order:
                             self._log_signal(strategy, data, order)
-                            await self._order_manager.submit_order(order)
+                            pending_orders.append((strategy, order))
 
-                            # Update local position after fill (in paper mode, immediate)
-                            position = await self._order_manager.get_position(
-                                strategy.strategy_id, order.symbol
+                    # Submit all orders concurrently
+                    if pending_orders:
+                        await asyncio.gather(
+                            *(
+                                self._submit_and_update(strategy, order)
+                                for strategy, order in pending_orders
                             )
-                            if position:
-                                strategy.update_position(position)
-                            else:
-                                strategy.clear_position(order.symbol)
-
-                        except Exception as e:
-                            err_key = re.sub(r"\$[\d,.]+", "$X", f"{strategy.name}: {e}")
-                            if err_key not in self._logged_errors:
-                                self._logged_errors.add(err_key)
-                                self.logger.warning(
-                                    "Order submission rejected: %s - %s",
-                                    strategy.name,
-                                    str(e),
-                                )
+                        )
 
                     # Reset errors on successful iteration
                     self._consume_supervisor.reset_errors()

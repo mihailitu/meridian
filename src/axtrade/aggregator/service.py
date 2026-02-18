@@ -57,6 +57,12 @@ class AggregatorService:
         self._bar_buffer: list[tuple] = []
         self._bar_buffer_size = 100
 
+        # Redis publish buffer for batched bar publishing
+        self._publish_buffer: list[tuple] = []
+
+        # Track symbols that have been warmed up for indicators
+        self._warmed_symbols: set[str] = set()
+
     async def start(self) -> None:
         """Start the aggregator service."""
         self.logger.info("Starting aggregator service...")
@@ -95,6 +101,17 @@ class AggregatorService:
 
         # Get symbols from gateway config
         symbols = [s.symbol for s in self.config.gateway.symbols]
+        await self._warmup_symbols(symbols)
+
+    async def _warmup_symbols(self, symbols: list[str]) -> None:
+        """Warm up indicator buffers for given symbols from DB.
+
+        Args:
+            symbols: List of symbols to warm up
+        """
+        if not self._bar_repo:
+            return
+
         warmup_count = max(
             self.config.indicators.sma_period,
             self.config.indicators.rsi_period + 1,
@@ -113,6 +130,7 @@ class AggregatorService:
                         interval,
                         len(closes),
                     )
+            self._warmed_symbols.add(symbol)
 
     async def stop(self) -> None:
         """Stop the aggregator service."""
@@ -127,7 +145,8 @@ class AggregatorService:
         for bar, interval in completed:
             await self._process_completed_bar(bar, interval)
 
-        # Flush any remaining buffered bars to DB
+        # Flush any remaining buffered bars to Redis and DB
+        await self._flush_publish_buffer()
         await self._flush_bar_buffer()
 
         await self._consumer.disconnect()
@@ -150,6 +169,18 @@ class AggregatorService:
             error_type=type(error).__name__,
         )
 
+    async def _flush_publish_buffer(self) -> None:
+        """Flush buffered bars to Redis via batch publish."""
+        if not self._publish_buffer:
+            return
+
+        try:
+            await self._publisher.publish_bar_batch(self._publish_buffer)
+        except Exception as e:
+            self.logger.error("redis_bar_publish_failed", error=str(e))
+
+        self._publish_buffer.clear()
+
     async def _consume_loop(self) -> None:
         """Main consumption loop."""
         if not self._consume_supervisor:
@@ -161,9 +192,17 @@ class AggregatorService:
                     if not self._running:
                         break
 
+                    # Dynamic indicator warmup for newly discovered symbols
+                    if tick.symbol not in self._warmed_symbols:
+                        await self._warmup_symbols([tick.symbol])
+
                     completed = self._engine.process_tick(tick)
                     for bar, interval in completed:
                         await self._process_completed_bar(bar, interval)
+
+                    # Flush any buffered bar publishes after processing tick batch
+                    if self._publish_buffer:
+                        await self._flush_publish_buffer()
 
                     # Reset errors on successful iteration
                     self._consume_supervisor.reset_errors()
@@ -218,19 +257,18 @@ class AggregatorService:
             if len(self._bar_buffer) >= self._bar_buffer_size:
                 await self._flush_bar_buffer()
 
-        # Publish to Redis (with indicators and regime for strategy consumption)
-        await self._publisher.publish_bar(
-            bar,
-            interval,
-            market="us",
-            sma_20=result.sma_20,
-            rsi_14=result.rsi_14,
-            regime=result.regime.value if result.regime else None,
-            trend=result.trend.value if result.trend else None,
-            volatility=result.volatility.value if result.volatility else None,
-            trend_strength=result.trend_strength,
-            volatility_percentile=result.volatility_percentile,
-        )
+        # Buffer bar for batched Redis publish
+        market = getattr(self.config.aggregator, "market", "us")
+        indicators = {
+            "sma_20": result.sma_20,
+            "rsi_14": result.rsi_14,
+            "regime": result.regime.value if result.regime else None,
+            "trend": result.trend.value if result.trend else None,
+            "volatility": result.volatility.value if result.volatility else None,
+            "trend_strength": result.trend_strength,
+            "volatility_percentile": result.volatility_percentile,
+        }
+        self._publish_buffer.append((bar, interval, market, indicators))
 
         # Print to console
         self._print_bar(bar, interval, result.sma_20, result.rsi_14, result.regime)

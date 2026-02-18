@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from axtrade.common import Bar
+from axtrade.indicators import MarketRegime
 from axtrade.oms import Order, OrderSide, Position
 from axtrade.strategies import BarWithIndicators, MomentumBreakout
 
@@ -37,9 +38,9 @@ class TestMomentumBreakout:
         return MomentumBreakout(
             strategy_id="test_momentum",
             config={
-                "rsi_oversold": 40,
+                "rsi_entry": 50,
                 "rsi_overbought": 70,
-                "stop_loss_pct": 0.02,
+                "stop_loss_pct": 0.03,
                 "position_size": 100,
             },
         )
@@ -83,12 +84,22 @@ class TestMomentumBreakout:
         order = strategy.on_bar(data)
         assert order is None
 
-    def test_buy_signal_rsi_oversold_price_above_sma(
+    def test_buy_signal_rsi_crossover_with_regime(
         self, strategy: MomentumBreakout, bar: Bar
     ) -> None:
-        """Should generate BUY when RSI < 40 and price > SMA."""
-        # Price (185.5) > SMA (185.0), RSI (35) < 40
-        data = BarWithIndicators(bar=bar, sma_20=185.0, rsi_14=35.0)
+        """Should generate BUY when RSI crosses above 50 in TRENDING_UP regime."""
+        # First bar: set prev RSI below 50
+        data_prev = BarWithIndicators(
+            bar=bar, sma_20=185.0, rsi_14=45.0,
+            regime=MarketRegime.TRENDING_UP, trend_strength=50.0,
+        )
+        strategy.on_bar(data_prev)
+
+        # Second bar: RSI crosses above 50
+        data = BarWithIndicators(
+            bar=bar, sma_20=185.0, rsi_14=52.0,
+            regime=MarketRegime.TRENDING_UP, trend_strength=50.0,
+        )
         order = strategy.on_bar(data)
 
         assert order is not None
@@ -97,11 +108,21 @@ class TestMomentumBreakout:
         assert order.quantity == Decimal("100")
         assert order.strategy_id == "test_momentum"
 
-    def test_no_buy_signal_rsi_not_oversold(
+    def test_no_buy_signal_without_crossover(
         self, strategy: MomentumBreakout, bar: Bar
     ) -> None:
-        """Should not generate BUY when RSI >= 40."""
-        data = BarWithIndicators(bar=bar, sma_20=185.0, rsi_14=45.0)
+        """Should not generate BUY when RSI is already above entry level."""
+        # Prev RSI already above 50
+        data_prev = BarWithIndicators(
+            bar=bar, sma_20=185.0, rsi_14=55.0,
+            regime=MarketRegime.TRENDING_UP, trend_strength=50.0,
+        )
+        strategy.on_bar(data_prev)
+
+        data = BarWithIndicators(
+            bar=bar, sma_20=185.0, rsi_14=56.0,
+            regime=MarketRegime.TRENDING_UP, trend_strength=50.0,
+        )
         order = strategy.on_bar(data)
         assert order is None
 
@@ -109,7 +130,16 @@ class TestMomentumBreakout:
         self, strategy: MomentumBreakout, bar: Bar
     ) -> None:
         """Should not generate BUY when price < SMA."""
-        data = BarWithIndicators(bar=bar, sma_20=186.0, rsi_14=35.0)
+        data_prev = BarWithIndicators(
+            bar=bar, sma_20=186.0, rsi_14=45.0,
+            regime=MarketRegime.TRENDING_UP, trend_strength=50.0,
+        )
+        strategy.on_bar(data_prev)
+
+        data = BarWithIndicators(
+            bar=bar, sma_20=186.0, rsi_14=52.0,
+            regime=MarketRegime.TRENDING_UP, trend_strength=50.0,
+        )
         order = strategy.on_bar(data)
         assert order is None
 
@@ -135,10 +165,10 @@ class TestMomentumBreakout:
         assert order.side == OrderSide.SELL
         assert order.quantity == Decimal("100")
 
-    def test_sell_signal_price_below_sma(
+    def test_sell_signal_regime_downtrend(
         self, strategy: MomentumBreakout, bar: Bar
     ) -> None:
-        """Should generate SELL when price < SMA with open position."""
+        """Should generate SELL when regime shifts to TRENDING_DOWN."""
         position = Position(
             strategy_id="test_momentum",
             symbol="AAPL",
@@ -148,25 +178,27 @@ class TestMomentumBreakout:
         )
         strategy.update_position(position)
 
-        # Price (185.5) < SMA (186.0)
-        data = BarWithIndicators(bar=bar, sma_20=186.0, rsi_14=50.0)
+        data = BarWithIndicators(
+            bar=bar, sma_20=185.0, rsi_14=50.0,
+            regime=MarketRegime.TRENDING_DOWN,
+        )
         order = strategy.on_bar(data)
 
         assert order is not None
         assert order.side == OrderSide.SELL
 
     def test_sell_signal_stop_loss(self, strategy: MomentumBreakout) -> None:
-        """Should generate SELL when stop loss is triggered."""
+        """Should generate SELL when stop loss is triggered (3%)."""
         position = Position(
             strategy_id="test_momentum",
             symbol="AAPL",
             side="long",
             quantity=Decimal("100"),
-            avg_entry_price=Decimal("190.0"),  # Entry at 190
+            avg_entry_price=Decimal("192.0"),  # Entry at 192
         )
         strategy.update_position(position)
 
-        # Current price 185.5, loss = (185.5-190)/190 = -2.4% > 2% stop
+        # Current price 185.5, loss = (185.5-192)/192 = -3.4% > 3% stop
         bar = Bar(
             symbol="AAPL",
             open=186.0,
@@ -233,14 +265,16 @@ class TestMomentumBreakout:
         strategy = MomentumBreakout(
             strategy_id="custom",
             config={
-                "rsi_oversold": 30,
+                "rsi_entry": 45,
                 "rsi_overbought": 80,
+                "min_trend_strength": 40,
                 "stop_loss_pct": 0.05,
                 "position_size": 50,
             },
         )
 
-        assert strategy.rsi_oversold == 30
+        assert strategy.rsi_entry == 45
         assert strategy.rsi_overbought == 80
+        assert strategy.min_trend_strength == 40
         assert strategy.stop_loss_pct == 0.05
         assert strategy.position_size == Decimal("50")
