@@ -53,6 +53,10 @@ class AggregatorService:
         self._consumer_name = f"aggregator-{uuid.uuid4().hex[:8]}"
         self._consume_supervisor: LoopSupervisor | None = None
 
+        # Write buffer for batched DB inserts
+        self._bar_buffer: list[tuple] = []
+        self._bar_buffer_size = 100
+
     async def start(self) -> None:
         """Start the aggregator service."""
         self.logger.info("Starting aggregator service...")
@@ -123,6 +127,9 @@ class AggregatorService:
         for bar, interval in completed:
             await self._process_completed_bar(bar, interval)
 
+        # Flush any remaining buffered bars to DB
+        await self._flush_bar_buffer()
+
         await self._consumer.disconnect()
         await self._publisher.disconnect()
         await self._db_pool.disconnect()
@@ -167,6 +174,24 @@ class AggregatorService:
                 if not await self._consume_supervisor.handle_error(e):
                     break
 
+    async def _flush_bar_buffer(self) -> None:
+        """Flush buffered bars to database via bulk insert."""
+        if not self._bar_buffer or not self._bar_repo:
+            return
+
+        # Group by interval for bulk_insert_bars
+        by_interval: dict[str, list[tuple]] = {}
+        for row in self._bar_buffer:
+            interval = row[0]
+            # row format: (interval, timestamp, symbol, open, high, low, close, volume, sma_20, rsi_14)
+            record = (row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9])
+            by_interval.setdefault(interval, []).append(record)
+
+        for interval, rows in by_interval.items():
+            await self._bar_repo.bulk_insert_bars(rows, interval)
+
+        self._bar_buffer.clear()
+
     async def _process_completed_bar(self, bar: Bar, interval: str) -> None:
         """Process a completed bar: calculate indicators, persist, publish."""
         # Calculate indicators (including regime)
@@ -174,14 +199,24 @@ class AggregatorService:
             bar.symbol, interval, bar.close, high=bar.high, low=bar.low
         )
 
-        # Persist to database
+        # Buffer bar for batched DB insert
         if self._bar_repo:
-            await self._bar_repo.insert_bar(
-                bar=bar,
-                interval=interval,
-                sma_20=result.sma_20,
-                rsi_14=result.rsi_14,
-            )
+            from decimal import Decimal
+
+            self._bar_buffer.append((
+                interval,
+                bar.timestamp,
+                bar.symbol,
+                Decimal(str(bar.open)),
+                Decimal(str(bar.high)),
+                Decimal(str(bar.low)),
+                Decimal(str(bar.close)),
+                bar.volume,
+                Decimal(str(result.sma_20)) if result.sma_20 is not None else None,
+                Decimal(str(result.rsi_14)) if result.rsi_14 is not None else None,
+            ))
+            if len(self._bar_buffer) >= self._bar_buffer_size:
+                await self._flush_bar_buffer()
 
         # Publish to Redis (with indicators and regime for strategy consumption)
         await self._publisher.publish_bar(

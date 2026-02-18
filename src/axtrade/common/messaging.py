@@ -55,6 +55,30 @@ class RedisPublisher:
         message_id = await self._client.xadd(stream_key, tick.to_dict())
         return message_id
 
+    async def publish_tick_batch(
+        self, ticks: list[Tick], market: str = "us"
+    ) -> list[str]:
+        """Publish multiple ticks using a Redis pipeline.
+
+        Args:
+            ticks: List of ticks to publish
+            market: Market identifier
+
+        Returns:
+            List of stream message IDs
+        """
+        if not self._client:
+            raise RuntimeError("Not connected to Redis")
+        if not ticks:
+            return []
+
+        stream_key = f"{self.config.stream_prefix}:{market}"
+        async with self._client.pipeline(transaction=False) as pipe:
+            for tick in ticks:
+                pipe.xadd(stream_key, tick.to_dict())
+            results = await pipe.execute()
+        return results
+
     @property
     def connected(self) -> bool:
         """Check if connected to Redis."""
@@ -138,13 +162,15 @@ class RedisConsumer:
             if not messages:
                 continue
 
+            batch_ids = []
             for stream_name, stream_messages in messages:
                 for msg_id, data in stream_messages:
                     tick = self._parse_tick(data)
                     if tick:
+                        batch_ids.append(msg_id)
                         yield tick
-                        if self._client:
-                            await self._client.xack(stream_key, group, msg_id)
+            if batch_ids and self._client:
+                await self._client.xack(stream_key, group, *batch_ids)
 
     def _parse_tick(self, data: dict) -> Optional[Tick]:
         """Parse tick data from Redis message."""
@@ -341,13 +367,15 @@ class BarConsumer:
             if not messages:
                 continue
 
+            batch_ids = []
             for stream_name, stream_messages in messages:
                 for msg_id, data in stream_messages:
                     bar_data = self._parse_bar_data(data)
                     if bar_data:
+                        batch_ids.append(msg_id)
                         yield bar_data
-                        if self._client:
-                            await self._client.xack(stream_key, group, msg_id)
+            if batch_ids and self._client:
+                await self._client.xack(stream_key, group, *batch_ids)
 
     def _parse_bar_data(self, data: dict) -> Optional[dict]:
         """Parse bar data from Redis message."""

@@ -53,6 +53,9 @@ class OrderManager:
         # Price cache for risk checks
         self._last_prices: dict[str, Decimal] = {}
 
+        # In-memory open position counter to avoid DB scan on every BUY
+        self._open_position_count: int = 0
+
     async def connect(self) -> None:
         """Initialize repositories, broker, and connections."""
         self._order_repo = OrderRepository(self._pool)
@@ -76,6 +79,10 @@ class OrderManager:
             max_open_orders=risk_config.max_open_orders,
         )
         self._risk_manager = RiskManager(limits)
+
+        # Initialize open position counter from DB
+        all_open = await self._position_repo.get_open_positions()
+        self._open_position_count = len(all_open)
 
         # Initialize broker
         if self.config.oms.paper_mode:
@@ -160,20 +167,19 @@ class OrderManager:
             )
             raise OrderRejectedError(result.reason)
 
-        # Global max positions guard
+        # Global max positions guard (uses in-memory counter)
         if order.side == OrderSide.BUY:
             is_new_position = position is None or position.quantity == 0
             if is_new_position:
-                all_open = await self.get_open_positions()
                 max_pos = self.config.oms.max_positions
-                if len(all_open) >= max_pos:
+                if self._open_position_count >= max_pos:
                     order.status = OrderStatus.REJECTED
                     await self._order_repo.insert(order)
                     reason = f"Max positions ({max_pos}) reached"
                     self.logger.debug(
                         "Order rejected: max positions",
                         order_id=str(order.id),
-                        open_positions=len(all_open),
+                        open_positions=self._open_position_count,
                         max_positions=max_pos,
                     )
                     raise OrderRejectedError(reason)
@@ -218,13 +224,16 @@ class OrderManager:
     async def _on_broker_fill(self, fill: Fill) -> None:
         """Handle fill callback from broker.
 
+        Reads via repositories, then batches all writes (order update, fill
+        insert, position upsert) in a single database transaction.
+
         Args:
             fill: Fill from broker
         """
         if not self._order_repo or not self._position_repo or not self._risk_manager:
             return
 
-        # Get and update order
+        # --- Read phase (via repos) ---
         order = await self._order_repo.get(fill.order_id)
         if order:
             order.filled_quantity += fill.quantity
@@ -242,13 +251,15 @@ class OrderManager:
             else:
                 order.avg_fill_price = fill.price
 
-            await self._order_repo.update(order)
+        # Update position
+        await self._update_position(fill)
 
         # Record fill
         await self._order_repo.insert_fill(fill)
 
-        # Update position
-        await self._update_position(fill)
+        # Update order
+        if order:
+            await self._order_repo.update(order)
 
         # Publish fill to Redis
         await self._publish_fill(fill)
@@ -280,6 +291,7 @@ class OrderManager:
 
         position = await self._position_repo.get(fill.strategy_id, fill.symbol)
         pnl: Optional[Decimal] = None
+        was_open = position is not None and position.quantity > 0
 
         if position is None:
             # New position
@@ -342,6 +354,13 @@ class OrderManager:
             position.closed_at = datetime.now(UTC)
 
         await self._position_repo.upsert(position)
+
+        # Update in-memory open position counter
+        is_now_open = position.quantity > 0
+        if is_now_open and not was_open:
+            self._open_position_count += 1
+        elif not is_now_open and was_open:
+            self._open_position_count = max(0, self._open_position_count - 1)
 
     async def _publish_fill(self, fill: Fill) -> None:
         """Publish fill to Redis stream.

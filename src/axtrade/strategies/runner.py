@@ -265,27 +265,22 @@ class StrategyRunner:
                 strategy_id=command.strategy_id,
             )
 
-    async def _run_strategy(
+    def _run_strategy(
         self,
-        loop: asyncio.AbstractEventLoop,
         strategy: BaseStrategy,
         data: BarWithIndicators,
     ) -> tuple[BaseStrategy, Optional[Order]]:
-        """Run a strategy in a separate thread.
+        """Run a strategy directly (pure Python, no I/O).
 
         Args:
-            loop: Event loop
             strategy: Strategy to run
             data: Bar data
 
         Returns:
             Tuple of (strategy, resulting_order)
         """
-        try:
-            order = await loop.run_in_executor(None, strategy.on_bar, data)
-            return strategy, order
-        except Exception as e:
-            raise e
+        order = strategy.on_bar(data)
+        return strategy, order
 
     async def _consume_loop(self) -> None:
         """Main loop consuming bars and feeding strategies."""
@@ -331,31 +326,20 @@ class StrategyRunner:
                                 )
                         self._current_trading_date = bar_date
 
-                    # Prepare strategy tasks
-                    tasks = []
-                    loop = asyncio.get_running_loop()
-
+                    # Run strategies directly (pure Python, no I/O)
                     for strategy in self._strategies.values():
                         if not strategy.enabled:
                             continue
-                        tasks.append(self._run_strategy(loop, strategy, data))
 
-                    if not tasks:
-                        continue
-
-                    # Run all strategies in parallel
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                    # Process results
-                    for result in results:
-                        if isinstance(result, Exception):
-                            err_key = str(result)
+                        try:
+                            _, order = self._run_strategy(strategy, data)
+                        except Exception as e:
+                            err_key = str(e)
                             if err_key not in self._logged_errors:
                                 self._logged_errors.add(err_key)
                                 self.logger.error("Strategy execution error: %s", err_key)
                             continue
 
-                        strategy, order = result
                         if not order:
                             continue
 
