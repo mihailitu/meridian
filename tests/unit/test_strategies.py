@@ -277,4 +277,4 @@ class TestMomentumBreakout:
         assert strategy.rsi_overbought == 80
         assert strategy.min_trend_strength == 40
         assert strategy.stop_loss_pct == 0.05
-        assert strategy.position_size == Decimal("50")
+        assert strategy._fallback_position_size == Decimal("50")

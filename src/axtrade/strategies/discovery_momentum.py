@@ -27,7 +27,6 @@ class DiscoveryMomentumStrategy(BaseStrategy):
         super().__init__(strategy_id, config)
 
         self.min_score = config.get("min_score", 60)
-        self.position_size = Decimal(str(config.get("position_size", 50)))
         self.stop_loss_pct = config.get("stop_loss_pct", 0.03)
         self.score_decay_exit = config.get("score_decay_exit", 30)
         self.max_positions = config.get("max_positions", 10)
@@ -90,7 +89,7 @@ class DiscoveryMomentumStrategy(BaseStrategy):
             strategy_id=self.strategy_id,
             symbol=data.symbol,
             side=OrderSide.BUY,
-            quantity=self.position_size,
+            quantity=self.compute_position_size(data.close),
             order_type=OrderType.MARKET,
         )
 

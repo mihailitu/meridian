@@ -39,7 +39,6 @@ class MultiTimeframeStrategy(BaseStrategy):
         # Risk management
         self.stop_loss_pct = config.get("stop_loss_pct", 0.015)
         self.take_profit_pct = config.get("take_profit_pct", 0.03)
-        self.position_size = Decimal(str(config.get("position_size", 100)))
 
         # Higher timeframe data storage
         self._trend_closes: dict[str, list[float]] = {}
@@ -140,7 +139,7 @@ class MultiTimeframeStrategy(BaseStrategy):
                 strategy_id=self.strategy_id,
                 symbol=data.symbol,
                 side=OrderSide.BUY,
-                quantity=self.position_size,
+                quantity=self.compute_position_size(float(data.close)),
                 order_type=OrderType.MARKET,
             )
 

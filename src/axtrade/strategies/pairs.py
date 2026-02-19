@@ -41,7 +41,6 @@ class PairsStrategy(BaseStrategy):
 
         # Risk management
         self.stop_loss_pct = config.get("stop_loss_pct", 0.03)
-        self.position_size = Decimal(str(config.get("position_size", 50)))
 
         # Price history
         self._prices_a: list[float] = []
@@ -137,11 +136,12 @@ class PairsStrategy(BaseStrategy):
         # Long entry: z-score very negative (ratio too low, expect it to rise)
         if zscore < -self.entry_zscore:
             self._spread_direction = "long"
+            price = self._prices_a[-1] if self._prices_a else 0
             return Order(
                 strategy_id=self.strategy_id,
                 symbol=self.symbol_a,
                 side=OrderSide.BUY,
-                quantity=self.position_size,
+                quantity=self.compute_position_size(price),
                 order_type=OrderType.MARKET,
             )
 

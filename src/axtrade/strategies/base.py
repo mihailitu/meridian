@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
@@ -74,6 +75,8 @@ class BaseStrategy(ABC):
         self.config = config
         self.positions: dict[str, Position] = {}
         self.enabled = True
+        self._target_position_value: float | None = config.get("target_position_value")
+        self._fallback_position_size = Decimal(str(config.get("position_size", 100)))
 
     @abstractmethod
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
@@ -122,6 +125,23 @@ class BaseStrategy(ABC):
     def clear_position(self, symbol: str) -> None:
         """Clear position from local cache."""
         self.positions.pop(symbol, None)
+
+    def compute_position_size(self, price: float) -> Decimal:
+        """Compute position size based on target dollar value or fixed shares.
+
+        If target_position_value is set, calculates shares to reach that dollar
+        amount. Otherwise falls back to fixed position_size.
+
+        Args:
+            price: Current price of the symbol
+
+        Returns:
+            Number of shares to trade (minimum 1)
+        """
+        if self._target_position_value is not None and price > 0:
+            shares = int(self._target_position_value / price)
+            return Decimal(max(shares, 1))
+        return self._fallback_position_size
 
     @property
     @abstractmethod

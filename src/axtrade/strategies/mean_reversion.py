@@ -35,7 +35,6 @@ class MeanReversionStrategy(BaseStrategy):
 
         # Risk management
         self.stop_loss_pct = config.get("stop_loss_pct", 0.02)
-        self.position_size = Decimal(str(config.get("position_size", 100)))
 
         # Price buffer for Bollinger calculation
         self._price_buffer: dict[str, list[float]] = {}
@@ -103,7 +102,7 @@ class MeanReversionStrategy(BaseStrategy):
                 strategy_id=self.strategy_id,
                 symbol=data.symbol,
                 side=OrderSide.BUY,
-                quantity=self.position_size,
+                quantity=self.compute_position_size(price),
                 order_type=OrderType.MARKET,
             )
 

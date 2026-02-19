@@ -65,7 +65,7 @@ indicators:
 oms:
   paper_mode: true
   slippage_bps: 10
-  max_positions: 20
+  max_positions: 40
   commission:
     per_share: 0.005    # IBKR Pro Fixed: $0.005/share
     minimum: 1.00       # Min $1.00 per order
@@ -86,10 +86,10 @@ strategies:
       id: momentum_us_01
       enabled: true
       config:
-        rsi_oversold: 30
+        rsi_entry: 30
         rsi_overbought: 70
         stop_loss_pct: 0.02
-        position_size: 100
+        target_position_value: 5000
 
     - type: mean_reversion
       id: mean_rev_01
@@ -97,10 +97,10 @@ strategies:
       config:
         bb_period: 20
         bb_std: 2.0
-        rsi_oversold: 35
+        rsi_oversold: 30
         rsi_overbought: 70
         stop_loss_pct: 0.02
-        position_size: 100
+        target_position_value: 5000
 
     - type: multi_timeframe
       id: mtf_01
@@ -108,11 +108,11 @@ strategies:
       config:
         trend_period: 20
         trend_interval_minutes: 5
-        rsi_oversold: 40
-        rsi_overbought: 60
-        stop_loss_pct: 0.015
+        rsi_oversold: 30
+        rsi_overbought: 75
+        stop_loss_pct: 0.025
         take_profit_pct: 0.03
-        position_size: 100
+        target_position_value: 5000
 
     - type: pairs
       id: pairs_aapl_msft
@@ -124,14 +124,14 @@ strategies:
         entry_zscore: 2.0
         exit_zscore: 0.5
         stop_loss_pct: 0.03
-        position_size: 50
+        target_position_value: 5000
 
     - type: discovery_momentum
       id: discovery_momentum_01
       enabled: false
       config:
         min_score: 60
-        position_size: 50
+        target_position_value: 5000
         stop_loss_pct: 0.03
         score_decay_exit: 30
         max_positions: 10

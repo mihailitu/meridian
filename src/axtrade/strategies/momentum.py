@@ -32,7 +32,6 @@ class MomentumBreakout(BaseStrategy):
         self.rsi_overbought = config.get("rsi_overbought", 70)
         self.min_trend_strength = config.get("min_trend_strength", 30)
         self.stop_loss_pct = config.get("stop_loss_pct", 0.03)
-        self.position_size = Decimal(str(config.get("position_size", 100)))
         self._prev_rsi: dict[str, float] = {}  # track previous RSI per symbol
 
     @property
@@ -90,7 +89,7 @@ class MomentumBreakout(BaseStrategy):
             strategy_id=self.strategy_id,
             symbol=bar.symbol,
             side=OrderSide.BUY,
-            quantity=self.position_size,
+            quantity=self.compute_position_size(bar.close),
             order_type=OrderType.MARKET,
         )
 
