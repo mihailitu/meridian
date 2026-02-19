@@ -134,6 +134,21 @@ strategies:
         stop_loss_pct: 0.03            # 3% stop
         target_position_value: 7500
 
+    # Uses ML models (linear regression) to predict price direction from extracted features.
+    # Auto-trains on collected bar data, then trades when prediction confidence exceeds threshold
+    - type: ml_prediction
+      id: ml_prediction_01
+      enabled: true
+      config:
+        lookback_periods: 20           # Bars used for feature extraction
+        confidence_threshold: 0.6      # Minimum prediction confidence to act (0-1)
+        target_position_value: 7500
+        stop_loss_pct: 0.02            # 2% stop
+        take_profit_pct: 0.04          # 4% take profit — 2:1 R:R
+        model_type: linear             # ML model type (linear)
+        auto_train: true               # Train model automatically as data arrives
+        train_samples: 100             # Minimum samples before first training
+
     # Trades symbols discovered by the discovery service based on composite scores.
     # Exits when symbol's score decays below threshold
     - type: discovery_momentum

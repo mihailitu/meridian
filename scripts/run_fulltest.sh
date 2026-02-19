@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
     --end 2026-02-01 \
     --universe sp500 \
     --capital 100000 \
-    --strategies momentum \
-    --output-dir data/momentum \
+    --strategies momentum mean_reversion multi_timeframe pairs ml_prediction \
+    --output-dir data/fulltest_results \
     --redis-db 2 \
-    --db-name momentumdb \
+    --db-name fulltestdb \
     --log-level WARNING
