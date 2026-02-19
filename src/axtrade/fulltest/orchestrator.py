@@ -179,23 +179,40 @@ class FullBacktestOrchestrator:
         config.discovery.enabled = True
         config.discovery.min_score = 40.0
 
-        # Enable all strategies with position sizing within risk limits.
-        # Default 100 shares * $500+ stocks exceeds max_position_value ($50K).
-        # Use a conservative share count that works for any S&P price level.
+        # Build strategy configs by merging base config params with backtest
+        # defaults. Preserves tuned params (rsi_entry, stop_loss_pct, etc.)
+        # from default.yaml instead of discarding them.
         max_pos_value = float(config.oms.risk.max_position_value)
-        # Assume worst-case ~$1200/share (high-end S&P), stay well under limit
         safe_position_size = int(max_pos_value / 1200)  # ~41 shares
-        config.strategies.enabled = []
+
+        # Index base config strategies by type for lookup
+        base_strat_configs: dict[str, dict] = {}
+        for sc in self._base_config.strategies.enabled:
+            base_strat_configs[sc.type] = dict(sc.config)
+
         skip_strategies = {"ml_prediction"}
+        # If --strategies filter is set, only include those
+        strategy_filter = (
+            set(self._bt_config.strategies) if self._bt_config.strategies else None
+        )
+
+        config.strategies.enabled = []
         for stype, sclass in STRATEGY_TYPES.items():
             if stype in skip_strategies:
                 continue
+            if strategy_filter and stype not in strategy_filter:
+                continue
+            # Start with base config params (preserves tuned values)
+            strat_params = base_strat_configs.get(stype, {}).copy()
+            # Only set position_size fallback if target_position_value isn't configured
+            if "target_position_value" not in strat_params:
+                strat_params.setdefault("position_size", safe_position_size)
             config.strategies.enabled.append(
                 StrategyInstanceConfig(
                     type=stype,
                     id=f"{stype}-bt",
                     enabled=True,
-                    config={"position_size": safe_position_size},
+                    config=strat_params,
                 )
             )
 

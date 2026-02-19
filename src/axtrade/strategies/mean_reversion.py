@@ -3,7 +3,7 @@
 from decimal import Decimal
 from typing import Optional
 
-from axtrade.indicators import calculate_bollinger_bands
+from axtrade.indicators import MarketRegime, calculate_bollinger_bands
 from axtrade.oms import Order, OrderSide, OrderType
 
 from .base import BarWithIndicators, BaseStrategy
@@ -94,6 +94,10 @@ class MeanReversionStrategy(BaseStrategy):
 
         # Need RSI for confirmation
         if data.rsi_14 is None:
+            return None
+
+        # Skip entries in bearish regimes - avoid buying falling knives
+        if data.regime in (MarketRegime.TRENDING_DOWN, MarketRegime.BREAKDOWN):
             return None
 
         # Entry: price at/below lower band + RSI oversold

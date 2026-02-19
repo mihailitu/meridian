@@ -40,7 +40,9 @@ make test                   # Run all tests
 # CLI
 python -m axtrade.cli bars AAPL --limit 10 --interval 1m
 python -m axtrade.cli backtest momentum --symbol AAPL --start 2024-01-01 --end 2024-01-31
-python -m axtrade.fulltest --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
+python -m axtrade.fulltest run --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
+python -m axtrade.fulltest run --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT --strategies momentum mean_reversion
+python -m axtrade.fulltest compare baseline.json current.json
 ```
 
 ## Architecture
@@ -96,10 +98,10 @@ Each service is runnable as a Python module:
 - `common/`: Shared types (`Tick`, `Bar` as frozen dataclasses), config loading (`load_config()` from `config/default.yaml`), Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
 - `gateway/`: Data adapters implementing `DataAdapter` - Mock, IBKR (`ib_insync`), Alpaca, Yahoo
 - `indicators/`: `IndicatorEngine` with rolling buffers for SMA, RSI, Bollinger Bands, ATR, and market regime detection
-- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`
+- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion` (regime-filtered), `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
-- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe
+- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe. `compare.py` provides side-by-side A/B comparison of result files. Supports `--strategies` flag to run a subset of strategies
 - `api/`: FastAPI app with route modules in `api/routes/`. OpenAPI docs at `/docs`
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring

@@ -57,84 +57,94 @@ indicators:
   sma_period: 20
   rsi_period: 14
   regime:
-    sma_short_period: 10
-    sma_long_period: 20
-    volatility_lookback: 20
-    atr_period: 14
+    sma_short_period: 10       # Fast SMA for regime crossover detection
+    sma_long_period: 20        # Slow SMA for regime crossover detection
+    volatility_lookback: 20    # Window for volatility-based regime classification
+    atr_period: 14             # ATR period for regime volatility measurement
 
 oms:
   paper_mode: true
-  slippage_bps: 10
-  max_positions: 40
+  slippage_bps: 10             # Simulated slippage in basis points
+  max_positions: 40            # Global cap on concurrent open positions across all strategies
   commission:
-    per_share: 0.005    # IBKR Pro Fixed: $0.005/share
-    minimum: 1.00       # Min $1.00 per order
-    max_pct: 1.0        # Max 1% of trade value
+    per_share: 0.005           # IBKR Pro Fixed: $0.005/share
+    minimum: 1.00              # Min $1.00 per order
+    max_pct: 1.0               # Max 1% of trade value
   risk:
-    max_position_size: 1000
-    max_position_value: 50000
-    max_order_size: 500
-    max_daily_loss: 1000
-    max_open_orders: 10
+    max_position_size: 1000    # Max shares per position
+    max_position_value: 50000  # Max dollar value per position
+    max_order_size: 500        # Max shares per single order
+    max_daily_loss: 1000       # Daily loss limit before halting trading
+    max_open_orders: 10        # Max pending orders at once
 
 strategies:
   bar_stream: "stream:bars:1m:us"
   consumer_group: "strategies"
-  control_channel: "axtrade:strategy:control"
+  control_channel: "axtrade:strategy:control"  # Redis pubsub for runtime enable/disable
   enabled:
+    # Buys when RSI crosses above rsi_entry in bullish regime (TRENDING_UP/BREAKOUT)
+    # with price > SMA and trend_strength > 30
     - type: momentum
       id: momentum_us_01
       enabled: true
       config:
-        rsi_entry: 30
-        rsi_overbought: 70
-        stop_loss_pct: 0.02
-        target_position_value: 5000
+        rsi_entry: 50                  # RSI crossover threshold (prev < 50, current >= 50 = momentum building)
+        rsi_overbought: 70             # Exit when RSI exceeds this (momentum exhaustion)
+        stop_loss_pct: 0.02            # 2% trailing stop
+        target_position_value: 7500    # Dollar value per position ($1 commission = 0.027% round-trip)
 
+    # Buys at lower Bollinger Band + oversold RSI, sells at upper band or overbought RSI.
+    # Regime-filtered: skips TRENDING_DOWN and BREAKDOWN to avoid falling knives
     - type: mean_reversion
       id: mean_rev_01
       enabled: true
       config:
-        bb_period: 20
-        bb_std: 2.0
-        rsi_oversold: 30
-        rsi_overbought: 70
-        stop_loss_pct: 0.02
-        target_position_value: 5000
+        bb_period: 20                  # Bollinger Band lookback period
+        bb_std: 2.0                    # Bollinger Band standard deviations
+        rsi_oversold: 30              # Buy below this RSI (with price at lower band)
+        rsi_overbought: 70             # Sell above this RSI
+        stop_loss_pct: 0.03            # 3% stop — wider than BB to let mean reversion play out
+        target_position_value: 7500
 
+    # Uses higher-timeframe (5m) trend confirmation for 1m entries.
+    # Buys on oversold pullbacks within HTF uptrends
     - type: multi_timeframe
       id: mtf_01
       enabled: true
       config:
-        trend_period: 20
-        trend_interval_minutes: 5
-        rsi_oversold: 30
-        rsi_overbought: 75
-        stop_loss_pct: 0.025
-        take_profit_pct: 0.03
-        target_position_value: 5000
+        trend_period: 20               # HTF SMA period for trend direction
+        trend_interval_minutes: 5      # Higher timeframe candle size (aggregated from 1m bars)
+        rsi_oversold: 35               # Entry on pullbacks — 35 is reachable in normal uptrend dips
+        rsi_overbought: 75             # Exit threshold
+        stop_loss_pct: 0.025           # 2.5% stop
+        take_profit_pct: 0.06          # 6% TP — gives 2.4:1 R:R (break-even at 29% win rate)
+        target_position_value: 7500
 
+    # Trades mean-reverting spread between two correlated symbols.
+    # Enters when z-score of price ratio exceeds entry threshold, exits on normalization
     - type: pairs
       id: pairs_aapl_msft
       enabled: true
       config:
         symbol_a: AAPL
         symbol_b: MSFT
-        lookback: 20
-        entry_zscore: 2.0
-        exit_zscore: 0.5
-        stop_loss_pct: 0.03
-        target_position_value: 5000
+        lookback: 20                   # Window for ratio mean/std calculation
+        entry_zscore: 2.0              # Enter when spread z-score exceeds this (2 std devs)
+        exit_zscore: 0.5               # Exit when spread normalizes to within this z-score
+        stop_loss_pct: 0.03            # 3% stop
+        target_position_value: 7500
 
+    # Trades symbols discovered by the discovery service based on composite scores.
+    # Exits when symbol's score decays below threshold
     - type: discovery_momentum
       id: discovery_momentum_01
       enabled: false
       config:
-        min_score: 60
+        min_score: 60                  # Minimum discovery score to enter (0-100)
         target_position_value: 5000
         stop_loss_pct: 0.03
-        score_decay_exit: 30
-        max_positions: 10
+        score_decay_exit: 30           # Exit when score drops below this
+        max_positions: 10              # Per-strategy position cap
 
 api:
   host: "0.0.0.0"
@@ -147,12 +157,12 @@ api:
 
 discovery:
   enabled: true
-  scan_interval_seconds: 300
-  bar_limit: 50
-  interval: "1m"
-  auto_subscribe: false
-  min_score: 60
-  max_positions: 10
+  scan_interval_seconds: 300   # How often to run screener scans
+  bar_limit: 50                # Number of recent bars to feed screeners
+  interval: "1m"               # Bar interval for screener analysis
+  auto_subscribe: false        # When true, push high-score symbols to gateway for live data
+  min_score: 60                # Minimum composite score to surface a symbol
+  max_positions: 10            # Max symbols tracked by discovery
   screeners:
     - type: momentum
       name: momentum_screener
@@ -160,25 +170,25 @@ discovery:
       params:
         rsi_oversold: 30
         rsi_overbought: 70
-        min_bars: 20
+        min_bars: 20           # Minimum bars needed before screener activates
 
     - type: volatility
       name: volatility_screener
       enabled: true
       params:
-        min_atr_ratio: 2.0
+        min_atr_ratio: 2.0     # Minimum ATR-to-price ratio to flag as volatile
         min_bars: 20
 
     - type: volume
       name: volume_screener
       enabled: true
       params:
-        volume_multiplier: 2.0
+        volume_multiplier: 2.0 # Flag when volume exceeds this multiple of average
         min_bars: 20
 
     - type: trend
       name: trend_screener
       enabled: true
       params:
-        min_trend_strength: 50
+        min_trend_strength: 50 # Minimum trend strength score (0-100)
         min_bars: 25

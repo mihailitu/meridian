@@ -26,6 +26,7 @@ class FullBacktestConfig:
     output_dir: str = "data/fulltest_results"
     report_format: str = "text"
     skip_download: bool = True
+    strategies: list[str] | None = None
 
 
 @dataclass

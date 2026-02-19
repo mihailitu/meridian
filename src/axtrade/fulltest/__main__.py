@@ -133,6 +133,7 @@ def run_command(args) -> None:
         output_dir=args.output_dir,
         report_format=args.format,
         skip_download=not args.download,
+        strategies=args.strategies,
     )
 
     orchestrator = FullBacktestOrchestrator(bt_config)
@@ -203,9 +204,24 @@ def main() -> None:
         help="Auto-download missing data before running (default: skip download)"
     )
     run_parser.add_argument(
+        "--strategies", nargs="+", default=None,
+        help="Run only these strategies (e.g. --strategies momentum mean_reversion)"
+    )
+    run_parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level (default: WARNING)"
+    )
+
+    # --- compare subcommand ---
+    cmp_parser = subparsers.add_parser(
+        "compare", help="Compare two fulltest JSON result files"
+    )
+    cmp_parser.add_argument(
+        "baseline", help="Path to baseline JSON result file"
+    )
+    cmp_parser.add_argument(
+        "current", help="Path to current JSON result file"
     )
 
     args = parser.parse_args()
@@ -218,6 +234,9 @@ def main() -> None:
         download_command(args)
     elif args.command == "run":
         run_command(args)
+    elif args.command == "compare":
+        from .compare import compare_results
+        print(compare_results(args.baseline, args.current))
 
 
 if __name__ == "__main__":

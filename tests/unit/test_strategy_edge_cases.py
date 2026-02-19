@@ -378,6 +378,38 @@ class TestMeanReversionEdgeCases:
         assert "AAPL" in strategy._price_buffer
         assert "MSFT" in strategy._price_buffer
 
+    def test_no_buy_in_trending_down_regime(
+        self, strategy: MeanReversionStrategy
+    ) -> None:
+        """Should not enter when regime is TRENDING_DOWN (falling knife)."""
+        # Build enough price history for Bollinger Bands
+        for i in range(25):
+            data = make_bar_with_indicators(close=100.0, rsi_14=50)
+            strategy.on_bar(data)
+
+        # Entry signal: price below lower band + RSI oversold, but bearish regime
+        data = make_bar_with_indicators(
+            close=95.0, rsi_14=25,
+            regime=MarketRegime.TRENDING_DOWN,
+        )
+        order = strategy.on_bar(data)
+        assert order is None
+
+    def test_no_buy_in_breakdown_regime(
+        self, strategy: MeanReversionStrategy
+    ) -> None:
+        """Should not enter when regime is BREAKDOWN."""
+        for i in range(25):
+            data = make_bar_with_indicators(close=100.0, rsi_14=50)
+            strategy.on_bar(data)
+
+        data = make_bar_with_indicators(
+            close=95.0, rsi_14=25,
+            regime=MarketRegime.BREAKDOWN,
+        )
+        order = strategy.on_bar(data)
+        assert order is None
+
 
 class TestMultiTimeframeEdgeCases:
     """Edge case tests for MultiTimeframeStrategy."""
