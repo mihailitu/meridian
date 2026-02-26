@@ -26,7 +26,7 @@ class TestRedisPublisher:
     @pytest.fixture
     def config(self) -> RedisConfig:
         """Create Redis config for testing."""
-        return RedisConfig(host="localhost", port=6379, stream_prefix="stream:ticks")
+        return RedisConfig(host="localhost", port=8113, stream_prefix="stream:ticks")
 
     @pytest.fixture
     def publisher(self, config: RedisConfig) -> RedisPublisher:
@@ -100,7 +100,7 @@ class TestRedisConsumer:
     @pytest.fixture
     def redis_config(self) -> RedisConfig:
         """Create Redis config for testing."""
-        return RedisConfig(host="localhost", port=6379)
+        return RedisConfig(host="localhost", port=8113)
 
     @pytest.fixture
     def aggregator_config(self) -> AggregatorConfig:
@@ -290,7 +290,7 @@ class TestBarPublisher:
     @pytest.fixture
     def config(self) -> RedisConfig:
         """Create Redis config for testing."""
-        return RedisConfig(host="localhost", port=6379)
+        return RedisConfig(host="localhost", port=8113)
 
     @pytest.fixture
     def publisher(self, config: RedisConfig) -> BarPublisher:
@@ -395,7 +395,7 @@ class TestBarConsumer:
     @pytest.fixture
     def redis_config(self) -> RedisConfig:
         """Create Redis config for testing."""
-        return RedisConfig(host="localhost", port=6379)
+        return RedisConfig(host="localhost", port=8113)
 
     @pytest.fixture
     def strategies_config(self) -> StrategiesConfig:

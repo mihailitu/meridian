@@ -46,7 +46,7 @@ def redis_config():
     """Create Redis configuration for testing."""
     return RedisConfig(
         host="localhost",
-        port=6379,
+        port=8113,
         stream_prefix="stream:ticks:test",
     )
 
@@ -56,7 +56,7 @@ def database_config():
     """Create database configuration for testing."""
     return DatabaseConfig(
         host="localhost",
-        port=5432,
+        port=8112,
         database="axtrade_test",
         user="axtrade",
         password="axtrade",

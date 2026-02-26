@@ -42,7 +42,7 @@ class TestGatewayControlPublisher:
 
     @pytest.fixture
     def publisher(self):
-        redis_config = RedisConfig(host="localhost", port=6379)
+        redis_config = RedisConfig(host="localhost", port=8113)
         gateway_config = GatewayConfig(control_channel="test:gateway:control")
         return GatewayControlPublisher(redis_config, gateway_config)
 

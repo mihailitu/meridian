@@ -86,7 +86,7 @@ class TestRedisConfig:
         """Test default values."""
         config = RedisConfig()
         assert config.host == "localhost"
-        assert config.port == 6379
+        assert config.port == 8113
         assert config.stream_prefix == "stream:ticks"
 
 
@@ -109,7 +109,7 @@ class TestDatabaseConfig:
         """Test default values."""
         config = DatabaseConfig()
         assert config.host == "localhost"
-        assert config.port == 5432
+        assert config.port == 8112
         assert config.database == "axtrade"
         assert config.user == "axtrade"
         assert config.password == "axtrade"
@@ -193,7 +193,7 @@ class TestAPIConfig:
         """Test default values."""
         config = APIConfig()
         assert config.host == "0.0.0.0"
-        assert config.port == 8000
+        assert config.port == 8110
         assert config.cors_origins == ["*"]
 
 

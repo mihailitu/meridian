@@ -13,7 +13,7 @@ axtrade is a Python-based algorithmic trading platform supporting real-time mark
 make dev                    # Create venv and install with dev dependencies
 make install                # Create venv and install production only
 
-# Infrastructure (docker-compose: Redis on port 6380, TimescaleDB on port 5433)
+# Infrastructure (docker-compose: Redis on port 8113, TimescaleDB on port 8112)
 make infra                  # Start Redis + TimescaleDB
 make infra-stop             # Stop all infrastructure
 
@@ -28,7 +28,7 @@ make run-api                # Run web dashboard API server
 
 # Frontend Development (from src/axtrade/web/ui/)
 npm install                 # Install dependencies (first time)
-npm run dev                 # Start Vite dev server at http://localhost:5173
+npm run dev                 # Start Vite dev server at http://localhost:8111
 npm run build               # Build for production
 
 # Testing
@@ -79,7 +79,7 @@ Each service is runnable as a Python module:
 - `python -m axtrade.gateway --adapter mock|ibkr|alpaca|yahoo`
 - `python -m axtrade.aggregator`
 - `python -m axtrade.strategies`
-- `python -m axtrade.api.app` (FastAPI on port 8000, serves frontend static build and provides REST + WebSocket)
+- `python -m axtrade.api.app` (FastAPI on port 8110, serves frontend static build and provides REST + WebSocket)
 
 ### Key Extension Points
 
@@ -130,4 +130,7 @@ Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come f
 - OMS types use mutable dataclasses (`Order`, `Fill`, `Position`) with `Decimal` for monetary values
 - Strategies inherit from `BaseStrategy` ABC and implement `on_bar()` method
 - Tests use pytest-asyncio with `asyncio_mode = "auto"`, fixtures in `tests/conftest.py`
-- Non-default ports: Redis on 6380, TimescaleDB on 5433
+- Ports: API on 8110, Vite dev on 8111, TimescaleDB on 8112, Redis on 8113
+
+> **Port assignment**: This project uses ports 8110-8119 to avoid collisions with
+> ajut.ro (8080-8089), sentinel-kb (8090-8099), and just (8100-8109) on the same server.

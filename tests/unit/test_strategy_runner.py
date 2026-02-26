@@ -33,7 +33,7 @@ class TestStrategyRunner:
     def mock_config(self) -> Config:
         """Create a test configuration with strategies enabled."""
         config = Config()
-        config.redis = RedisConfig(host="localhost", port=6379)
+        config.redis = RedisConfig(host="localhost", port=8113)
         config.database = DatabaseConfig()
         config.oms = OMSConfig(
             paper_mode=True,

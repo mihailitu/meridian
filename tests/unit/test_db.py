@@ -20,7 +20,7 @@ class TestDatabasePool:
     def test_init(self) -> None:
         config = DatabaseConfig(
             host="localhost",
-            port=5432,
+            port=8112,
             database="testdb",
             user="testuser",
             password="testpass",

@@ -11,16 +11,17 @@ export default defineConfig({
     },
   },
   server: {
+    port: 8111,
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8110',
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('error', () => {});
         },
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',
+        target: 'ws://127.0.0.1:8110',
         ws: true,
         configure: (proxy) => {
           proxy.on('error', () => {});

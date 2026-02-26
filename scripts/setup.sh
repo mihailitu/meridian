@@ -222,7 +222,7 @@ if [ "${SKIP_FRONTEND:-0}" != "1" ]; then
         npm run build
 
         cd "$PROJECT_ROOT"
-        log_info "Frontend built and will be served by API at http://localhost:8000"
+        log_info "Frontend built and will be served by API at http://localhost:8110"
     else
         log_warn "Frontend directory not found at $FRONTEND_DIR"
     fi
@@ -253,7 +253,7 @@ echo "     make run-strategy     # Strategy runner"
 echo "     make run-api          # Web API + frontend"
 echo ""
 echo "  3. Access the dashboard:"
-echo "     http://localhost:8000"
+echo "     http://localhost:8110"
 echo ""
 echo "  4. Check system status:"
 echo "     ./scripts/status.sh"

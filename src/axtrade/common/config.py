@@ -62,7 +62,7 @@ class RedisConfig:
     """Redis configuration."""
 
     host: str = "localhost"
-    port: int = 6379
+    port: int = 8113
     db: int = 0
     stream_prefix: str = "stream:ticks"
 
@@ -83,7 +83,7 @@ class DatabaseConfig:
     """Database configuration."""
 
     host: str = "localhost"
-    port: int = 5432
+    port: int = 8112
     database: str = "axtrade"
     user: str = "axtrade"
     password: str = "axtrade"
@@ -166,7 +166,7 @@ class APIConfig:
     """API server configuration."""
 
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8110
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
 
 

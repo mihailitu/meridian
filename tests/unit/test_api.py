@@ -21,7 +21,7 @@ from axtrade.oms.types import Fill, Order, OrderSide, OrderStatus, OrderType, Po
 def mock_config() -> Config:
     """Create a minimal config for testing."""
     config = Config()
-    config.api = APIConfig(host="127.0.0.1", port=8000, cors_origins=["*"])
+    config.api = APIConfig(host="127.0.0.1", port=8110, cors_origins=["*"])
     config.database = DatabaseConfig()
     return config
 

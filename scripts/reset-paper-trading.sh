@@ -26,14 +26,14 @@ fi
 
 # Database settings (from config/default.yaml)
 DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-5433}"
+DB_PORT="${DB_PORT:-8112}"
 DB_NAME="${DB_NAME:-axtrade}"
 DB_USER="${DB_USER:-axtrade}"
 DB_PASS="${DB_PASS:-axtrade}"
 
 # Redis settings
 REDIS_HOST="${REDIS_HOST:-localhost}"
-REDIS_PORT="${REDIS_PORT:-6380}"
+REDIS_PORT="${REDIS_PORT:-8113}"
 
 echo "Database: $DB_HOST:$DB_PORT/$DB_NAME"
 echo "Redis: $REDIS_HOST:$REDIS_PORT"

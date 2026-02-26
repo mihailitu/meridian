@@ -1,8 +1,9 @@
 services:
   redis:
     image: redis:7-alpine
+    container_name: meridian-redis
     ports:
-      - "6380:6379"
+      - "8113:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -13,12 +14,13 @@ services:
 
   timescaledb:
     image: timescale/timescaledb:latest-pg16
+    container_name: meridian-timescaledb
     environment:
       POSTGRES_USER: axtrade
       POSTGRES_PASSWORD: axtrade
       POSTGRES_DB: axtrade
     ports:
-      - "5433:5432"
+      - "8112:5432"
     volumes:
       - timescale_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
