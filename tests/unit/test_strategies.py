@@ -29,6 +29,45 @@ class TestBarWithIndicators:
         assert data.close == 185.5
 
 
+class TestBaseStrategyMaxPositions:
+    """Tests for BaseStrategy.at_capacity / max_positions handling."""
+
+    @staticmethod
+    def _make_position(symbol: str) -> Position:
+        return Position(
+            strategy_id="test",
+            symbol=symbol,
+            side="long",
+            quantity=Decimal(100),
+            avg_entry_price=Decimal("100"),
+        )
+
+    def test_unlimited_when_unset(self) -> None:
+        strat = MomentumBreakout("test", {})
+        assert strat.max_positions is None
+        for sym in ("AAPL", "MSFT", "GOOGL"):
+            strat.update_position(self._make_position(sym))
+        assert strat.at_capacity() is False
+
+    def test_at_capacity_when_set(self) -> None:
+        strat = MomentumBreakout("test", {"max_positions": 2})
+        assert strat.max_positions == 2
+        assert strat.at_capacity() is False
+        strat.update_position(self._make_position("AAPL"))
+        assert strat.at_capacity() is False
+        strat.update_position(self._make_position("MSFT"))
+        assert strat.at_capacity() is True
+        strat.update_position(self._make_position("GOOGL"))
+        assert strat.at_capacity() is True
+
+    def test_at_capacity_clears_when_position_closed(self) -> None:
+        strat = MomentumBreakout("test", {"max_positions": 1})
+        strat.update_position(self._make_position("AAPL"))
+        assert strat.at_capacity() is True
+        strat.clear_position("AAPL")
+        assert strat.at_capacity() is False
+
+
 class TestMomentumBreakout:
     """Tests for MomentumBreakout strategy."""
 

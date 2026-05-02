@@ -180,6 +180,9 @@ class FullBacktestOrchestrator:
         max_pos_value = float(config.oms.risk.max_position_value)
         # Assume worst-case ~$1200/share (high-end S&P), stay well under limit
         safe_position_size = int(max_pos_value / 1200)  # ~41 shares
+        # Per-strategy cap so signals self-limit instead of being rejected at
+        # the OMS. discovery_momentum already defaults to 10 internally.
+        per_strategy_max_positions = 10
         config.strategies.enabled = []
         skip_strategies = {"ml_prediction"}
         for stype, sclass in STRATEGY_TYPES.items():
@@ -190,9 +193,16 @@ class FullBacktestOrchestrator:
                     type=stype,
                     id=f"{stype}-bt",
                     enabled=True,
-                    config={"position_size": safe_position_size},
+                    config={
+                        "position_size": safe_position_size,
+                        "max_positions": per_strategy_max_positions,
+                    },
                 )
             )
+
+        # Raise the global cap above the sum of per-strategy caps so the OMS
+        # is no longer the bottleneck (live config stays at 20).
+        config.oms.max_positions = 50
 
         # Force paper mode
         config.oms.paper_mode = True

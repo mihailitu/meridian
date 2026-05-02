@@ -68,12 +68,23 @@ class BaseStrategy(ABC):
 
         Args:
             strategy_id: Unique identifier for this strategy instance
-            config: Strategy-specific configuration
+            config: Strategy-specific configuration. Recognized common keys:
+                max_positions: cap on simultaneous open positions; None = unlimited
         """
         self.strategy_id = strategy_id
         self.config = config
         self.positions: dict[str, Position] = {}
         self.enabled = True
+        max_pos = config.get("max_positions")
+        self.max_positions: Optional[int] = int(max_pos) if max_pos is not None else None
+
+    def at_capacity(self) -> bool:
+        """True when the strategy has hit its own max_positions cap.
+
+        Strategies should check this before emitting a new entry order so
+        signals that would be rejected at the OMS level aren't generated.
+        """
+        return self.max_positions is not None and len(self.positions) >= self.max_positions
 
     @abstractmethod
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
