@@ -1,5 +1,7 @@
 # TODO: Improve Fulltest Win Performance
 
+> Broader architectural issues (Sharpe bug, indicator→strategy wiring, IBKR `add_symbols` no-op, design-doc drift) live in [`docs/AUDIT-2026-05-02.md`](docs/AUDIT-2026-05-02.md). This file stays scoped to strategy logic.
+
 ## Context
 
 Fulltest (2025-08-01 to 2026-02-01, 5 symbols + discovery, $100K) returned **-1.53%** with a **23.8% win rate**. Only `discovery_momentum` was profitable (+$248, 47% WR, 1.80 PF). The other strategies are deeply negative — `momentum` at 6.8% WR and `multi_timeframe` at 11.3% WR are worse than random. Root causes: contradictory entry logic, unused regime/volatility data from indicators, tight stops, and a 93% order rejection rate from risk limits.

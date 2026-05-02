@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 axtrade is a Python-based algorithmic trading platform supporting real-time market data ingestion, technical indicator calculation, and multi-strategy execution. Supports multiple data sources (Mock, IBKR, Alpaca, Yahoo) and paper/live trading modes.
 
+Note: the repository directory is `meridian/`, but the Python package is `axtrade`. All `python -m axtrade.*` invocations refer to `src/axtrade/`.
+
 ## Build and Development Commands
 
 ```bash
@@ -25,6 +27,11 @@ make run-yahoo              # Run gateway with Yahoo adapter
 make run-aggregator         # Run bar aggregator service
 make run-strategy           # Run strategy runner service
 make run-api                # Run web dashboard API server
+make build-ui               # Build frontend static bundle (served by api)
+
+# Fulltest (historical replay through the full pipeline)
+make run-fulltest-download ARGS="--start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL"
+make run-fulltest          ARGS="--start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000"
 
 # Frontend Development (from src/axtrade/web/ui/)
 npm install                 # Install dependencies (first time)
@@ -37,10 +44,11 @@ make test                   # Run all tests
 .venv/bin/pytest tests/unit/test_indicators.py::TestCalculateSMA -v  # Single test class
 .venv/bin/pytest -k "test_rsi" -v                           # Tests matching pattern
 
-# CLI
+# CLI (note: subcommands are required)
 python -m axtrade.cli bars AAPL --limit 10 --interval 1m
-python -m axtrade.cli backtest momentum --symbol AAPL --start 2024-01-01 --end 2024-01-31
-python -m axtrade.fulltest --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
+python -m axtrade.cli backtest --strategy momentum --symbol AAPL --start 2024-01-01 --end 2024-01-31
+python -m axtrade.fulltest download --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL
+python -m axtrade.fulltest run      --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
 ```
 
 ## Architecture
@@ -99,10 +107,12 @@ Each service is runnable as a Python module:
 - `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
-- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe
+- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe. Defaults to `--redis-db 1` and `--db-name axtrade_backtest` so it never touches live state (db=0 / `axtrade`)
 - `api/`: FastAPI app with route modules in `api/routes/`. OpenAPI docs at `/docs`
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
+- `analytics/`: Performance analytics (`metrics`, `drawdown`, `trades`, per-strategy aggregation) shared by backtest, fulltest, and the API
+- `ml/`: ML model scaffolding (`features`, `inference`, `models`, `types`) backing the `ml_prediction` strategy
 - `discovery/`: Symbol screening with momentum, volatility, volume, and trend screeners. `DiscoveryRunner` runs periodic background scans via `LoopSupervisor`, optionally feeds discovered symbols to gateway via `GatewayControlPublisher` when `auto_subscribe` is enabled. `SymbolProvider` protocol enables pluggable symbol sources (default: `ConfigSymbolProvider` reads from gateway config)
 
 ### Database
@@ -112,6 +122,8 @@ TimescaleDB (PostgreSQL) with schema initialized by `scripts/init-db.sql` (creat
 ### Configuration
 
 Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
+
+`discovery_momentum` is shipped with `enabled: false` in `config/default.yaml` — flip it on to exercise the discovery→trading bridge.
 
 ### Helper Scripts
 
