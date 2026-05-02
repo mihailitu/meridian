@@ -94,9 +94,9 @@ strategies:
     - type: mean_reversion
       id: mean_rev_01
       enabled: true
+      # bb_period/bb_std now configured at indicators-level (single source
+      # of truth); strategy reads bands from BarWithIndicators.
       config:
-        bb_period: 20
-        bb_std: 2.0
         rsi_oversold: 35
         rsi_overbought: 70
         stop_loss_pct: 0.02

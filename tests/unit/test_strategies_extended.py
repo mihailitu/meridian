@@ -39,6 +39,10 @@ def make_bar_with_indicators(
     close: float = 100.0,
     sma_20: float | None = None,
     rsi_14: float | None = None,
+    bb_upper: float | None = None,
+    bb_middle: float | None = None,
+    bb_lower: float | None = None,
+    atr: float | None = None,
     timestamp: datetime | None = None,
 ) -> BarWithIndicators:
     """Create a test bar with indicators."""
@@ -46,6 +50,10 @@ def make_bar_with_indicators(
         bar=make_bar(symbol, close, timestamp),
         sma_20=sma_20,
         rsi_14=rsi_14,
+        bb_upper=bb_upper,
+        bb_middle=bb_middle,
+        bb_lower=bb_lower,
+        atr=atr,
     )
 
 
@@ -57,8 +65,6 @@ class TestMeanReversionStrategy:
         return MeanReversionStrategy(
             strategy_id="mean_rev_test",
             config={
-                "bb_period": 20,
-                "bb_std": 2.0,
                 "rsi_oversold": 35,
                 "rsi_overbought": 70,
                 "stop_loss_pct": 0.02,
@@ -69,25 +75,20 @@ class TestMeanReversionStrategy:
     def test_name(self, strategy: MeanReversionStrategy) -> None:
         assert strategy.name == "MeanReversion"
 
-    def test_no_signal_without_enough_data(
+    def test_no_signal_without_bands(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Only a few bars, not enough for Bollinger
-        for i in range(5):
-            data = make_bar_with_indicators(close=100 + i, rsi_14=30)
-            order = strategy.on_bar(data)
-            assert order is None
+        # Strategy must wait for the indicator engine to emit Bollinger
+        # values; without them, no signal regardless of price/RSI.
+        data = make_bar_with_indicators(close=100, rsi_14=30)
+        assert strategy.on_bar(data) is None
 
     def test_buy_signal_at_lower_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Build up price history at 100
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Price drops to lower band with oversold RSI
-        data = make_bar_with_indicators(close=88.0, rsi_14=30)
+        data = make_bar_with_indicators(
+            close=88.0, rsi_14=30, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+        )
         order = strategy.on_bar(data)
 
         assert order is not None
@@ -97,13 +98,10 @@ class TestMeanReversionStrategy:
     def test_no_buy_signal_without_rsi(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Build up history
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Price at lower band but no RSI
-        data = make_bar_with_indicators(close=88.0, rsi_14=None)
+        # Price at lower band but no RSI to confirm
+        data = make_bar_with_indicators(
+            close=88.0, rsi_14=None, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+        )
         order = strategy.on_bar(data)
 
         assert order is None
@@ -111,12 +109,6 @@ class TestMeanReversionStrategy:
     def test_sell_signal_at_upper_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Build up history and enter position
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Enter position
         strategy.update_position(
             Position(
                 strategy_id="mean_rev_test",
@@ -127,8 +119,9 @@ class TestMeanReversionStrategy:
             )
         )
 
-        # Price rises to upper band
-        data = make_bar_with_indicators(close=112.0, rsi_14=60)
+        data = make_bar_with_indicators(
+            close=112.0, rsi_14=60, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+        )
         order = strategy.on_bar(data)
 
         assert order is not None
@@ -137,12 +130,6 @@ class TestMeanReversionStrategy:
     def test_sell_signal_on_overbought_rsi(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Build up history
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Enter position
         strategy.update_position(
             Position(
                 strategy_id="mean_rev_test",
@@ -154,19 +141,15 @@ class TestMeanReversionStrategy:
         )
 
         # RSI overbought (even if price not at upper band)
-        data = make_bar_with_indicators(close=102.0, rsi_14=75)
+        data = make_bar_with_indicators(
+            close=102.0, rsi_14=75, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+        )
         order = strategy.on_bar(data)
 
         assert order is not None
         assert order.side == OrderSide.SELL
 
     def test_stop_loss_exit(self, strategy: MeanReversionStrategy) -> None:
-        # Build up history
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Enter position at 100
         strategy.update_position(
             Position(
                 strategy_id="mean_rev_test",
@@ -178,7 +161,9 @@ class TestMeanReversionStrategy:
         )
 
         # Price drops below stop loss (2% = $98)
-        data = make_bar_with_indicators(close=97.0, rsi_14=40)
+        data = make_bar_with_indicators(
+            close=97.0, rsi_14=40, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+        )
         order = strategy.on_bar(data)
 
         assert order is not None

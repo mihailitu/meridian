@@ -43,6 +43,10 @@ def make_bar_with_indicators(
     close: float = 100.0,
     sma_20: float | None = None,
     rsi_14: float | None = None,
+    bb_upper: float | None = None,
+    bb_middle: float | None = None,
+    bb_lower: float | None = None,
+    atr: float | None = None,
     timestamp: datetime | None = None,
 ) -> BarWithIndicators:
     """Create a test bar with indicators."""
@@ -50,6 +54,10 @@ def make_bar_with_indicators(
         bar=make_bar(symbol, close, timestamp),
         sma_20=sma_20,
         rsi_14=rsi_14,
+        bb_upper=bb_upper,
+        bb_middle=bb_middle,
+        bb_lower=bb_lower,
+        atr=atr,
     )
 
 
@@ -207,15 +215,17 @@ class TestMomentumBreakoutEdgeCases:
 
 
 class TestMeanReversionEdgeCases:
-    """Edge case tests for MeanReversionStrategy."""
+    """Edge case tests for MeanReversionStrategy.
+
+    BB/ATR buffering moved to IndicatorEngine; tests for buffer limits
+    and per-symbol isolation now live in test_indicators.py.
+    """
 
     @pytest.fixture
     def strategy(self) -> MeanReversionStrategy:
         return MeanReversionStrategy(
             strategy_id="mean_rev_test",
             config={
-                "bb_period": 20,
-                "bb_std": 2.0,
                 "rsi_oversold": 35,
                 "rsi_overbought": 70,
                 "stop_loss_pct": 0.02,
@@ -223,67 +233,34 @@ class TestMeanReversionEdgeCases:
             },
         )
 
-    def test_buffer_size_limits(self, strategy: MeanReversionStrategy) -> None:
-        """Test that buffer doesn't grow unbounded."""
-        # Send many bars
-        for i in range(100):
-            data = make_bar_with_indicators(close=100.0 + (i % 10), rsi_14=50)
-            strategy.on_bar(data)
-
-        # Buffer should be capped at bb_period * 2 or similar
-        # Strategy may use list with trimming rather than deque
-        buffer_len = len(strategy._price_buffer.get("AAPL", []))
-        # Just verify it didn't grow to 100 (some cleanup happens)
-        assert buffer_len <= 100  # Reasonable limit
-
     def test_zero_standard_deviation(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        """Test handling of zero standard deviation."""
-        # Send identical prices to create zero std dev
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Should not crash on zero std dev
-        # Strategy should either skip calculation or handle gracefully
-        data = make_bar_with_indicators(close=100.0, rsi_14=30)
+        """When BB has zero std dev (upper == lower == middle), price <= lower
+        is trivially true; strategy should still gate on RSI."""
+        # Bands collapsed onto the mean; oversold RSI makes the entry fire.
+        data = make_bar_with_indicators(
+            close=100.0, rsi_14=30, bb_upper=100.0, bb_middle=100.0, bb_lower=100.0
+        )
         order = strategy.on_bar(data)
-        # With zero std dev, bands are at the same level as mean
-        # Implementation may vary - just ensure no crash
+        assert order is not None  # price <= lower and RSI < 35
+
+        # And without oversold RSI it should not fire.
+        data = make_bar_with_indicators(
+            close=100.0, rsi_14=50, bb_upper=100.0, bb_middle=100.0, bb_lower=100.0
+        )
+        assert strategy.on_bar(data) is None
 
     def test_price_at_exact_lower_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        """Test price exactly at lower Bollinger band."""
-        # Build stable history
-        for i in range(25):
-            data = make_bar_with_indicators(close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Get the lower band value and test at exact value
-        # This depends on implementation, but we can test boundary behavior
-        data = make_bar_with_indicators(close=99.9, rsi_14=30)
-        strategy.on_bar(data)
-        # Should not crash
-
-    def test_multiple_symbols_in_buffer(
-        self, strategy: MeanReversionStrategy
-    ) -> None:
-        """Test separate buffers for different symbols."""
-        # Build history for AAPL
-        for i in range(25):
-            data = make_bar_with_indicators(symbol="AAPL", close=100.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Build history for MSFT
-        for i in range(25):
-            data = make_bar_with_indicators(symbol="MSFT", close=300.0, rsi_14=50)
-            strategy.on_bar(data)
-
-        # Both should have separate buffers
-        assert "AAPL" in strategy._price_buffer
-        assert "MSFT" in strategy._price_buffer
+        """Price exactly at lower band counts as a touch (<= boundary)."""
+        data = make_bar_with_indicators(
+            close=88.0, rsi_14=30, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+        )
+        order = strategy.on_bar(data)
+        assert order is not None
+        assert order.side == OrderSide.BUY
 
 
 class TestMultiTimeframeEdgeCases:

@@ -3,7 +3,6 @@
 from decimal import Decimal
 from typing import Optional
 
-from axtrade.indicators import calculate_bollinger_bands
 from axtrade.oms import Order, OrderSide, OrderType
 
 from .base import BarWithIndicators, BaseStrategy
@@ -20,14 +19,14 @@ class MeanReversionStrategy(BaseStrategy):
     - Price at or above upper Bollinger Band
     - RSI above overbought threshold
     - Stop loss triggered
+
+    Bollinger Bands come from the IndicatorEngine via BarWithIndicators;
+    bb_period / bb_std are configured at the engine level (see
+    IndicatorConfig), not per strategy.
     """
 
     def __init__(self, strategy_id: str, config: dict):
         super().__init__(strategy_id, config)
-
-        # Bollinger Band parameters
-        self.bb_period = config.get("bb_period", 20)
-        self.bb_std = config.get("bb_std", 2.0)
 
         # RSI thresholds
         self.rsi_oversold = config.get("rsi_oversold", 35)
@@ -37,52 +36,24 @@ class MeanReversionStrategy(BaseStrategy):
         self.stop_loss_pct = config.get("stop_loss_pct", 0.02)
         self.position_size = Decimal(str(config.get("position_size", 100)))
 
-        # Price buffer for Bollinger calculation
-        self._price_buffer: dict[str, list[float]] = {}
-
     @property
     def name(self) -> str:
         return "MeanReversion"
 
-    def _update_buffer(self, symbol: str, price: float) -> None:
-        """Update price buffer for symbol."""
-        if symbol not in self._price_buffer:
-            self._price_buffer[symbol] = []
-
-        self._price_buffer[symbol].append(price)
-
-        # Keep only needed history (2x period for safety)
-        max_size = self.bb_period * 2
-        if len(self._price_buffer[symbol]) > max_size:
-            self._price_buffer[symbol] = self._price_buffer[symbol][-max_size:]
-
-    def _get_bollinger(self, symbol: str) -> tuple[float, float, float] | None:
-        """Get current Bollinger Bands for symbol."""
-        prices = self._price_buffer.get(symbol, [])
-        return calculate_bollinger_bands(prices, self.bb_period, self.bb_std)
-
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
         """Process bar and generate trading signals."""
-        symbol = data.symbol
-        price = float(data.close)
-
-        # Update price buffer
-        self._update_buffer(symbol, price)
-
-        # Get Bollinger Bands
-        bands = self._get_bollinger(symbol)
-        if bands is None:
+        # Wait for the indicator engine to have warmed up.
+        if data.bb_upper is None or data.bb_lower is None:
             return None
 
-        middle, upper, lower = bands
-        position = self.get_position(symbol)
+        position = self.get_position(data.symbol)
 
         # Check for exit first if we have a position
         if position and position.quantity > 0:
-            return self._check_exit(data, position, upper)
+            return self._check_exit(data, position, data.bb_upper)
 
         # Check for entry
-        return self._check_entry(data, lower)
+        return self._check_entry(data, data.bb_lower)
 
     def _check_entry(
         self, data: BarWithIndicators, lower_band: float
