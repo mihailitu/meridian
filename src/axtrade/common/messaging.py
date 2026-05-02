@@ -218,6 +218,10 @@ class BarPublisher:
         market: str = "us",
         sma_20: Optional[float] = None,
         rsi_14: Optional[float] = None,
+        bb_upper: Optional[float] = None,
+        bb_middle: Optional[float] = None,
+        bb_lower: Optional[float] = None,
+        atr: Optional[float] = None,
         regime: Optional[str] = None,
         trend: Optional[str] = None,
         volatility: Optional[str] = None,
@@ -232,6 +236,8 @@ class BarPublisher:
             market: Market identifier
             sma_20: SMA indicator value
             rsi_14: RSI indicator value
+            bb_upper/bb_middle/bb_lower: Bollinger Band values
+            atr: Average True Range value
             regime: Market regime classification
             trend: Market trend direction
             volatility: Volatility state
@@ -249,6 +255,10 @@ class BarPublisher:
         # Add indicators to message
         data["sma_20"] = str(sma_20) if sma_20 is not None else ""
         data["rsi_14"] = str(rsi_14) if rsi_14 is not None else ""
+        data["bb_upper"] = str(bb_upper) if bb_upper is not None else ""
+        data["bb_middle"] = str(bb_middle) if bb_middle is not None else ""
+        data["bb_lower"] = str(bb_lower) if bb_lower is not None else ""
+        data["atr"] = str(atr) if atr is not None else ""
         # Add regime data
         data["regime"] = regime if regime else ""
         data["trend"] = trend if trend else ""
@@ -372,6 +382,10 @@ class BarConsumer:
                 "bar": bar,
                 "sma_20": float(data["sma_20"]) if data.get("sma_20") else None,
                 "rsi_14": float(data["rsi_14"]) if data.get("rsi_14") else None,
+                "bb_upper": float(data["bb_upper"]) if data.get("bb_upper") else None,
+                "bb_middle": float(data["bb_middle"]) if data.get("bb_middle") else None,
+                "bb_lower": float(data["bb_lower"]) if data.get("bb_lower") else None,
+                "atr": float(data["atr"]) if data.get("atr") else None,
                 "regime": data.get("regime") or None,
                 "trend": data.get("trend") or None,
                 "volatility": data.get("volatility") or None,

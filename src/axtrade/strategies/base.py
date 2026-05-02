@@ -26,6 +26,10 @@ class BarWithIndicators:
     bar: Bar
     sma_20: Optional[float] = None
     rsi_14: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    atr: Optional[float] = None
     regime: Optional[MarketRegime] = None
     trend: Optional[MarketTrend] = None
     volatility: Optional[VolatilityState] = None

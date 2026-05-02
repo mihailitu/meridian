@@ -156,3 +156,42 @@ class TestIndicatorEngine:
 
         # Buffer should be capped
         assert engine.get_buffer_size("AAPL", "1m") <= engine._buffer_size
+
+    def test_bollinger_bands_emitted_after_warmup(self) -> None:
+        engine = IndicatorEngine(sma_period=5, rsi_period=5, bb_period=5, bb_std=2.0)
+
+        # Before warmup, BB should be None
+        first = engine.process_bar("AAPL", "1m", 100.0)
+        assert first.bb_upper is None
+        assert first.bb_middle is None
+        assert first.bb_lower is None
+
+        # After warmup, BB should be present and ordered
+        for i in range(1, 6):
+            result = engine.process_bar("AAPL", "1m", 100.0 + i)
+
+        assert result.bb_upper is not None
+        assert result.bb_middle is not None
+        assert result.bb_lower is not None
+        assert result.bb_lower < result.bb_middle < result.bb_upper
+
+    def test_atr_requires_ohlc(self) -> None:
+        engine = IndicatorEngine(sma_period=5, rsi_period=5, atr_period=3)
+
+        # Closes-only path: ATR stays None even after enough bars
+        for i in range(10):
+            result = engine.process_bar("AAPL", "1m", 100.0 + i)
+        assert result.atr is None
+
+    def test_atr_emitted_with_ohlc(self) -> None:
+        engine = IndicatorEngine(sma_period=5, rsi_period=5, atr_period=3)
+
+        # Feed OHLC bars; ATR needs period+1 = 4 bars
+        for i in range(6):
+            close = 100.0 + i
+            result = engine.process_bar(
+                "AAPL", "1m", close=close, high=close + 1.0, low=close - 1.0
+            )
+
+        assert result.atr is not None
+        assert result.atr > 0

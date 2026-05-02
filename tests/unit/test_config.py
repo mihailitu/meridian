@@ -125,6 +125,9 @@ class TestIndicatorConfig:
         config = IndicatorConfig()
         assert config.sma_period == 20
         assert config.rsi_period == 14
+        assert config.bb_period == 20
+        assert config.bb_std == 2.0
+        assert config.atr_period == 14
 
 
 class TestRiskConfig:

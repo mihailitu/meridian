@@ -4,6 +4,8 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
+from .atr import calculate_atr
+from .bollinger import calculate_bollinger_bands
 from .regime import MarketRegime, MarketTrend, RegimeResult, VolatilityState, calculate_regime
 from .rsi import calculate_rsi
 from .sma import calculate_sma
@@ -15,6 +17,10 @@ class IndicatorResult:
 
     sma_20: Optional[float] = None
     rsi_14: Optional[float] = None
+    bb_upper: Optional[float] = None
+    bb_middle: Optional[float] = None
+    bb_lower: Optional[float] = None
+    atr: Optional[float] = None
     regime: Optional[MarketRegime] = None
     trend: Optional[MarketTrend] = None
     volatility: Optional[VolatilityState] = None
@@ -33,6 +39,9 @@ class IndicatorEngine:
         self,
         sma_period: int = 20,
         rsi_period: int = 14,
+        bb_period: int = 20,
+        bb_std: float = 2.0,
+        atr_period: int = 14,
         regime_sma_short: int = 10,
         regime_sma_long: int = 20,
         regime_volatility_lookback: int = 20,
@@ -42,12 +51,18 @@ class IndicatorEngine:
         Args:
             sma_period: Period for SMA calculation
             rsi_period: Period for RSI calculation
+            bb_period: Period for Bollinger Bands calculation
+            bb_std: Standard deviations for Bollinger Bands
+            atr_period: Period for ATR calculation (needs OHLC data)
             regime_sma_short: Short SMA period for regime trend calculation
             regime_sma_long: Long SMA period for regime trend calculation
             regime_volatility_lookback: Lookback for regime volatility calculation
         """
         self.sma_period = sma_period
         self.rsi_period = rsi_period
+        self.bb_period = bb_period
+        self.bb_std = bb_std
+        self.atr_period = atr_period
         self.regime_sma_short = regime_sma_short
         self.regime_sma_long = regime_sma_long
         self.regime_volatility_lookback = regime_volatility_lookback
@@ -56,6 +71,8 @@ class IndicatorEngine:
         self._buffer_size = max(
             sma_period,
             rsi_period + 1,
+            bb_period,
+            atr_period + 1,
             regime_sma_long,
             regime_volatility_lookback + 1,
         ) + 10
@@ -144,16 +161,26 @@ class IndicatorEngine:
             self._low_buffers[key].append(low)
 
         closes = list(self._close_buffers[key])
+        highs = list(self._high_buffers[key]) if self._high_buffers[key] else []
+        lows = list(self._low_buffers[key]) if self._low_buffers[key] else []
 
         # Calculate SMA and RSI
         sma = calculate_sma(closes, self.sma_period)
         rsi = calculate_rsi(closes, self.rsi_period)
 
-        # Calculate regime if we have OHLC data
+        # Calculate Bollinger Bands
+        bands = calculate_bollinger_bands(closes, self.bb_period, self.bb_std)
+        bb_middle, bb_upper, bb_lower = bands if bands is not None else (None, None, None)
+
+        # Calculate ATR (requires OHLC data; will be None during warmup if
+        # buffer was seeded with closes only).
+        atr_value: Optional[float] = None
+        if highs and lows and len(highs) == len(lows) == len(closes):
+            atr_value = calculate_atr(highs, lows, closes, self.atr_period)
+
+        # Calculate regime
         regime_result: Optional[RegimeResult] = None
-        if self._high_buffers[key] and self._low_buffers[key]:
-            highs = list(self._high_buffers[key])
-            lows = list(self._low_buffers[key])
+        if highs and lows:
             regime_result = calculate_regime(
                 closes=closes,
                 highs=highs,
@@ -163,7 +190,6 @@ class IndicatorEngine:
                 volatility_lookback=self.regime_volatility_lookback,
             )
         else:
-            # Calculate regime with just closes
             regime_result = calculate_regime(
                 closes=closes,
                 sma_short_period=self.regime_sma_short,
@@ -174,6 +200,10 @@ class IndicatorEngine:
         return IndicatorResult(
             sma_20=round(sma, 6) if sma is not None else None,
             rsi_14=rsi,
+            bb_upper=round(bb_upper, 6) if bb_upper is not None else None,
+            bb_middle=round(bb_middle, 6) if bb_middle is not None else None,
+            bb_lower=round(bb_lower, 6) if bb_lower is not None else None,
+            atr=round(atr_value, 6) if atr_value is not None else None,
             regime=regime_result.regime if regime_result else None,
             trend=regime_result.trend if regime_result else None,
             volatility=regime_result.volatility if regime_result else None,

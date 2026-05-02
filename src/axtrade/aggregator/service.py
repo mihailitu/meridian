@@ -47,6 +47,12 @@ class AggregatorService:
         self._indicator_engine = IndicatorEngine(
             sma_period=config.indicators.sma_period,
             rsi_period=config.indicators.rsi_period,
+            bb_period=config.indicators.bb_period,
+            bb_std=config.indicators.bb_std,
+            atr_period=config.indicators.atr_period,
+            regime_sma_short=config.indicators.regime.sma_short_period,
+            regime_sma_long=config.indicators.regime.sma_long_period,
+            regime_volatility_lookback=config.indicators.regime.volatility_lookback,
         )
 
         self._running = False
@@ -94,6 +100,8 @@ class AggregatorService:
         warmup_count = max(
             self.config.indicators.sma_period,
             self.config.indicators.rsi_period + 1,
+            self.config.indicators.bb_period,
+            self.config.indicators.atr_period + 1,
         ) + 5
 
         for symbol in symbols:
@@ -190,6 +198,10 @@ class AggregatorService:
             market="us",
             sma_20=result.sma_20,
             rsi_14=result.rsi_14,
+            bb_upper=result.bb_upper,
+            bb_middle=result.bb_middle,
+            bb_lower=result.bb_lower,
+            atr=result.atr,
             regime=result.regime.value if result.regime else None,
             trend=result.trend.value if result.trend else None,
             volatility=result.volatility.value if result.volatility else None,

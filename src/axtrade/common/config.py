@@ -106,6 +106,9 @@ class IndicatorConfig:
 
     sma_period: int = 20
     rsi_period: int = 14
+    bb_period: int = 20
+    bb_std: float = 2.0
+    atr_period: int = 14
     regime: RegimeConfig = field(default_factory=RegimeConfig)
 
 
@@ -294,6 +297,9 @@ def load_config(path: Optional[Path] = None) -> Config:
         indicators=IndicatorConfig(
             sma_period=indicators_data.get("sma_period", 20),
             rsi_period=indicators_data.get("rsi_period", 14),
+            bb_period=indicators_data.get("bb_period", 20),
+            bb_std=indicators_data.get("bb_std", 2.0),
+            atr_period=indicators_data.get("atr_period", 14),
             regime=RegimeConfig(
                 sma_short_period=indicators_data.get("regime", {}).get("sma_short_period", 10),
                 sma_long_period=indicators_data.get("regime", {}).get("sma_long_period", 20),

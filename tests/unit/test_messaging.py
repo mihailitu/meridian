@@ -370,6 +370,40 @@ class TestBarPublisher:
         data = mock_redis.xadd.call_args[0][1]
         assert data["sma_20"] == ""
         assert data["rsi_14"] == ""
+        assert data["bb_upper"] == ""
+        assert data["bb_lower"] == ""
+        assert data["atr"] == ""
+
+    async def test_publish_bar_with_bb_atr(self, publisher: BarPublisher) -> None:
+        """BB and ATR fields are encoded into the Redis message."""
+        mock_redis = AsyncMock()
+        mock_redis.xadd.return_value = "1234567890-0"
+        publisher._client = mock_redis
+
+        bar = Bar(
+            symbol="AAPL",
+            open=185.0,
+            high=186.0,
+            low=184.0,
+            close=185.50,
+            volume=10000,
+            timestamp=datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+        )
+
+        await publisher.publish_bar(
+            bar,
+            interval="1m",
+            bb_upper=190.0,
+            bb_middle=185.0,
+            bb_lower=180.0,
+            atr=1.25,
+        )
+
+        data = mock_redis.xadd.call_args[0][1]
+        assert data["bb_upper"] == "190.0"
+        assert data["bb_middle"] == "185.0"
+        assert data["bb_lower"] == "180.0"
+        assert data["atr"] == "1.25"
 
     async def test_publish_bar_not_connected_raises(
         self, publisher: BarPublisher
@@ -545,6 +579,34 @@ class TestBarConsumer:
         assert result is not None
         assert result["sma_20"] is None
         assert result["rsi_14"] is None
+        assert result["bb_upper"] is None
+        assert result["bb_middle"] is None
+        assert result["bb_lower"] is None
+        assert result["atr"] is None
+
+    async def test_parse_bar_data_with_bb_atr(self, consumer: BarConsumer) -> None:
+        """BB and ATR fields are decoded from the Redis message."""
+        data = {
+            "symbol": "AAPL",
+            "open": "185.0",
+            "high": "186.0",
+            "low": "184.0",
+            "close": "185.50",
+            "volume": "10000",
+            "timestamp": "2024-01-15T09:30:00+00:00",
+            "bb_upper": "190.0",
+            "bb_middle": "185.0",
+            "bb_lower": "180.0",
+            "atr": "1.25",
+        }
+
+        result = consumer._parse_bar_data(data)
+
+        assert result is not None
+        assert result["bb_upper"] == 190.0
+        assert result["bb_middle"] == 185.0
+        assert result["bb_lower"] == 180.0
+        assert result["atr"] == 1.25
 
     async def test_parse_bar_data_invalid(self, consumer: BarConsumer) -> None:
         """Test parsing invalid bar data returns None."""
