@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from axtrade.common import Bar
+from axtrade.indicators import MarketRegime
 from axtrade.oms import OrderSide, Position
 from axtrade.strategies import (
     BarWithIndicators,
@@ -43,6 +44,7 @@ def make_bar_with_indicators(
     bb_middle: float | None = None,
     bb_lower: float | None = None,
     atr: float | None = None,
+    regime: MarketRegime | None = MarketRegime.RANGING_QUIET,
     timestamp: datetime | None = None,
 ) -> BarWithIndicators:
     """Create a test bar with indicators."""
@@ -54,6 +56,7 @@ def make_bar_with_indicators(
         bb_middle=bb_middle,
         bb_lower=bb_lower,
         atr=atr,
+        regime=regime,
     )
 
 
@@ -67,7 +70,7 @@ class TestMeanReversionStrategy:
             config={
                 "rsi_oversold": 35,
                 "rsi_overbought": 70,
-                "stop_loss_pct": 0.02,
+                "stop_loss_pct": 0.015,
                 "position_size": 100,
             },
         )
@@ -78,16 +81,19 @@ class TestMeanReversionStrategy:
     def test_no_signal_without_bands(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Strategy must wait for the indicator engine to emit Bollinger
-        # values; without them, no signal regardless of price/RSI.
         data = make_bar_with_indicators(close=100, rsi_14=30)
         assert strategy.on_bar(data) is None
 
-    def test_buy_signal_at_lower_band(
+    def test_buy_signal_at_lower_band_in_ranging_regime(
         self, strategy: MeanReversionStrategy
     ) -> None:
         data = make_bar_with_indicators(
-            close=88.0, rsi_14=30, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+            close=88.0,
+            rsi_14=30,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         order = strategy.on_bar(data)
 
@@ -95,18 +101,62 @@ class TestMeanReversionStrategy:
         assert order.side == OrderSide.BUY
         assert order.quantity == Decimal("100")
 
+    def test_no_buy_when_regime_trending_down(
+        self, strategy: MeanReversionStrategy
+    ) -> None:
+        # Trending down was the historical worst-case for mean reversion;
+        # the strategy must skip those bars even with a textbook setup.
+        data = make_bar_with_indicators(
+            close=88.0,
+            rsi_14=30,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.TRENDING_DOWN,
+        )
+        assert strategy.on_bar(data) is None
+
     def test_no_buy_signal_without_rsi(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Price at lower band but no RSI to confirm
         data = make_bar_with_indicators(
-            close=88.0, rsi_14=None, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+            close=88.0,
+            rsi_14=None,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
+        )
+        assert strategy.on_bar(data) is None
+
+    def test_sell_signal_at_middle_band(
+        self, strategy: MeanReversionStrategy
+    ) -> None:
+        # Exit target moved from upper band to middle band (SMA).
+        strategy.update_position(
+            Position(
+                strategy_id="mean_rev_test",
+                symbol="AAPL",
+                side="long",
+                quantity=Decimal("100"),
+                avg_entry_price=Decimal("90.0"),
+            )
+        )
+
+        data = make_bar_with_indicators(
+            close=100.0,
+            rsi_14=55,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         order = strategy.on_bar(data)
 
-        assert order is None
+        assert order is not None
+        assert order.side == OrderSide.SELL
 
-    def test_sell_signal_at_upper_band(
+    def test_no_sell_below_middle_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
         strategy.update_position(
@@ -119,13 +169,16 @@ class TestMeanReversionStrategy:
             )
         )
 
+        # Below middle band, RSI not overbought, no stop hit → hold.
         data = make_bar_with_indicators(
-            close=112.0, rsi_14=60, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+            close=95.0,
+            rsi_14=55,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
-        order = strategy.on_bar(data)
-
-        assert order is not None
-        assert order.side == OrderSide.SELL
+        assert strategy.on_bar(data) is None
 
     def test_sell_signal_on_overbought_rsi(
         self, strategy: MeanReversionStrategy
@@ -140,9 +193,14 @@ class TestMeanReversionStrategy:
             )
         )
 
-        # RSI overbought (even if price not at upper band)
+        # RSI overbought trumps middle-band logic.
         data = make_bar_with_indicators(
-            close=102.0, rsi_14=75, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+            close=98.0,
+            rsi_14=75,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         order = strategy.on_bar(data)
 
@@ -160,9 +218,14 @@ class TestMeanReversionStrategy:
             )
         )
 
-        # Price drops below stop loss (2% = $98)
+        # 1.5% stop = $98.50; price at $98 triggers (loss > 1.5%).
         data = make_bar_with_indicators(
-            close=97.0, rsi_14=40, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+            close=98.0,
+            rsi_14=40,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         order = strategy.on_bar(data)
 
@@ -180,13 +243,23 @@ class TestMultiTimeframeStrategy:
             config={
                 "trend_period": 5,  # Smaller for testing
                 "trend_interval_minutes": 5,
-                "rsi_oversold": 40,
-                "rsi_overbought": 60,
-                "stop_loss_pct": 0.015,
+                "rsi_min": 40,
+                "rsi_max": 60,
+                "pullback_pct": 0.003,
+                "stop_loss_pct": 0.02,
                 "take_profit_pct": 0.03,
                 "position_size": 100,
             },
         )
+
+    @staticmethod
+    def _build_uptrend(strategy: MultiTimeframeStrategy) -> None:
+        """Send 35 bars in an uptrend to populate the HTF trend buffer."""
+        for i in range(35):
+            ts = datetime(2024, 1, 15, 9, i, 0, tzinfo=timezone.utc)
+            close = 100.0 + i * 0.5
+            data = make_bar_with_indicators(close=close, rsi_14=50, timestamp=ts)
+            strategy.on_bar(data)
 
     def test_name(self, strategy: MultiTimeframeStrategy) -> None:
         assert strategy.name == "MultiTimeframe"
@@ -194,56 +267,74 @@ class TestMultiTimeframeStrategy:
     def test_no_signal_without_trend_data(
         self, strategy: MultiTimeframeStrategy
     ) -> None:
-        # Just a few bars, not enough to establish trend
         for minute in range(3):
             ts = datetime(2024, 1, 15, 9, minute, 0, tzinfo=timezone.utc)
-            data = make_bar_with_indicators(close=100.0, rsi_14=35, timestamp=ts)
+            data = make_bar_with_indicators(close=100.0, rsi_14=50, timestamp=ts)
             order = strategy.on_bar(data)
             assert order is None
 
     def test_builds_trend_data(self, strategy: MultiTimeframeStrategy) -> None:
-        # Build 5m candles by sending bars at minute 0, 4, 5, 9, etc.
-        prices = []
         for i in range(30):
-            minute = i
-            ts = datetime(2024, 1, 15, 9, minute, 0, tzinfo=timezone.utc)
-            close = 100.0 + i * 0.1  # Uptrend
-            data = make_bar_with_indicators(close=close, rsi_14=50, timestamp=ts)
-            order = strategy.on_bar(data)
-
-        # After 30 bars, should have trend data
-        trend = strategy._get_trend("AAPL")
-        assert trend is not None
-
-    def test_buy_signal_with_uptrend_and_oversold(
-        self, strategy: MultiTimeframeStrategy
-    ) -> None:
-        # Build uptrend
-        for i in range(35):
-            minute = i
-            ts = datetime(2024, 1, 15, 9, minute, 0, tzinfo=timezone.utc)
-            close = 100.0 + i * 0.5  # Strong uptrend
+            ts = datetime(2024, 1, 15, 9, i, 0, tzinfo=timezone.utc)
+            close = 100.0 + i * 0.1
             data = make_bar_with_indicators(close=close, rsi_14=50, timestamp=ts)
             strategy.on_bar(data)
 
-        # Now send oversold RSI signal
+        trend = strategy._get_trend("AAPL")
+        assert trend is not None
+
+    def test_buy_signal_on_pullback_to_sma(
+        self, strategy: MultiTimeframeStrategy
+    ) -> None:
+        self._build_uptrend(strategy)
+
+        # Pullback bar: close is right at SMA_20, RSI in neutral band, regime healthy.
         ts = datetime(2024, 1, 15, 9, 35, 0, tzinfo=timezone.utc)
-        data = make_bar_with_indicators(close=117.5, rsi_14=35, timestamp=ts)
+        data = make_bar_with_indicators(
+            close=117.5, sma_20=117.5, rsi_14=50, timestamp=ts
+        )
         order = strategy.on_bar(data)
 
         assert order is not None
         assert order.side == OrderSide.BUY
 
-    def test_take_profit_exit(self, strategy: MultiTimeframeStrategy) -> None:
-        # Build trend data
-        for i in range(35):
-            minute = i
-            ts = datetime(2024, 1, 15, 9, minute, 0, tzinfo=timezone.utc)
-            close = 100.0 + i * 0.5
-            data = make_bar_with_indicators(close=close, rsi_14=50, timestamp=ts)
-            strategy.on_bar(data)
+    def test_no_buy_when_rsi_too_low(
+        self, strategy: MultiTimeframeStrategy
+    ) -> None:
+        # Old "oversold" entry trap should NOT trigger anymore.
+        self._build_uptrend(strategy)
+        ts = datetime(2024, 1, 15, 9, 35, 0, tzinfo=timezone.utc)
+        data = make_bar_with_indicators(
+            close=117.5, sma_20=117.5, rsi_14=35, timestamp=ts
+        )
+        assert strategy.on_bar(data) is None
 
-        # Enter position
+    def test_no_buy_when_price_too_far_from_sma(
+        self, strategy: MultiTimeframeStrategy
+    ) -> None:
+        self._build_uptrend(strategy)
+        ts = datetime(2024, 1, 15, 9, 35, 0, tzinfo=timezone.utc)
+        # Price 1% above SMA — outside 0.3% pullback band.
+        data = make_bar_with_indicators(
+            close=120.0, sma_20=118.0, rsi_14=50, timestamp=ts
+        )
+        assert strategy.on_bar(data) is None
+
+    def test_no_buy_when_regime_trending_down(
+        self, strategy: MultiTimeframeStrategy
+    ) -> None:
+        from axtrade.indicators import MarketRegime
+        self._build_uptrend(strategy)
+        ts = datetime(2024, 1, 15, 9, 35, 0, tzinfo=timezone.utc)
+        data = make_bar_with_indicators(
+            close=117.5, sma_20=117.5, rsi_14=50, timestamp=ts
+        )
+        data.regime = MarketRegime.TRENDING_DOWN
+        assert strategy.on_bar(data) is None
+
+    def test_take_profit_exit(self, strategy: MultiTimeframeStrategy) -> None:
+        self._build_uptrend(strategy)
+
         strategy.update_position(
             Position(
                 strategy_id="mtf_test",
@@ -254,9 +345,30 @@ class TestMultiTimeframeStrategy:
             )
         )
 
-        # Price rises to take profit (3% = $103)
+        # Price up 3.5% — take profit (>= 3%).
         ts = datetime(2024, 1, 15, 9, 36, 0, tzinfo=timezone.utc)
         data = make_bar_with_indicators(close=103.5, rsi_14=50, timestamp=ts)
+        order = strategy.on_bar(data)
+
+        assert order is not None
+        assert order.side == OrderSide.SELL
+
+    def test_stop_loss_exit(self, strategy: MultiTimeframeStrategy) -> None:
+        self._build_uptrend(strategy)
+
+        strategy.update_position(
+            Position(
+                strategy_id="mtf_test",
+                symbol="AAPL",
+                side="long",
+                quantity=Decimal("100"),
+                avg_entry_price=Decimal("100.0"),
+            )
+        )
+
+        # Price down 2.5% — stop loss (<= -2%).
+        ts = datetime(2024, 1, 15, 9, 36, 0, tzinfo=timezone.utc)
+        data = make_bar_with_indicators(close=97.5, rsi_14=50, timestamp=ts)
         order = strategy.on_bar(data)
 
         assert order is not None

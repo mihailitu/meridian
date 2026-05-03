@@ -34,10 +34,13 @@ class PairsStrategy(BaseStrategy):
         self.symbol_a = config.get("symbol_a", "AAPL")
         self.symbol_b = config.get("symbol_b", "MSFT")
 
-        # Z-score parameters
-        self.lookback = config.get("lookback", 20)
-        self.entry_zscore = config.get("entry_zscore", 2.0)
-        self.exit_zscore = config.get("exit_zscore", 0.5)
+        # Z-score parameters. Defaults tuned for 1m bars: 60 bars ≈ 1 hour
+        # of history (more statistically meaningful than 20), and a 1.5
+        # entry threshold catches actual dislocations rather than waiting
+        # for a ~2.5% tail event that almost never fires.
+        self.lookback = config.get("lookback", 60)
+        self.entry_zscore = config.get("entry_zscore", 1.5)
+        self.exit_zscore = config.get("exit_zscore", 0.3)
 
         # Risk management
         self.stop_loss_pct = config.get("stop_loss_pct", 0.03)

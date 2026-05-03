@@ -384,11 +384,19 @@ class TestStrategyRunnerBarProcessing:
         runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
 
-        # Create async generator that yields one bar then stops
+        # Seed momentum's prev_rsi below the cross level so the second bar
+        # produces an RSI cross-up entry.
+        runner._strategies["momentum_01"]._prev_rsi["AAPL"] = 45.0
+
+        # Create async generator that yields one bar then stops.
+        # Momentum entry needs trending regime + RSI crossing 50 + price > SMA.
         bar_data = {
             "bar": sample_bar,
-            "sma_20": 184.0,  # Below price = bullish
-            "rsi_14": 35.0,  # Oversold = buy signal
+            "sma_20": 184.0,
+            "rsi_14": 55.0,
+            "regime": "trending_up",
+            "trend": "bullish",
+            "trend_strength": 60.0,
         }
 
         async def consume_one(consumer_name):
@@ -444,6 +452,7 @@ class TestStrategyRunnerBarProcessing:
     ) -> None:
         """Test disabled strategies don't process bars."""
         runner._strategies["momentum_01"].enabled = False
+        runner._strategies["momentum_01"]._prev_rsi["AAPL"] = 45.0
 
         mock_order_manager = MagicMock()
         mock_order_manager.submit_order = AsyncMock()
@@ -456,7 +465,9 @@ class TestStrategyRunnerBarProcessing:
         bar_data = {
             "bar": sample_bar,
             "sma_20": 184.0,
-            "rsi_14": 35.0,  # Would trigger buy signal
+            "rsi_14": 55.0,  # Would trigger buy signal if enabled
+            "regime": "trending_up",
+            "trend_strength": 60.0,
         }
 
         async def consume_one(consumer_name):
@@ -492,11 +503,14 @@ class TestStrategyRunnerBarProcessing:
         runner._order_manager = mock_order_manager
         runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
+        runner._strategies["momentum_01"]._prev_rsi["AAPL"] = 45.0
 
         bar_data = {
             "bar": sample_bar,
             "sma_20": 184.0,
-            "rsi_14": 35.0,
+            "rsi_14": 55.0,
+            "regime": "trending_up",
+            "trend_strength": 60.0,
         }
 
         async def consume_one(consumer_name):
@@ -543,6 +557,8 @@ class TestStrategyRunnerBarProcessing:
             "bar": sample_bar,
             "sma_20": 184.0,
             "rsi_14": 75.0,  # Overbought with position = sell
+            "regime": "trending_up",
+            "trend_strength": 60.0,
         }
 
         async def consume_one(consumer_name):
@@ -570,11 +586,14 @@ class TestStrategyRunnerBarProcessing:
         runner._order_manager = mock_order_manager
         runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
         runner._running = True
+        runner._strategies["momentum_01"]._prev_rsi["AAPL"] = 45.0
 
         bar_data = {
             "bar": sample_bar,
             "sma_20": 184.0,
-            "rsi_14": 35.0,  # Buy signal
+            "rsi_14": 55.0,  # Buy signal
+            "regime": "trending_up",
+            "trend_strength": 60.0,
         }
 
         async def consume_one(consumer_name):

@@ -9,6 +9,7 @@ from decimal import Decimal
 import pytest
 
 from axtrade.common import Bar
+from axtrade.indicators import MarketRegime
 from axtrade.oms import OrderSide, Position
 from axtrade.strategies import (
     BarWithIndicators,
@@ -47,6 +48,8 @@ def make_bar_with_indicators(
     bb_middle: float | None = None,
     bb_lower: float | None = None,
     atr: float | None = None,
+    regime: MarketRegime | None = None,
+    trend_strength: float | None = None,
     timestamp: datetime | None = None,
 ) -> BarWithIndicators:
     """Create a test bar with indicators."""
@@ -58,6 +61,27 @@ def make_bar_with_indicators(
         bb_middle=bb_middle,
         bb_lower=bb_lower,
         atr=atr,
+        regime=regime,
+        trend_strength=trend_strength,
+    )
+
+
+def _prime_momentum_rsi(
+    strategy: MomentumBreakout,
+    symbol: str,
+    rsi: float,
+    sma_20: float = 100.0,
+) -> None:
+    """Seed prev_rsi without triggering an entry (regime not trending)."""
+    strategy.on_bar(
+        make_bar_with_indicators(
+            symbol=symbol,
+            close=sma_20 + 1.0,
+            sma_20=sma_20,
+            rsi_14=rsi,
+            regime=MarketRegime.RANGING_QUIET,
+            trend_strength=10.0,
+        )
     )
 
 
@@ -69,36 +93,47 @@ class TestMomentumBreakoutEdgeCases:
         return MomentumBreakout(
             strategy_id="test_momentum",
             config={
-                "rsi_oversold": 40,
+                "rsi_cross_level": 50,
                 "rsi_overbought": 70,
-                "stop_loss_pct": 0.02,
+                "trend_strength_min": 30.0,
+                "stop_loss_pct": 0.03,
                 "position_size": 100,
             },
         )
 
-    def test_rsi_exactly_at_oversold_threshold(
+    def test_rsi_exactly_at_cross_level_no_entry(
         self, strategy: MomentumBreakout
     ) -> None:
-        """Test RSI exactly at oversold threshold (boundary value)."""
-        data = make_bar_with_indicators(close=101.0, sma_20=100.0, rsi_14=40.0)
-        order = strategy.on_bar(data)
-        # RSI = 40 is NOT < 40, so no buy signal
-        assert order is None
+        """Cross requires prev <= level < current — equal to level is not a cross."""
+        _prime_momentum_rsi(strategy, "AAPL", 45.0, sma_20=100.0)
+        data = make_bar_with_indicators(
+            close=101.0,
+            sma_20=100.0,
+            rsi_14=50.0,
+            regime=MarketRegime.TRENDING_UP,
+            trend_strength=50.0,
+        )
+        # rsi_14=50 is not strictly > cross_level=50.
+        assert strategy.on_bar(data) is None
 
-    def test_rsi_just_below_oversold_threshold(
+    def test_rsi_just_above_cross_level_enters(
         self, strategy: MomentumBreakout
     ) -> None:
-        """Test RSI just below oversold threshold."""
-        data = make_bar_with_indicators(close=101.0, sma_20=100.0, rsi_14=39.9)
+        _prime_momentum_rsi(strategy, "AAPL", 45.0, sma_20=100.0)
+        data = make_bar_with_indicators(
+            close=101.0,
+            sma_20=100.0,
+            rsi_14=50.1,
+            regime=MarketRegime.TRENDING_UP,
+            trend_strength=50.0,
+        )
         order = strategy.on_bar(data)
-        # RSI = 39.9 < 40, should buy
         assert order is not None
         assert order.side == OrderSide.BUY
 
     def test_rsi_exactly_at_overbought_threshold(
         self, strategy: MomentumBreakout
     ) -> None:
-        """Test RSI exactly at overbought threshold."""
         strategy.update_position(
             Position(
                 strategy_id="test_momentum",
@@ -108,15 +143,15 @@ class TestMomentumBreakoutEdgeCases:
                 avg_entry_price=Decimal("95.0"),
             )
         )
-        data = make_bar_with_indicators(close=100.0, sma_20=99.0, rsi_14=70.0)
-        order = strategy.on_bar(data)
-        # RSI = 70 is NOT > 70, so no sell signal from overbought
-        assert order is None
+        data = make_bar_with_indicators(
+            close=100.0, sma_20=99.0, rsi_14=70.0, regime=MarketRegime.TRENDING_UP
+        )
+        # RSI == 70 is not strictly > 70, so no overbought exit.
+        assert strategy.on_bar(data) is None
 
     def test_rsi_just_above_overbought_threshold(
         self, strategy: MomentumBreakout
     ) -> None:
-        """Test RSI just above overbought threshold."""
         strategy.update_position(
             Position(
                 strategy_id="test_momentum",
@@ -126,73 +161,83 @@ class TestMomentumBreakoutEdgeCases:
                 avg_entry_price=Decimal("95.0"),
             )
         )
-        data = make_bar_with_indicators(close=100.0, sma_20=99.0, rsi_14=70.1)
+        data = make_bar_with_indicators(
+            close=100.0, sma_20=99.0, rsi_14=70.1, regime=MarketRegime.TRENDING_UP
+        )
         order = strategy.on_bar(data)
-        # RSI = 70.1 > 70, should sell
         assert order is not None
         assert order.side == OrderSide.SELL
 
-    def test_price_exactly_at_sma(self, strategy: MomentumBreakout) -> None:
-        """Test price exactly at SMA (boundary value)."""
-        data = make_bar_with_indicators(close=100.0, sma_20=100.0, rsi_14=35.0)
-        order = strategy.on_bar(data)
-        # Price = SMA is NOT > SMA, so no buy signal
-        assert order is None
-
-    def test_multiple_symbols(self, strategy: MomentumBreakout) -> None:
-        """Test strategy handles multiple symbols correctly."""
-        # Enter position on AAPL
-        data_aapl = make_bar_with_indicators(
-            symbol="AAPL", close=101.0, sma_20=100.0, rsi_14=35.0
+    def test_price_exactly_at_sma_no_entry(
+        self, strategy: MomentumBreakout
+    ) -> None:
+        _prime_momentum_rsi(strategy, "AAPL", 45.0, sma_20=100.0)
+        data = make_bar_with_indicators(
+            close=100.0,
+            sma_20=100.0,
+            rsi_14=55.0,
+            regime=MarketRegime.TRENDING_UP,
+            trend_strength=50.0,
         )
-        order = strategy.on_bar(data_aapl)
+        # Close == SMA is not strictly > SMA.
+        assert strategy.on_bar(data) is None
+
+    def test_multiple_symbols_track_rsi_independently(
+        self, strategy: MomentumBreakout
+    ) -> None:
+        _prime_momentum_rsi(strategy, "AAPL", 45.0, sma_20=100.0)
+        _prime_momentum_rsi(strategy, "MSFT", 60.0, sma_20=100.0)
+
+        # AAPL crosses up — should enter.
+        order = strategy.on_bar(
+            make_bar_with_indicators(
+                symbol="AAPL",
+                close=101.0,
+                sma_20=100.0,
+                rsi_14=55.0,
+                regime=MarketRegime.TRENDING_UP,
+                trend_strength=50.0,
+            )
+        )
         assert order is not None
         assert order.symbol == "AAPL"
 
-        # Update position for AAPL
-        strategy.update_position(
-            Position(
-                strategy_id="test_momentum",
-                symbol="AAPL",
-                side="long",
-                quantity=Decimal("100"),
-                avg_entry_price=Decimal("101.0"),
+        # MSFT prev RSI was already above cross level — no fresh cross.
+        order = strategy.on_bar(
+            make_bar_with_indicators(
+                symbol="MSFT",
+                close=101.0,
+                sma_20=100.0,
+                rsi_14=62.0,
+                regime=MarketRegime.TRENDING_UP,
+                trend_strength=50.0,
             )
         )
-
-        # MSFT bar should not generate signal (no position)
-        data_msft = make_bar_with_indicators(
-            symbol="MSFT", close=101.0, sma_20=100.0, rsi_14=75.0
-        )
-        order = strategy.on_bar(data_msft)
-        # No position in MSFT, so overbought doesn't matter
         assert order is None
-
-        # Can still enter MSFT independently
-        data_msft2 = make_bar_with_indicators(
-            symbol="MSFT", close=101.0, sma_20=100.0, rsi_14=35.0
-        )
-        order = strategy.on_bar(data_msft2)
-        assert order is not None
-        assert order.symbol == "MSFT"
 
     def test_stop_loss_exactly_at_threshold(
         self, strategy: MomentumBreakout
     ) -> None:
-        """Test stop loss exactly at threshold."""
         strategy.update_position(
             Position(
                 strategy_id="test_momentum",
                 symbol="AAPL",
                 side="long",
                 quantity=Decimal("100"),
-                avg_entry_price=Decimal("100.0"),  # Entry at $100
+                avg_entry_price=Decimal("100.0"),
             )
         )
-        # 2% stop loss = $98. Price at exactly $98
-        data = make_bar_with_indicators(close=98.0, sma_20=99.0, rsi_14=50.0)
+        # 3% stop. Loss < -3% triggers; exactly -3% does not.
+        data = make_bar_with_indicators(
+            close=97.0, sma_20=99.0, rsi_14=50.0, regime=MarketRegime.TRENDING_UP
+        )
+        # loss_pct == -0.03; condition is < -0.03, so no fire at exactly the boundary.
+        assert strategy.on_bar(data) is None
+
+        data = make_bar_with_indicators(
+            close=96.5, sma_20=99.0, rsi_14=50.0, regime=MarketRegime.TRENDING_UP
+        )
         order = strategy.on_bar(data)
-        # At exactly 2% loss, should trigger (>=)
         assert order is not None
         assert order.side == OrderSide.SELL
 
@@ -228,7 +273,7 @@ class TestMeanReversionEdgeCases:
             config={
                 "rsi_oversold": 35,
                 "rsi_overbought": 70,
-                "stop_loss_pct": 0.02,
+                "stop_loss_pct": 0.015,
                 "position_size": 100,
             },
         )
@@ -238,25 +283,37 @@ class TestMeanReversionEdgeCases:
     ) -> None:
         """When BB has zero std dev (upper == lower == middle), price <= lower
         is trivially true; strategy should still gate on RSI."""
-        # Bands collapsed onto the mean; oversold RSI makes the entry fire.
         data = make_bar_with_indicators(
-            close=100.0, rsi_14=30, bb_upper=100.0, bb_middle=100.0, bb_lower=100.0
+            close=100.0,
+            rsi_14=30,
+            bb_upper=100.0,
+            bb_middle=100.0,
+            bb_lower=100.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         order = strategy.on_bar(data)
         assert order is not None  # price <= lower and RSI < 35
 
-        # And without oversold RSI it should not fire.
         data = make_bar_with_indicators(
-            close=100.0, rsi_14=50, bb_upper=100.0, bb_middle=100.0, bb_lower=100.0
+            close=100.0,
+            rsi_14=50,
+            bb_upper=100.0,
+            bb_middle=100.0,
+            bb_lower=100.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         assert strategy.on_bar(data) is None
 
     def test_price_at_exact_lower_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        """Price exactly at lower band counts as a touch (<= boundary)."""
         data = make_bar_with_indicators(
-            close=88.0, rsi_14=30, bb_upper=112.0, bb_middle=100.0, bb_lower=88.0
+            close=88.0,
+            rsi_14=30,
+            bb_upper=112.0,
+            bb_middle=100.0,
+            bb_lower=88.0,
+            regime=MarketRegime.RANGING_QUIET,
         )
         order = strategy.on_bar(data)
         assert order is not None
@@ -273,9 +330,10 @@ class TestMultiTimeframeEdgeCases:
             config={
                 "trend_period": 5,
                 "trend_interval_minutes": 5,
-                "rsi_oversold": 40,
-                "rsi_overbought": 60,
-                "stop_loss_pct": 0.015,
+                "rsi_min": 40,
+                "rsi_max": 60,
+                "pullback_pct": 0.003,
+                "stop_loss_pct": 0.02,
                 "take_profit_pct": 0.03,
                 "position_size": 100,
             },
