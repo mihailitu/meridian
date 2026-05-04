@@ -2,6 +2,8 @@
 
 ## Design Document v2.0
 
+> **Status (2026-05-04):** Original January 2026 vision. Useful for component-level design context, but several sections have diverged from what was actually built. Treat as historical: see [`docs/AUDIT-2026-05-02.md`](docs/AUDIT-2026-05-02.md) §B1–B5 for explicit deviations (macro regime, ML layer, on_tick/on_regime_change hooks, multi-market, horizontal scaling) and [`ROADMAP.md`](ROADMAP.md) for what's actually planned next.
+
 ---
 
 ## 1. Executive Summary

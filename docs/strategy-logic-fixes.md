@@ -1,6 +1,7 @@
-# TODO: Improve Fulltest Win Performance
+# Strategy Logic Fixes
 
-> Broader architectural issues live in [`docs/AUDIT-2026-05-02.md`](docs/AUDIT-2026-05-02.md). This file stays scoped to strategy logic.
+> Branch-scoped work doc for `strategy-logic-fixes`: improving fulltest win performance.
+> Broader architectural issues live in [`AUDIT-2026-05-02.md`](AUDIT-2026-05-02.md). Project-level priorities live in [`../ROADMAP.md`](../ROADMAP.md). This file stays scoped to strategy logic.
 
 ## Context
 

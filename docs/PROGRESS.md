@@ -1,5 +1,8 @@
 # axtrade Development Progress
 
+> Backward-looking log of what was built, iteration by iteration.
+> For current priorities and what's next, see [`../ROADMAP.md`](../ROADMAP.md).
+
 ## Completed Iterations
 
 ### Iteration 1: Gateway and Tick Streaming (Complete)
@@ -249,28 +252,20 @@ Gateway -> Redis (ticks) -> Aggregator -> Redis (bars) + TimescaleDB
                               +------------------+
 ```
 
-## Potential Next Iterations
+## What's next
 
-### Iteration 12: External Alert Channels
-**Goal**: Add email, SMS, and Slack notification channels
-
-**Key Components**:
-- EmailChannel (SendGrid/SMTP)
-- SMSChannel (Twilio)
-- SlackChannel (Webhook)
-- Channel configuration in YAML
-- Alert routing rules
+See [`../ROADMAP.md`](../ROADMAP.md). External alert channels (formerly tracked here as "Iteration 12") are deferred per audit C1 — see ROADMAP "Deferred".
 
 ---
 
 ## Completed Plan Documents
 
-Detailed implementation plans for completed iterations:
-- `docs/iterations/iteration-3-plan.md` - First Strategy
-- `docs/iterations/iteration-4-plan.md` - Backtesting Framework
-- `docs/iterations/iteration-5-plan.md` - Live Trading Integration
-- `docs/iterations/iteration-6-plan.md` - Web Dashboard
-- `docs/iterations/iteration-7-plan.md` - Additional Strategies
-- `docs/iterations/iteration-8-plan.md` - Advanced Risk Management
-- `docs/iterations/iteration-9-plan.md` - System Health Monitoring
-- `docs/iterations/iteration-11-plan.md` - Performance Analytics
+Detailed implementation plans for completed iterations (archived):
+- [`iterations/archive/iteration-3-plan.md`](iterations/archive/iteration-3-plan.md) - First Strategy
+- [`iterations/archive/iteration-4-plan.md`](iterations/archive/iteration-4-plan.md) - Backtesting Framework
+- [`iterations/archive/iteration-5-plan.md`](iterations/archive/iteration-5-plan.md) - Live Trading Integration
+- [`iterations/archive/iteration-6-plan.md`](iterations/archive/iteration-6-plan.md) - Web Dashboard
+- [`iterations/archive/iteration-7-plan.md`](iterations/archive/iteration-7-plan.md) - Additional Strategies
+- [`iterations/archive/iteration-8-plan.md`](iterations/archive/iteration-8-plan.md) - Advanced Risk Management
+- [`iterations/archive/iteration-9-plan.md`](iterations/archive/iteration-9-plan.md) - System Health Monitoring
+- [`iterations/archive/iteration-11-plan.md`](iterations/archive/iteration-11-plan.md) - Performance Analytics
