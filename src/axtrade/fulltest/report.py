@@ -14,6 +14,7 @@ from .types import (
     FullBacktestConfig,
     FullBacktestResult,
     StrategyResult,
+    SymbolPnL,
 )
 
 logger = get_logger("fulltest.report")
@@ -154,6 +155,21 @@ class ReportGenerator:
                 end_date=config.end,
             )
 
+            per_symbol_raw = metrics.get("per_symbol", {})
+            per_symbol_pnl = sorted(
+                (
+                    SymbolPnL(
+                        symbol=sym,
+                        pnl=float(s.pnl),
+                        trades=s.trades,
+                        wins=s.wins,
+                        losses=s.losses,
+                    )
+                    for sym, s in per_symbol_raw.items()
+                ),
+                key=lambda p: p.pnl,
+            )
+
             results.append(StrategyResult(
                 strategy_id=strategy_id,
                 strategy_type=strategy_type,
@@ -171,6 +187,7 @@ class ReportGenerator:
                 avg_trade_pnl=float(metrics["avg_trade_pnl"]) if metrics["avg_trade_pnl"] else None,
                 total_commission=float(metrics["total_commission"]) if metrics["total_commission"] else None,
                 symbols_traded=symbols_traded,
+                per_symbol_pnl=per_symbol_pnl,
             ))
 
         return results
@@ -301,6 +318,25 @@ def format_text_report(result: FullBacktestResult) -> str:
             if len(sr.symbols_traded) > 10:
                 lines.append(f"                     ... and {len(sr.symbols_traded) - 10} more")
 
+            # Per-symbol P&L: show worst 5 + best 5 to surface bad-apples.
+            if sr.per_symbol_pnl:
+                lines.append("")
+                lines.append("    Per-symbol P&L (worst first):")
+                worst = sr.per_symbol_pnl[:5]
+                best = sr.per_symbol_pnl[-5:][::-1] if len(sr.per_symbol_pnl) > 5 else []
+                for p in worst:
+                    lines.append(
+                        f"      {p.symbol:<8} {_fmt_dollar(p.pnl):>11}  "
+                        f"({p.trades} trades, {p.wins}W/{p.losses}L)"
+                    )
+                if best:
+                    lines.append("      ...")
+                    for p in best:
+                        lines.append(
+                            f"      {p.symbol:<8} {_fmt_dollar(p.pnl):>11}  "
+                            f"({p.trades} trades, {p.wins}W/{p.losses}L)"
+                        )
+
         lines.append("")
 
     # Discovery results
@@ -381,6 +417,16 @@ def format_json_report(result: FullBacktestResult) -> str:
                 "avg_trade_pnl": sr.avg_trade_pnl,
                 "total_commission": sr.total_commission,
                 "symbols_traded": sr.symbols_traded,
+                "per_symbol_pnl": [
+                    {
+                        "symbol": p.symbol,
+                        "pnl": p.pnl,
+                        "trades": p.trades,
+                        "wins": p.wins,
+                        "losses": p.losses,
+                    }
+                    for p in sr.per_symbol_pnl
+                ],
             }
             for sr in result.strategy_results
         ],

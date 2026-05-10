@@ -7,6 +7,7 @@ import pytest
 
 from axtrade.backtest.types import EquityPoint, TradeRecord
 from axtrade.fulltest.analytics import (
+    SymbolStats,
     _process_fills,
     build_equity_curve,
     build_trade_records,
@@ -137,7 +138,7 @@ async def test_build_trade_records_all_strategies(simple_fills):
 
 def test_process_fills_equity_basic(simple_fills):
     initial = Decimal("100000")
-    trades, curve = _process_fills(simple_fills, initial)
+    trades, curve, _ = _process_fills(simple_fills, initial)
 
     assert len(curve) == 2
     # After buy: cash = 100000 - (50*100 + 1) = 94999, open_cost = 5000
@@ -160,7 +161,7 @@ def test_process_fills_equity_drawdown():
         ),
     ]
     initial = Decimal("100000")
-    trades, curve = _process_fills(rows, initial)
+    trades, curve, _ = _process_fills(rows, initial)
 
     assert len(curve) == 2
     # After buy: cash = 95000, cost = 5000, equity = 100000, dd = 0
@@ -173,7 +174,7 @@ def test_process_fills_equity_drawdown():
 
 
 def test_process_fills_empty():
-    trades, curve = _process_fills([], Decimal("100000"))
+    trades, curve, _ = _process_fills([], Decimal("100000"))
     assert trades == []
     assert curve == []
 
@@ -187,7 +188,7 @@ def test_process_fills_unmatched_sell_does_not_inflate_equity():
         ),
     ]
     initial = Decimal("100000")
-    trades, curve = _process_fills(rows, initial)
+    trades, curve, _ = _process_fills(rows, initial)
 
     assert len(curve) == 1
     # Unmatched sell: cash += 55*100 - 1 = 5499, open_position_cost -= 55*100 = -5500
@@ -209,7 +210,7 @@ def test_process_fills_partial_unmatched_sell():
         ),
     ]
     initial = Decimal("100000")
-    trades, curve = _process_fills(rows, initial)
+    trades, curve, _ = _process_fills(rows, initial)
 
     assert len(curve) == 2
     # After buy: cash = 100000 - 2501 = 97499, cost = 2500, equity = 99999
@@ -221,6 +222,73 @@ def test_process_fills_partial_unmatched_sell():
     # equity = 102998 + (-2750) = 100248
     # That's (55-50)*50 - 1(buy_comm) - 1(sell_comm) = 248 profit on matched portion
     assert curve[1].equity == Decimal("100248")
+
+
+# -- per-symbol stats tests --
+
+
+def test_per_symbol_stats_winning_round_trip():
+    rows = [
+        _make_fill_row(
+            "test", "AAPL", "buy", 100, 50, 0,
+            datetime(2025, 9, 1, 10, 0, tzinfo=timezone.utc),
+        ),
+        _make_fill_row(
+            "test", "AAPL", "sell", 100, 55, 0,
+            datetime(2025, 9, 1, 14, 0, tzinfo=timezone.utc),
+        ),
+    ]
+    _, _, per_symbol = _process_fills(rows, Decimal("100000"))
+
+    assert "AAPL" in per_symbol
+    aapl = per_symbol["AAPL"]
+    assert aapl.pnl == Decimal("500")  # (55-50) * 100
+    assert aapl.trades == 1
+    assert aapl.wins == 1
+    assert aapl.losses == 0
+
+
+def test_per_symbol_stats_multi_symbol_segregation():
+    """Stats are tracked per symbol, not per-strategy aggregate."""
+    rows = [
+        # AAPL: winning round trip
+        _make_fill_row("test", "AAPL", "buy", 100, 50, 0,
+                       datetime(2025, 9, 1, 10, 0, tzinfo=timezone.utc)),
+        _make_fill_row("test", "AAPL", "sell", 100, 55, 0,
+                       datetime(2025, 9, 1, 14, 0, tzinfo=timezone.utc)),
+        # MSFT: losing round trip
+        _make_fill_row("test", "MSFT", "buy", 50, 200, 0,
+                       datetime(2025, 9, 2, 10, 0, tzinfo=timezone.utc)),
+        _make_fill_row("test", "MSFT", "sell", 50, 195, 0,
+                       datetime(2025, 9, 2, 14, 0, tzinfo=timezone.utc)),
+    ]
+    _, _, per_symbol = _process_fills(rows, Decimal("100000"))
+
+    assert per_symbol["AAPL"].pnl == Decimal("500")
+    assert per_symbol["AAPL"].wins == 1
+    assert per_symbol["MSFT"].pnl == Decimal("-250")  # (195-200) * 50
+    assert per_symbol["MSFT"].losses == 1
+
+
+def test_per_symbol_stats_unmatched_sell_skipped():
+    """Sells without a matching buy don't count as round-trips in per-symbol."""
+    rows = [
+        _make_fill_row("test", "AAPL", "sell", 100, 55, 0,
+                       datetime(2025, 9, 1, 14, 0, tzinfo=timezone.utc)),
+    ]
+    _, _, per_symbol = _process_fills(rows, Decimal("100000"))
+    assert per_symbol == {}
+
+
+def test_per_symbol_stats_open_position_not_counted():
+    """An unclosed buy doesn't show up in per-symbol stats yet."""
+    rows = [
+        _make_fill_row("test", "AAPL", "buy", 100, 50, 0,
+                       datetime(2025, 9, 1, 10, 0, tzinfo=timezone.utc)),
+    ]
+    _, _, per_symbol = _process_fills(rows, Decimal("100000"))
+    # Buy alone produces no closed round-trip, so per-symbol is empty.
+    assert per_symbol == {}
 
 
 # -- standalone build_equity_curve tests --

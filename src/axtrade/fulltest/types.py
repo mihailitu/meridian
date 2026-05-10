@@ -41,6 +41,17 @@ class TradeRecord:
 
 
 @dataclass
+class SymbolPnL:
+    """Per-symbol P&L breakdown within one strategy."""
+
+    symbol: str
+    pnl: float
+    trades: int
+    wins: int
+    losses: int
+
+
+@dataclass
 class StrategyResult:
     """Results for a single strategy."""
 
@@ -60,6 +71,7 @@ class StrategyResult:
     avg_trade_pnl: Optional[float] = None
     total_commission: Optional[float] = None
     symbols_traded: list[str] = field(default_factory=list)
+    per_symbol_pnl: list[SymbolPnL] = field(default_factory=list)
 
     @property
     def win_rate(self) -> float:

@@ -114,17 +114,32 @@ What didn't ship:
 
 The Phase 2 exit criteria (WR ≥ 40%, PF > 1.0 on 2+ rule-based strategies) were NOT met. We landed `discovery_momentum` (PF 1.63) and `multi_timeframe` (PF 1.17) above 1.0, but `mean_reversion` is still 0.59 and `momentum` doesn't trade. The next phase is gated on better diagnostics, not more guess-and-check tuning.
 
-### Phase 2.5 — Diagnostics (A1 Sharpe + per-symbol P&L breakdown)
+### Phase 2.5 — Diagnostics (A1 Sharpe + per-symbol P&L breakdown) — DONE 2026-05-11
 
-**Goal**: stop tuning blind. Two concrete report changes that make every future Phase 2 follow-up evidence-based instead of intuition-based.
+**Outcome (post-Phase-2.5 fulltest `fulltest_20260510_234426.txt`)**:
+- **Per-symbol P&L breakdown**: shipped. Every strategy section now shows worst-5 + best-5 symbols with P&L, trade count, W/L breakdown.
+- **Sim-time fills**: shipped. `PaperBroker.set_current_time` advanced per bar by the strategy runner; fills are timestamped on bar time, not wall clock.
+- **Portfolio Sharpe**: now meaningful (came out at **0.91** in the latest run). Computed on cost-basis daily equity, which now spans the simulated period because of the sim-time fix.
+- **Per-strategy Sharpe**: suppressed to N/A when noisy (|x|>10 or <20 trading days). Most strategies trip this filter — symptom of the trading-cliff issue below.
+- **Mark-to-market open-position equity**: NOT shipped, deliberately. Discovered while implementing it that PaperBroker accepts buys without a cash check, so the open-position book balloons to $4.2M on $100K capital. MTM on those positions produces fantasy equity ($94K → $824K curve). Until the broker grows a cash check, cost-basis is the trustworthy metric.
 
-- **A1 — Mark-to-market Sharpe**: plumb bar prices into `fulltest/analytics.py:_process_fills`. Equity at time `t` = cash + Σ(open_position_size × bar_close_at_t). Bars are in the backtest TimescaleDB so a query during analytics is cheaper than streaming them through. Currently every report shows Sharpe 0.00, which is meaningless.
-- **Per-symbol P&L breakdown**: extend the strategy-results section in `report.py` to list trade count + P&L per symbol within each strategy. Today the report says "Symbols: BRO, GOOGL, TRGP..." with no $-figure attached. With this we can see if `mean_reversion` is bleeding evenly across 51 symbols (structural) or losing big on 3-4 specific names (bad-apple).
+**Big finding from per-symbol breakdown + sim-time data**: the entire 6-month fulltest is actually 12 days of trading. All 1,298 fills happen between Aug 1-12, 2025; after that, every strategy is wedged against position-value caps. Documented in `AUDIT-2026-05-02.md` C5 and now Phase 2.6 below.
 
-**Exit**:
-- Sharpe is non-zero in two independent runs (within natural noise).
-- Per-symbol breakdown landed; `mean_reversion`'s -$306 broken down by symbol.
-- Decision recorded: structural fix vs. symbol filter vs. accept and move on.
+**Mean-reversion diagnostic from per-symbol breakdown**: each closed trade is on a different symbol (~all 51 trades on different names). Not a bad-apple problem. Structural — but tuning is gated on Phase 2.6 because the strategy effectively only ran for 12 days.
+
+### Phase 2.6 — Fix the 12-day trading cliff (next up)
+
+The whole 6-month "validation" was 12 days of trading. Two related root causes:
+
+1. **PaperBroker has no cash check** (audit C5). It accepts buys at any size; over 12 days of replay, thousands of buys accumulate $4.2M of phantom open cost on $100K capital. Strategies' `at_capacity()` self-limit and the OMS `Position value > $50K` check block *additional* buys per-symbol, but unconnected positions across many symbols still accumulate freely until the per-strategy cap is hit on every symbol they care about.
+2. Once strategies are wedged against caps, they can only trade by closing existing positions — but exits depend on entry conditions inverting (RSI overbought, regime flip, upper band reached), which may simply not happen on the held names within the period.
+
+**Fix direction**:
+- Add `cash_available` tracking to `PaperBroker.submit_order`. On a buy: reject if cash < price × qty + commission. On a sell: cash += proceeds.
+- Verify with a short fulltest that fills now span the full 6 months.
+- Re-run baseline. Every per-strategy number we have now is suspect; the new run becomes the real baseline.
+
+**Exit**: fulltest fills span at least 80% of the simulated period (vs the current 7%).
 
 ### Phase 3 — Mean-reversion deep dive (gated on 2.5)
 

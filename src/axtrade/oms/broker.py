@@ -3,6 +3,7 @@
 import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 from uuid import UUID
@@ -123,6 +124,18 @@ class PaperBroker(BrokerProtocol):
         self._positions: dict[str, Position] = {}
         self._fill_callback: Optional[Callable[[Fill], Awaitable[None]]] = None
         self._connected = False
+        # Simulated clock: when set, fills are timestamped with this rather than
+        # wall-clock. Fulltest advances it per bar so analytics see sim time.
+        self._current_time: Optional[datetime] = None
+
+    def set_current_time(self, ts: datetime) -> None:
+        """Override the broker's notion of 'now' for fill timestamps.
+
+        In live trading this should not be called (fills carry wall clock).
+        In fulltest the strategy runner sets this on every bar so fills line
+        up with the simulated period.
+        """
+        self._current_time = ts
 
     async def connect(self) -> None:
         """Connect to paper broker (no-op)."""
@@ -164,18 +177,21 @@ class PaperBroker(BrokerProtocol):
             exec_price = price / slippage_mult
         exec_price = exec_price.quantize(Decimal("0.01"))
 
-        # Create fill
-        fill = Fill(
-            order_id=order.id,
-            strategy_id=order.strategy_id,
-            symbol=order.symbol,
-            side=order.side,
-            quantity=order.quantity,
-            price=exec_price,
-            commission=calculate_commission(
+        # Create fill (simulated clock if set, else wall-clock default).
+        fill_kwargs: dict = {
+            "order_id": order.id,
+            "strategy_id": order.strategy_id,
+            "symbol": order.symbol,
+            "side": order.side,
+            "quantity": order.quantity,
+            "price": exec_price,
+            "commission": calculate_commission(
                 order.quantity, exec_price, self.commission_config
             ),
-        )
+        }
+        if self._current_time is not None:
+            fill_kwargs["filled_at"] = self._current_time
+        fill = Fill(**fill_kwargs)
 
         # Update order status
         order.status = OrderStatus.FILLED

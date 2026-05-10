@@ -19,14 +19,17 @@ In rough priority. Item codes (A1, B2, etc.) are the audit's IDs — see [`docs/
 
 | # | Item | Why now | Status |
 |---|------|---------|--------|
-| 1 | **A1 Mark-to-market Sharpe + per-symbol P&L breakdown in fulltest report** | Sharpe always reads 0.00 so we can't compare strategies on risk; per-symbol breakdown would show whether mean_reversion's loss is structural or a bad-apple problem. Both make every future tuning decision sharper | next up |
-| 2 | Mean-reversion deep dive | PF 0.59 still net-loss (-$306). With #1 we'll know whether it's a structural issue or 1-2 bad symbols dragging it down | gated on #1 |
-| 3 | B2: delete `ml/` (966 LoC of disabled hand-rolled GD) | Cheap simplification; stops "what's this for?" friction. ~2 hours | not started |
-| 4 | Momentum redo | Current relaxed gate trades only on discovery-fed names where `discovery_momentum` already does it better. Either disable momentum or repurpose for the named-symbol universe only | gated on #1, #2 |
-| 5 | Expand testing: 18-month window + S&P 1500 universe | Per user: tune on 6mo first, then expand. Data already on disk | gated on strategies posting positive expectancy |
-| 6 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission | gated on strategies posting positive expectancy |
+| 1 | **The 12-day trading cliff** | Phase 2.5 surfaced: in every fulltest run, all 1,298 fills happen in the first 12 simulated days (Aug 1-12 2025). After that, strategies hit position-value caps and never trade again over the remaining 5.5 months. Every prior "6-month" result is really 12 days. Without this fix, no other tuning is meaningful | next up |
+| 2 | PaperBroker cash check | Related root cause: broker accepts buys without checking cash. Total open position book reaches $4.2M of phantom cost on $100K capital. Until this is fixed, mark-to-market equity is fantasy and we can't compute a real risk metric | next up |
+| 3 | Mean-reversion deep dive | PF 0.59 still net-loss. Per-symbol breakdown (Phase 2.5) shows it's structural (each closed trade is on a different symbol, no bad-apple) | gated on #1 |
+| 4 | B2: delete `ml/` (966 LoC of disabled hand-rolled GD) | Cheap simplification; stops "what's this for?" friction. ~2 hours, orthogonal | not started |
+| 5 | Momentum redo | Current relaxed gate trades only on discovery-fed names where `discovery_momentum` already does it better | gated on #1 |
+| 6 | Expand testing: 18-month window + S&P 1500 universe | Per user: tune on 6mo first, then expand. Data already on disk | gated on strategies actually trading the full period |
+| 7 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission | gated on strategies posting positive expectancy |
 
-**Per-strategy state (post-PR)**: `discovery_momentum` PF 1.63 (+$265) ✓, `multi_timeframe` PF 1.17 (+$295) ✓, `mean_reversion` PF 0.59 (-$306) ↑ from 0.35, `pairs` 1 trade -$196, `momentum` 0 entries (gate too strict; relaxation tried + reverted because it traded only on discovery names with worse logic than `discovery_momentum`).
+**Per-strategy state (post-PR)**: `discovery_momentum` PF 1.63 (+$265) ✓, `multi_timeframe` PF 1.17 (+$295) ✓, `mean_reversion` PF 0.59 (-$306) ↑ from 0.35, `pairs` 1 trade -$196, `momentum` 0 entries (gate too strict; relaxation tried + reverted because it traded only on discovery names with worse logic than `discovery_momentum`). **Caveat**: all of these numbers come from the first 12 simulated days, not the full 6 months — see #1 above.
+
+**Phase 2.5 deliverables** (PR `validation-and-improvements`): per-symbol P&L breakdown in every strategy's report section; portfolio Sharpe is now meaningful (0.91 in latest run); fills timestamped on simulated bar time so analytics see the simulated period; per-strategy Sharpe suppressed to N/A when sparse (the sparse-data symptom of the 12-day cliff).
 
 **Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup. `run_in_executor` removal saved 6% — that's the partial answer to "real fulltest bottleneck." Remaining ~94% wall clock is somewhere else (replay, Redis ops, OMS rejection path); not yet investigated.
 

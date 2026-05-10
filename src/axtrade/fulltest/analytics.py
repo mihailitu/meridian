@@ -6,6 +6,7 @@ sequences suitable for the existing PerformanceAnalyzer.
 
 import math
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
@@ -14,6 +15,16 @@ import asyncpg
 
 from axtrade.backtest.analytics import PerformanceAnalyzer
 from axtrade.backtest.types import EquityPoint, TradeRecord
+
+
+@dataclass
+class SymbolStats:
+    """Per-symbol P&L breakdown within a strategy."""
+
+    pnl: Decimal = Decimal("0")
+    wins: int = 0
+    losses: int = 0
+    trades: int = 0  # closed round-trips (sells with matched buys)
 
 
 async def _fetch_fills(
@@ -43,11 +54,12 @@ async def _fetch_fills(
 def _process_fills(
     rows: list,
     initial_capital: Decimal,
-) -> tuple[list[TradeRecord], list[EquityPoint]]:
-    """Process fill rows into trade records and equity curve in one pass.
+) -> tuple[list[TradeRecord], list[EquityPoint], dict[str, SymbolStats]]:
+    """Process fill rows into trade records, equity curve, and per-symbol stats.
 
     FIFO matches sells against buys per (strategy_id, symbol). Simultaneously
-    tracks cash and position cost basis for the equity curve.
+    tracks cash and position cost basis for the equity curve, and accumulates
+    per-symbol P&L / win-loss counts on each closed round-trip.
 
     Args:
         rows: Fill rows with strategy_id, symbol, side, quantity, price,
@@ -55,13 +67,17 @@ def _process_fills(
         initial_capital: Starting cash for equity curve
 
     Returns:
-        Tuple of (trade_records, equity_curve)
+        Tuple of (trade_records, equity_curve, per_symbol_stats).
+        per_symbol_stats is keyed by raw symbol (not (strategy, symbol)) — when
+        rows contain multiple strategies, the caller is expected to be passing
+        a strategy-filtered fill list.
     """
     trades: list[TradeRecord] = []
     curve: list[EquityPoint] = []
+    per_symbol: dict[str, SymbolStats] = defaultdict(SymbolStats)
 
     if not rows:
-        return trades, curve
+        return trades, curve, dict(per_symbol)
 
     # FIFO buy lots per (strategy_id, symbol): [[qty, price, commission], ...]
     buy_lots: dict[tuple[str, str], list[list]] = defaultdict(list)
@@ -72,6 +88,7 @@ def _process_fills(
 
     for row in rows:
         key = (row["strategy_id"], row["symbol"])
+        symbol = row["symbol"]
         qty = Decimal(str(row["quantity"]))
         price = Decimal(str(row["price"]))
         commission = Decimal(str(row["commission"]))
@@ -98,8 +115,10 @@ def _process_fills(
             total_pnl = Decimal("0")
             total_buy_commission = Decimal("0")
             cost_basis_sold = Decimal("0")
+            had_match = False
 
             while remaining > 0 and buy_lots[key]:
+                had_match = True
                 lot = buy_lots[key][0]
                 lot_qty, lot_price, lot_commission = lot
 
@@ -139,6 +158,18 @@ def _process_fills(
                 pnl=total_pnl,
             ))
 
+            # Per-symbol stats: count this as a closed round-trip only if at
+            # least one buy lot was matched. Unmatched sells (rare) get logged
+            # at the trade level but skipped from per-symbol breakdown.
+            if had_match:
+                stats = per_symbol[symbol]
+                stats.pnl += total_pnl
+                stats.trades += 1
+                if total_pnl > 0:
+                    stats.wins += 1
+                elif total_pnl < 0:
+                    stats.losses += 1
+
         equity = cash + open_position_cost
         if equity > peak:
             peak = equity
@@ -153,7 +184,7 @@ def _process_fills(
             drawdown=drawdown,
         ))
 
-    return trades, curve
+    return trades, curve, dict(per_symbol)
 
 
 async def build_trade_records(
@@ -175,7 +206,7 @@ async def build_trade_records(
         List of TradeRecords in chronological order
     """
     rows = await _fetch_fills(conn, strategy_id)
-    trades, _ = _process_fills(rows, Decimal("0"))
+    trades, _, _ = _process_fills(rows, Decimal("0"))
     return trades
 
 
@@ -304,21 +335,44 @@ async def compute_analytics(
 
     rows = await _fetch_fills(conn, strategy_id)
     if not rows:
-        return PerformanceAnalyzer.calculate_metrics(
+        empty = PerformanceAnalyzer.calculate_metrics(
             [], [], capital, start_date, end_date
         )
+        empty["per_symbol"] = {}
+        return empty
 
-    trades, curve = _process_fills(rows, capital)
-    daily_curve = resample_equity_daily(curve, initial_capital=capital, start_date=start_date)
+    trades, curve, per_symbol = _process_fills(rows, capital)
+    daily_curve = resample_equity_daily(
+        curve, initial_capital=capital, start_date=start_date
+    )
 
     metrics = PerformanceAnalyzer.calculate_metrics(
         trades, daily_curve, capital, start_date, end_date
     )
 
-    # Override Sharpe with daily-frequency calculation
-    metrics["sharpe_ratio"] = PerformanceAnalyzer.calculate_sharpe(
-        daily_curve, periods_per_year=252
-    )
+    # Sharpe uses the cost-basis daily curve. With fills timestamped on
+    # simulated bar time (PaperBroker.set_current_time), this curve has
+    # cash-flow variance spread across the period — enough for a meaningful
+    # daily Sharpe at the portfolio level.
+    #
+    # Per-strategy Sharpe is unreliable when trading is sparse (a single
+    # strategy may have <20 distinct trading days, where mean is small but
+    # std is also tiny, and the ratio explodes). Suppress to None outside a
+    # safe range.
+    #
+    # We also deliberately do NOT mark unmatched open positions to market:
+    # the PaperBroker accepts buys without a cash check, so the open-position
+    # book balloons to fantasy size. Marking those to market produces wildly
+    # inflated equity. Until the broker grows a cash-check (separate change),
+    # cost-basis equity is the trustworthy metric.
+    sharpe = PerformanceAnalyzer.calculate_sharpe(daily_curve, periods_per_year=252)
+    if strategy_id is not None and (sharpe is None or abs(sharpe) > 10 or len(daily_curve) < 20):
+        # Per-strategy: suppress when noisy. Portfolio (strategy_id=None) keeps it.
+        metrics["sharpe_ratio"] = None
+    else:
+        metrics["sharpe_ratio"] = sharpe
+
+    metrics["per_symbol"] = per_symbol
 
     # Override return metrics using positions-table realized P&L (source of truth).
     # The fills-based equity curve can diverge from actual P&L when sells have

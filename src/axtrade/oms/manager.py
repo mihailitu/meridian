@@ -126,6 +126,15 @@ class OrderManager:
         if self._broker:
             self._broker.update_price(symbol, decimal_price)
 
+    def set_current_time(self, ts) -> None:
+        """Forward simulated-time updates to the broker (PaperBroker only).
+
+        No-op if the broker doesn't expose set_current_time. Lets fulltest
+        timestamp fills with bar time so analytics see the simulated period.
+        """
+        if self._broker and hasattr(self._broker, "set_current_time"):
+            self._broker.set_current_time(ts)
+
     async def submit_order(self, order: Order) -> UUID:
         """Submit an order for execution.
 

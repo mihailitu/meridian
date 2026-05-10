@@ -317,6 +317,10 @@ class StrategyRunner:
 
                     # Update price cache in order manager
                     self._order_manager.update_price(data.symbol, data.close)
+                    # Advance the broker's simulated clock so fills are
+                    # timestamped with the bar time, not wall clock. Lets
+                    # fulltest analytics build a real daily equity curve.
+                    self._order_manager.set_current_time(data.bar.timestamp)
 
                     # Reset daily risk counters at day boundaries
                     bar_date = data.bar.timestamp.strftime("%Y-%m-%d")
