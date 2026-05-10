@@ -24,8 +24,7 @@ class MeanReversionStrategy(BaseStrategy):
     - Strategy not at its per-strategy max_positions cap
 
     Exit conditions:
-    - Price at or above middle Bollinger Band (SMA — captures the
-      reliable half of the swing instead of holding for the upper band)
+    - Price at or above upper Bollinger Band (full mean-reversion swing)
     - RSI above overbought threshold (secondary)
     - Stop loss triggered (default 1.5%)
 
@@ -87,9 +86,10 @@ class MeanReversionStrategy(BaseStrategy):
     ) -> Optional[Order]:
         price = float(data.close)
 
-        # Exit at middle band (SMA) — capture the dependable mean reversion,
-        # not the full swing to the upper band.
-        if data.bb_middle is not None and price >= data.bb_middle:
+        # Exit at upper band (full swing). Tried middle-band exit on 2026-05-04;
+        # avg winner shrank from $41 to $16 while avg loser barely changed,
+        # making PF worse (0.61 -> 0.35). Reverted 2026-05-10.
+        if data.bb_upper is not None and price >= data.bb_upper:
             return self._create_close_order(data.symbol, position.quantity)
 
         if data.rsi_14 is not None and data.rsi_14 > self.rsi_overbought:

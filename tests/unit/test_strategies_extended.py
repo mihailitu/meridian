@@ -129,10 +129,10 @@ class TestMeanReversionStrategy:
         )
         assert strategy.on_bar(data) is None
 
-    def test_sell_signal_at_middle_band(
+    def test_sell_signal_at_upper_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
-        # Exit target moved from upper band to middle band (SMA).
+        # Exit target is the upper band (full mean-reversion swing).
         strategy.update_position(
             Position(
                 strategy_id="mean_rev_test",
@@ -144,7 +144,7 @@ class TestMeanReversionStrategy:
         )
 
         data = make_bar_with_indicators(
-            close=100.0,
+            close=112.0,
             rsi_14=55,
             bb_upper=112.0,
             bb_middle=100.0,
@@ -156,7 +156,7 @@ class TestMeanReversionStrategy:
         assert order is not None
         assert order.side == OrderSide.SELL
 
-    def test_no_sell_below_middle_band(
+    def test_no_sell_below_upper_band(
         self, strategy: MeanReversionStrategy
     ) -> None:
         strategy.update_position(
@@ -169,9 +169,9 @@ class TestMeanReversionStrategy:
             )
         )
 
-        # Below middle band, RSI not overbought, no stop hit → hold.
+        # Above middle but below upper band, RSI not overbought, no stop hit → hold.
         data = make_bar_with_indicators(
-            close=95.0,
+            close=105.0,
             rsi_14=55,
             bb_upper=112.0,
             bb_middle=100.0,

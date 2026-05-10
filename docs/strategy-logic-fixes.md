@@ -1,7 +1,7 @@
 # Strategy Logic Fixes
 
-> Branch-scoped work doc for `strategy-logic-fixes`: improving fulltest win performance.
-> Broader architectural issues live in [`AUDIT-2026-05-02.md`](AUDIT-2026-05-02.md). Project-level priorities live in [`../ROADMAP.md`](../ROADMAP.md). This file stays scoped to strategy logic.
+> Working doc for the strategy-logic rewrite (now on `main`) and the followups it surfaced.
+> Broader architectural issues live in [`AUDIT-2026-05-02.md`](AUDIT-2026-05-02.md). Project-level priorities live in [`../ROADMAP.md`](../ROADMAP.md). Phased execution plan lives in [`active-plan.md`](active-plan.md). This file stays scoped to strategy logic.
 
 ## Context
 
@@ -9,9 +9,32 @@ Fulltest baseline (2025-08-01 to 2026-02-01, 5 symbols + discovery, $100K) retur
 
 Root causes from the audit: contradictory entry logic, unused regime/volatility data from indicators, tight stops, and a 93% order rejection rate from risk limits.
 
-## Status — 2026-05-03
+## Followup tuning items
 
-Items §1–§4, §6 and §7 are **done** on branch `strategy-logic-fixes`. §5 (Sharpe) remains deferred per its original text. Validation against the full baseline is **incomplete** — see "Open issues" below.
+Surfaced by the partial fulltest run + the post-rewrite validation.
+
+1. **Mean reversion exit** — APPLIED + KEPT 2026-05-10. Reverted middle-band exit back to upper-band exit. Validation had shown avg winner shrank $41 → $16 with middle-band while avg loser only shrank $-45 → $-17, so PF dropped from 0.61 → 0.35. **Phase 2 result with upper-band restored**: PF 0.35 → 0.59, avg winner $16 → $35, WR 27.5% → 33.3%. Still net-loss but trajectory is right.
+2. **Momentum entry gate** — TRIED + REVERTED 2026-05-10. Lowered `trend_strength_min` 30 → 20 and widened the RSI cross window from 1 → 5 bars. This enabled trades (0 → 6 over 6 months) but they net-lost $135. Strategy was trading exclusively on discovery-fed names (TAP, TRGP, CL, CRL, IDXX, FOX), competing with `discovery_momentum` (52.9% WR, +$264) on the same opportunities with worse logic. Tightening the stop from 3% → 2% changed nothing — losses don't exit via stop, they exit via regime-flip / RSI. Conclusion: momentum needs deeper rework (exit asymmetry — winners exit early on regime/RSI while losers run wider). Reverted to validation defaults; revisit once other phases land.
+3. **Multi-timeframe re-entry cooldown** — DEFERRED. Validation showed 53 trades over 6 months (down from the 692-fills partial-run snapshot once `at_capacity()` lands), so the original whipsaw concern is no longer urgent. Re-evaluate if a future run shows excess fills.
+4. **Pairs follow-through** — DEFERRED. Validation: 1 trade, 0 wins. Strategy is structurally low-frequency. Don't tune further until other strategies post positive expectancy.
+
+## Status — 2026-05-10
+
+Items §1–§4, §6 and §7 below are **merged to `main`** (commits `27063ed`, `e60dc84`, `b5fe036`, `94042bb`). §5 (Sharpe) is deferred to Phase 3 of [`active-plan.md`](active-plan.md). **Validation complete** — see "Validation results" below.
+
+## Validation results (2026-05-10)
+
+Post-rewrite run: `data/fulltest_results/fulltest_20260510_105510.txt` — 5 symbols + discovery, $100K, 2025-08 → 2026-02. **Total return +0.05%** (vs -0.94% on the 480-symbol pre-rewrite baseline; not strictly apples-to-apples). Per-strategy:
+
+| Strategy | Trades | WR | PF | P&L | vs baseline |
+|---|---:|---:|---:|---:|---|
+| `discovery_momentum` | 17 | 52.9% | 1.63 | +$264 | improved (was 25% / 0.12 / -$42) |
+| `multi_timeframe` | 53 | 24.5% | 1.18 | +$298 | improved (was 14.3% / 0.09 / -$376) |
+| `mean_reversion` | 51 | 27.5% | 0.35 | -$320 | **regressed** (was 40% / 0.61 / -$470 — better P&L but worse PF/WR) |
+| `pairs` | 1 | 0% | 0.00 | -$196 | unchanged (1 trade, 0 wins) |
+| `momentum` | 0 | — | — | — | unchanged: still 0 entries (gate too strict) |
+
+**Mean-reversion regression diagnostic**: avg winner $41 → $16 (middle-band exit cuts winners short), avg loser $-45 → $-17 (tighter 1.5% stop hits more often). Trade-off didn't pay off — winners shrank more than losers did. Phase 2 candidate: revert to upper-band exit, keep the RANGING-only gate.
 
 ### 1. Momentum — DONE (`strategies/momentum.py`)
 **Was**: `RSI < 40 AND price > SMA_20` (contradictory; rarely triggers; 6.8% WR / 0 trades depending on universe).
@@ -59,25 +82,19 @@ Orchestrator overrides `oms.max_positions` to 50; live config stays at 20.
 
 All four rewritten strategies now call `self.at_capacity()` before emitting entries, so they self-limit before the OMS rejects them. This dropped wasted-order noise during the partial fulltest run.
 
-## Open issues from the partial fulltest run (killed at 57min)
+## Mid-run snapshot from the partial fulltest
 
-A full apples-to-apples comparison against the baseline did not complete — the run was killed before report generation. Mid-run snapshot from the DB at ~57min:
+The original validation was killed at 57min before report generation. DB snapshot at that point:
 
 | Strategy | Fills (incomplete) | Note |
 |---|---:|---|
-| `multi_timeframe-bt` | 692 | very chatty — pullback band 0.3% may be too loose, or needs a re-entry cooldown after exit |
+| `multi_timeframe-bt` | 692 | very chatty — re-entry whipsaw, see followup §2 |
 | `discovery_momentum-bt` | 237 | reasonable |
 | `mean_reversion-bt` | 251 | reasonable; up from 55 in baseline |
 | `pairs-bt` | 3 | up from 1; capped at 1 position by design |
-| `momentum-bt` | 0 | regime + trend_strength gate too strict on 1m bars; the combined condition rarely fires |
+| `momentum-bt` | 0 | regime + trend_strength gate too strict, see followup §1 |
 
 Total mid-run fills: 1,186 (vs 88 in baseline) — strategies are firing far more, win rates not measured. Order count was ~42K; OMS rejected most before fill.
-
-### Followups suggested by the partial run
-
-1. **Momentum entry gate is too strict.** `TRENDING_UP`/`BREAKOUT` + `trend_strength > 30` + RSI crossing 50 + price > SMA combined produce zero entries on the 5 named symbols over 6 months. Likely fixes: relax `trend_strength_min` to 15–20, allow `RANGING_QUIET` as a valid regime when trend_strength is high, or weaken the cross to "RSI > 50 AND prev <= 50 within last N bars".
-2. **Multi-timeframe re-entry cooldown.** 692 fills suggests the same symbol is being re-entered immediately after exit. Add a per-symbol minimum bar-count gap before a new entry.
-3. **Aggregator persistence is the throughput bottleneck for fulltest** (see audit addendum). At ~50 bars/sec single-row INSERT, a 6-month / 5-symbol replay + S&P discovery takes 60–90+ minutes — 2× the prior baseline since BB/ATR were added. Worth batching or COPY-buffering before more fulltest iterations.
 
 ## Verification
 
@@ -87,17 +104,15 @@ Unit tests: 870 collected, 866 strategy-related pass. The 4 failures (`test_aler
 .venv/bin/pytest
 ```
 
-For fulltest comparison, historical parquets are in `data/historical/` (no download needed). Run the same parameters as the baseline:
+The validation fulltest is the regression baseline going forward. Historical parquets are in `data/historical/` (no download needed):
 
 ```bash
 python -m axtrade.fulltest run --start 2025-08-01 --end 2026-02-01 \
   --symbols AAPL MSFT GOOGL AMZN NVDA --capital 100000
 ```
 
-Compare against `data/fulltest_results/fulltest_20260218_221730.txt`. Target metrics from the original plan:
+Compare against `data/fulltest_results/fulltest_20260218_221730.txt`. Target metrics:
 - Overall win rate: 30.7% → 35%+
 - Mean reversion profit factor: 0.61 → higher
 - Pairs: more than 1 trade
 - discovery_momentum: remain profitable (regression check)
-
-Plan to revisit the open issues above before publishing a comparison report.

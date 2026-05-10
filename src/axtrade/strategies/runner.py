@@ -271,18 +271,15 @@ class StrategyRunner:
         strategy: BaseStrategy,
         data: BarWithIndicators,
     ) -> tuple[BaseStrategy, Optional[Order]]:
-        """Run a strategy in a separate thread.
+        """Run a strategy synchronously in the event loop.
 
-        Args:
-            loop: Event loop
-            strategy: Strategy to run
-            data: Bar data
-
-        Returns:
-            Tuple of (strategy, resulting_order)
+        Strategy.on_bar is fast pure-python work; dispatching it to a thread pool
+        adds ~50us/call of overhead per dispatch. With 5 strategies x millions of
+        bars per fulltest, that's the dominant runtime cost. Blocks the event loop
+        for the duration of on_bar — acceptable as long as strategies stay fast.
         """
         try:
-            order = await loop.run_in_executor(None, strategy.on_bar, data)
+            order = strategy.on_bar(data)
             return strategy, order
         except Exception as e:
             raise e
