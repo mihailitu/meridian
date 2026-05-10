@@ -22,19 +22,22 @@ Surfaced by the partial fulltest run + the post-rewrite validation.
 
 Items §1–§4, §6 and §7 below are **merged to `main`** (commits `27063ed`, `e60dc84`, `b5fe036`, `94042bb`). §5 (Sharpe) is deferred to Phase 3 of [`active-plan.md`](active-plan.md). **Validation complete** — see "Validation results" below.
 
-## Validation results (2026-05-10)
+## Validation results
 
-Post-rewrite run: `data/fulltest_results/fulltest_20260510_105510.txt` — 5 symbols + discovery, $100K, 2025-08 → 2026-02. **Total return +0.05%** (vs -0.94% on the 480-symbol pre-rewrite baseline; not strictly apples-to-apples). Per-strategy:
+Two reference runs, same params (5 symbols + discovery, $100K, 2025-08 → 2026-02):
 
-| Strategy | Trades | WR | PF | P&L | vs baseline |
+- **Post-rewrite, pre-PR** (`fulltest_20260510_105510.txt`): +0.05% / 29.5% WR / 0.91 PF / 122 trades. Mean reversion regressed to PF 0.35.
+- **Post-PR canonical** (`fulltest_20260510_210714.txt`): **+0.06% / 31.97% WR / 0.93 PF / 122 trades**. Mean reversion fix landed; +$11 net.
+
+| Strategy | Trades | WR | PF | P&L | Note |
 |---|---:|---:|---:|---:|---|
-| `discovery_momentum` | 17 | 52.9% | 1.63 | +$264 | improved (was 25% / 0.12 / -$42) |
-| `multi_timeframe` | 53 | 24.5% | 1.18 | +$298 | improved (was 14.3% / 0.09 / -$376) |
-| `mean_reversion` | 51 | 27.5% | 0.35 | -$320 | **regressed** (was 40% / 0.61 / -$470 — better P&L but worse PF/WR) |
-| `pairs` | 1 | 0% | 0.00 | -$196 | unchanged (1 trade, 0 wins) |
-| `momentum` | 0 | — | — | — | unchanged: still 0 entries (gate too strict) |
+| `discovery_momentum` | 17 | 52.9% | 1.63 | +$265 | working as intended |
+| `multi_timeframe` | 53 | 24.5% | 1.17 | +$295 | working as intended |
+| `mean_reversion` | 51 | 33.3% | 0.59 | -$306 | upper-band exit lifted PF 0.35→0.59 (avg winner $16→$35); still net-loss |
+| `pairs` | 1 | 0% | 0.00 | -$196 | structurally low-frequency by design |
+| `momentum` | 0 | — | — | — | gate too strict on baseline 5 symbols; relaxation tried+reverted (see followups §2) |
 
-**Mean-reversion regression diagnostic**: avg winner $41 → $16 (middle-band exit cuts winners short), avg loser $-45 → $-17 (tighter 1.5% stop hits more often). Trade-off didn't pay off — winners shrank more than losers did. Phase 2 candidate: revert to upper-band exit, keep the RANGING-only gate.
+Compared to the pre-rewrite 480-symbol baseline (`fulltest_20260218_221730.txt`, -0.94%): not strictly apples-to-apples (different symbol set + 1 vs 3850 discovery scans), but the rewrites + PR moved net P&L from -$935 → +$57.
 
 ### 1. Momentum — DONE (`strategies/momentum.py`)
 **Was**: `RSI < 40 AND price > SMA_20` (contradictory; rarely triggers; 6.8% WR / 0 trades depending on universe).
@@ -60,11 +63,13 @@ Post-rewrite run: `data/fulltest_results/fulltest_20260510_105510.txt` — 5 sym
 ### 3. Mean Reversion — DONE (`strategies/mean_reversion.py`)
 **Was**: enter at lower band + RSI<35, exit at upper band, stop 2%.
 
-**Now**:
+**Now** (after PR `validation-and-improvements` on 2026-05-10):
 - Entry gated on regime ∈ `RANGING_QUIET` / `RANGING_VOLATILE`
-- **Exit at middle band (SMA)** instead of upper band — captures reliable reversion, not full swing
+- Exit at upper Bollinger Band (full mean-reversion swing)
 - Stop 2% → 1.5%
 - RSI > 70 still acts as secondary exit
+
+Middle-band exit was tried first but reverted: it shrank avg winner $41→$16 while avg loser only shrank $-45→$-17, dropping PF from 0.61 to 0.35. Restoring upper-band exit on the RANGING-only gate recovered PF to 0.59.
 
 ### 4. Pairs — DONE (`strategies/pairs.py`)
 Defaults retuned: `lookback` 20 → 60, `entry_zscore` 2.0 → 1.5, `exit_zscore` 0.5 → 0.3. Strategy structure unchanged.

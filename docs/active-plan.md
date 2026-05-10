@@ -96,31 +96,51 @@ Original phase plan kept below for context.
 - Slow-path validation report saved with delta written vs. pre-rewrite baseline. Record numbers, not vibes.
 - C2b merged. Validation re-runs in <10min wall clock with matching fills/P&L.
 
-### Phase 2 — Strategy followups (the partial-run flags)
+### Phase 2 — Strategy followups — DONE 2026-05-10 (PR `validation-and-improvements`)
 
-Three concrete tuning items already identified in `strategy-logic-fixes.md`. With Phase 0+1 done, each iteration costs minutes.
+**Outcome (post-PR baseline `fulltest_20260510_210714.txt`)**: portfolio +0.06% / 31.97% WR / 0.93 PF. +$11 net P&L gain over the pre-PR validation.
 
-- **Momentum** (`strategies/momentum.py`): the combined gate (TRENDING_UP/BREAKOUT + trend_strength > 30 + RSI cross 50 + price > SMA) is too strict — partial run had 0 entries. Try: relax `trend_strength_min` to 15-20, allow `RANGING_QUIET` regime when trend_strength is high, or weaken cross to "RSI > 50 AND prev <= 50 within last N bars". Iterate until baseline 5 symbols emit a non-trivial trade count.
-- **Multi-timeframe** (`strategies/multi_timeframe.py`): 692 fills on the partial run = re-entry whipsaw. Add per-symbol bar-count cooldown after each exit (e.g., min 30 bars before re-entry on same symbol). Validate fill count drops to a sensible band.
-- **Pairs** (`strategies/pairs.py`): the lookback/zscore retune helped (1 → 3 fills). Probably needs more — verify post-Phase-1 numbers, decide whether to retune further or accept low-frequency by design.
+What landed in the PR:
+- `mean_reversion`: reverted middle-band exit back to upper-band. PF 0.35 → **0.59**, avg winner $16 → $35, WR 27.5% → 33.3%. Still net-loss but trajectory is right.
+- `strategies/runner.py`: dropped `loop.run_in_executor` from per-bar strategy dispatch. ~5% wall-clock speedup, deterministic strategy order. Strategy P&L unchanged within natural noise (~$3).
 
-**Exit**: portfolio win rate ≥ 40% on the baseline 5 symbols, profit factor > 1.0 on at least 2 of the 4 rule-based strategies. Numbers chosen as "looks promising" not "ship to prod"; user can override.
+What was tried and reverted (full detail in `strategy-logic-fixes.md` followups):
+- **Momentum gate relaxation** (`trend_strength_min` 30→20, RSI cross window 1→5 bars): enabled 6 trades but they net-lost $135. Strategy was trading exclusively on discovery-fed names, competing with `discovery_momentum` (which is profitable on those names). Reverted.
+- **Momentum stop tighten** (3% → 2%): no-op. Losses exit via regime-flip / RSI, not stop-loss. Reverted.
 
-### Phase 3 — Real risk metric (A1)
+What didn't ship:
+- `multi_timeframe` re-entry cooldown — 53 trades over 6 months in the validation, no whipsaw observed. Deferred.
+- Pairs retune — 1 trade by design. Deferred.
 
-**Goal**: stop printing Sharpe = 0.00.
+The Phase 2 exit criteria (WR ≥ 40%, PF > 1.0 on 2+ rule-based strategies) were NOT met. We landed `discovery_momentum` (PF 1.63) and `multi_timeframe` (PF 1.17) above 1.0, but `mean_reversion` is still 0.59 and `momentum` doesn't trade. The next phase is gated on better diagnostics, not more guess-and-check tuning.
 
-- Plumb bar prices into `fulltest/analytics.py:_process_fills`. Equity at time `t` = cash + Σ(open_position_size × bar_close_at_t). Bars are already in the backtest TimescaleDB, so a query in `report.py` or a join in analytics is cheaper than streaming them through.
-- Re-run Phase 2's best result. Sharpe should be a real number; Sortino too if computed similarly.
+### Phase 2.5 — Diagnostics (A1 Sharpe + per-symbol P&L breakdown)
 
-**Exit**: Sharpe ratio in the report is non-zero and stable across two independent runs.
+**Goal**: stop tuning blind. Two concrete report changes that make every future Phase 2 follow-up evidence-based instead of intuition-based.
+
+- **A1 — Mark-to-market Sharpe**: plumb bar prices into `fulltest/analytics.py:_process_fills`. Equity at time `t` = cash + Σ(open_position_size × bar_close_at_t). Bars are in the backtest TimescaleDB so a query during analytics is cheaper than streaming them through. Currently every report shows Sharpe 0.00, which is meaningless.
+- **Per-symbol P&L breakdown**: extend the strategy-results section in `report.py` to list trade count + P&L per symbol within each strategy. Today the report says "Symbols: BRO, GOOGL, TRGP..." with no $-figure attached. With this we can see if `mean_reversion` is bleeding evenly across 51 symbols (structural) or losing big on 3-4 specific names (bad-apple).
+
+**Exit**:
+- Sharpe is non-zero in two independent runs (within natural noise).
+- Per-symbol breakdown landed; `mean_reversion`'s -$306 broken down by symbol.
+- Decision recorded: structural fix vs. symbol filter vs. accept and move on.
+
+### Phase 3 — Mean-reversion deep dive (gated on 2.5)
+
+With per-symbol breakdown in hand, decide between:
+- **Structural fix**: tighter entry (e.g. require RSI ≤ 30 instead of ≤ 35, or two-bar confirmation at lower band)
+- **Symbol filter**: blacklist the worst-performing names from the strategy
+- **Volatility gate**: skip RANGING_VOLATILE entries — those moved against us harder
+
+This phase was Phase 4 in the original plan; promoting it now that we know the rest of the rule-based strategies are healthy.
 
 ### Phase 4 — Cheap cleanup (B1, B2)
 
-Optional but low-cost. Do these only if Phase 3 shows promise — otherwise they're polish on a sinking ship.
+Optional but low-cost. Do these any time — orthogonal to strategy work.
 
-- **B1**: rename `regime` → `trend_regime` in `indicators/regime.py`, `RegimeResult`, and call sites. One PR. Honest naming.
 - **B2**: delete `src/axtrade/ml/` (966 LoC, hand-rolled GD, disabled in config) and remove `MLPredictionStrategy` from `strategies/__init__.py:24`'s `STRATEGY_TYPES`. Don't replace; revisit if/when we want a real ML layer.
+- **B1**: rename `regime` → `trend_regime` in `indicators/regime.py`, `RegimeResult`, and call sites. Honest naming. Bigger blast radius (every call site), so do separately from B2.
 
 **Exit**: tests pass, no broken imports.
 

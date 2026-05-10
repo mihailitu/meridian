@@ -8,10 +8,10 @@ _Last refreshed: 2026-05-10._
 ## Today
 
 - **Pipeline works end-to-end** in paper / fulltest mode: gateway → aggregator (with SMA, RSI, BB, ATR, regime) → strategies → OMS → DB. Web UI shows positions, P&L, alerts.
-- **Strategies are not yet profitable.** Last clean baseline: -0.94% return / 30.7% win rate over 6 months on 5 symbols + S&P discovery (`data/fulltest_results/fulltest_20260218_221730.txt`).
-- **Strategy rewrites merged to `main`** (commits `27063ed`, `e60dc84`, `b5fe036`, `94042bb`): regime-aware entries/exits for all four rule-based strategies plus per-strategy `max_positions`. Validation fulltest at baseline params is still owed (the original validation was killed at 57min). Detail: [`docs/strategy-logic-fixes.md`](docs/strategy-logic-fixes.md).
-- **Data inventory**: `data/historical/` holds 1,447 unique symbols across two periods (2024-08 → 2025-08 and 2025-08 → 2026-02), ~6.3 GB. Covers full S&P 1500 universe in both windows. Validation gate is fully unblocked — no download step needed.
-- **Active plan**: phased execution doc at [`docs/active-plan.md`](docs/active-plan.md). Implementation work tracked on branch `validation-and-improvements`.
+- **Strategies barely break even.** Current canonical baseline: +0.06% return / 31.97% WR / 0.93 PF over 6 months on 5 symbols + S&P discovery (`data/fulltest_results/fulltest_20260510_210714.txt`). Post-rewrite + Phase 2 mean-reversion fix.
+- **Strategy rewrites merged to `main`** (`27063ed`, `e60dc84`, `b5fe036`, `94042bb`) plus the `validation-and-improvements` PR (mean_reversion upper-band exit + drop `run_in_executor` from strategy runner). Detail: [`docs/strategy-logic-fixes.md`](docs/strategy-logic-fixes.md).
+- **Data inventory**: `data/historical/` holds 1,447 unique symbols across two periods (2024-08 → 2025-08 and 2025-08 → 2026-02), ~6.3 GB. Covers full S&P 1500 universe in both windows.
+- **Active plan**: phased execution doc at [`docs/active-plan.md`](docs/active-plan.md).
 
 ## What's next (chop order)
 
@@ -19,14 +19,16 @@ In rough priority. Item codes (A1, B2, etc.) are the audit's IDs — see [`docs/
 
 | # | Item | Why now | Status |
 |---|------|---------|--------|
-| 1 | Strategy followups (momentum gate, mean-reversion regression, multi-timeframe, pairs) | Validation done 2026-05-10: total return -0.94% → +0.05%, but mean_reversion regressed (PF 0.61 → 0.35) and momentum still 0 entries. Per-strategy detail in `strategy-logic-fixes.md` | next up |
-| 2 | Investigate real fulltest bottleneck | C2b (batched INSERTs) tried + reverted: only 1.6% speedup, caused discovery non-determinism. INSERT was not the dominant cost. Find what actually is | not started |
-| 3 | Mark-to-market Sharpe (A1) | Sharpe always 0.00; can't compare strategies on risk-adjusted return | not started |
-| 4 | Cheap cleanup: rename "regime" → "trend regime" (B1) + delete `ml/` (B2) | Stop the docs from drifting; remove 966 LoC of hand-rolled GD that's disabled in config | not started |
-| 5 | Expand testing: 18-month window + S&P 1500 universe | Per user: tune on 6mo first, then expand. Data already on disk | not started |
-| 6 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission | not started |
+| 1 | **A1 Mark-to-market Sharpe + per-symbol P&L breakdown in fulltest report** | Sharpe always reads 0.00 so we can't compare strategies on risk; per-symbol breakdown would show whether mean_reversion's loss is structural or a bad-apple problem. Both make every future tuning decision sharper | next up |
+| 2 | Mean-reversion deep dive | PF 0.59 still net-loss (-$306). With #1 we'll know whether it's a structural issue or 1-2 bad symbols dragging it down | gated on #1 |
+| 3 | B2: delete `ml/` (966 LoC of disabled hand-rolled GD) | Cheap simplification; stops "what's this for?" friction. ~2 hours | not started |
+| 4 | Momentum redo | Current relaxed gate trades only on discovery-fed names where `discovery_momentum` already does it better. Either disable momentum or repurpose for the named-symbol universe only | gated on #1, #2 |
+| 5 | Expand testing: 18-month window + S&P 1500 universe | Per user: tune on 6mo first, then expand. Data already on disk | gated on strategies posting positive expectancy |
+| 6 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission | gated on strategies posting positive expectancy |
 
-**Validation result (2026-05-10)**: post-rewrite baseline is `data/fulltest_results/fulltest_20260510_105510.txt` — 5 named symbols + discovery, $100K, 6 months. Final equity $100,046 (+0.05%), 122 trades, 29.5% WR, 0.91 PF. Wall clock 37min. Compared to the pre-rewrite 480-symbol baseline (`fulltest_20260218_221730.txt`): not strictly apples-to-apples (different symbol set, much higher discovery scan rate), but rewrites moved net P&L from -$935 to +$46.
+**Per-strategy state (post-PR)**: `discovery_momentum` PF 1.63 (+$265) ✓, `multi_timeframe` PF 1.17 (+$295) ✓, `mean_reversion` PF 0.59 (-$306) ↑ from 0.35, `pairs` 1 trade -$196, `momentum` 0 entries (gate too strict; relaxation tried + reverted because it traded only on discovery names with worse logic than `discovery_momentum`).
+
+**Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup. `run_in_executor` removal saved 6% — that's the partial answer to "real fulltest bottleneck." Remaining ~94% wall clock is somewhere else (replay, Redis ops, OMS rejection path); not yet investigated.
 
 ## Deferred (don't work on these yet)
 
