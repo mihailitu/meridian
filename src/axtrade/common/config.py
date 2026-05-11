@@ -139,6 +139,11 @@ class OMSConfig:
     paper_mode: bool = True
     slippage_bps: int = 10  # basis points
     max_positions: int = 20
+    # When set, the PaperBroker tracks cash and rejects buys that would
+    # overdraw. None = unlimited cash (legacy behavior, used by live mode
+    # where the real broker enforces cash). Fulltest sets this from
+    # --capital so the simulation can't accumulate unbounded phantom buys.
+    initial_capital: Optional[Decimal] = None
     risk: RiskConfig = field(default_factory=RiskConfig)
     commission: CommissionConfig = field(default_factory=CommissionConfig)
 

@@ -8,8 +8,8 @@ _Last refreshed: 2026-05-10._
 ## Today
 
 - **Pipeline works end-to-end** in paper / fulltest mode: gateway → aggregator (with SMA, RSI, BB, ATR, regime) → strategies → OMS → DB. Web UI shows positions, P&L, alerts.
-- **Strategies barely break even.** Current canonical baseline: +0.06% return / 31.97% WR / 0.93 PF over 6 months on 5 symbols + S&P discovery (`data/fulltest_results/fulltest_20260510_210714.txt`). Post-rewrite + Phase 2 mean-reversion fix.
-- **Strategy rewrites merged to `main`** (`27063ed`, `e60dc84`, `b5fe036`, `94042bb`) plus the `validation-and-improvements` PR (mean_reversion upper-band exit + drop `run_in_executor` from strategy runner). Detail: [`docs/strategy-logic-fixes.md`](docs/strategy-logic-fixes.md).
+- **Strategies don't have working edge yet.** Real (non-phantom) baseline after PaperBroker cash check landed: +0.09% return / 23.5% WR / 1.30 PF over 6 months on 5 symbols + S&P discovery (`data/fulltest_results/fulltest_20260511_062659.txt`). Only `discovery_momentum` shows actual edge (6 trades, 66.7% WR, +$270). `multi_timeframe` lost all 10 trades it managed to take (its prior +$295 was phantom-fill noise). `mean_reversion`, `pairs`, `momentum` traded 0-1 times. Total 17 closed round-trips in 6 months — strategies open positions on Aug 1, can't generate exit signals, sit on capital. The "+$57 from 122 trades" earlier baselines were largely fiction.
+- **Strategy rewrites merged to `main`** (`27063ed`, `e60dc84`, `b5fe036`, `94042bb`) plus the `validation-and-improvements` PR (mean_reversion upper-band exit + drop `run_in_executor` + Phase 2.5 diagnostics + Phase 2.6 cash check). Detail: [`docs/strategy-logic-fixes.md`](docs/strategy-logic-fixes.md), [`docs/active-plan.md`](docs/active-plan.md).
 - **Data inventory**: `data/historical/` holds 1,447 unique symbols across two periods (2024-08 → 2025-08 and 2025-08 → 2026-02), ~6.3 GB. Covers full S&P 1500 universe in both windows.
 - **Active plan**: phased execution doc at [`docs/active-plan.md`](docs/active-plan.md).
 
@@ -19,19 +19,23 @@ In rough priority. Item codes (A1, B2, etc.) are the audit's IDs — see [`docs/
 
 | # | Item | Why now | Status |
 |---|------|---------|--------|
-| 1 | **The 12-day trading cliff** | Phase 2.5 surfaced: in every fulltest run, all 1,298 fills happen in the first 12 simulated days (Aug 1-12 2025). After that, strategies hit position-value caps and never trade again over the remaining 5.5 months. Every prior "6-month" result is really 12 days. Without this fix, no other tuning is meaningful | next up |
-| 2 | PaperBroker cash check | Related root cause: broker accepts buys without checking cash. Total open position book reaches $4.2M of phantom cost on $100K capital. Until this is fixed, mark-to-market equity is fantasy and we can't compute a real risk metric | next up |
-| 3 | Mean-reversion deep dive | PF 0.59 still net-loss. Per-symbol breakdown (Phase 2.5) shows it's structural (each closed trade is on a different symbol, no bad-apple) | gated on #1 |
-| 4 | B2: delete `ml/` (966 LoC of disabled hand-rolled GD) | Cheap simplification; stops "what's this for?" friction. ~2 hours, orthogonal | not started |
-| 5 | Momentum redo | Current relaxed gate trades only on discovery-fed names where `discovery_momentum` already does it better | gated on #1 |
-| 6 | Expand testing: 18-month window + S&P 1500 universe | Per user: tune on 6mo first, then expand. Data already on disk | gated on strategies actually trading the full period |
-| 7 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission | gated on strategies posting positive expectancy |
+| 1 | **Strategy edge work — `multi_timeframe` (0/10 WR) and `mean_reversion` (1 trade)** | Phase 2.6 surfaced ground truth: rule-based strategies don't have working edge. `multi_timeframe`'s prior +$295 was phantom-fill noise; with real cash constraint, all 10 of its real trades lost. `mean_reversion` barely fires at all. Fixing entry/exit on these is the only path to making the platform actually useful | next up |
+| 2 | Strategy turnover — strategies open positions on Aug 1 then sit on capital for 5.5 months | Related to #1. 8 positions stay open all 6 months, tying up ~$82K of $100K capital. Strategies need either time-based exits, smaller positions, or genuinely better signals to keep trading. Decide which before tuning | next up |
+| 3 | B2: delete `ml/` (966 LoC of disabled hand-rolled GD) | Cheap simplification; stops "what's this for?" friction. ~2 hours, orthogonal | not started |
+| 4 | Momentum redo | Current relaxed gate trades only on discovery-fed names where `discovery_momentum` already does it better | gated on #1 |
+| 5 | Expand testing: 18-month window + S&P 1500 universe | Per user: tune on 6mo first, then expand. Data already on disk | gated on strategies actually showing edge |
+| 6 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission | gated on strategies posting positive expectancy |
 
-**Per-strategy state (post-PR)**: `discovery_momentum` PF 1.63 (+$265) ✓, `multi_timeframe` PF 1.17 (+$295) ✓, `mean_reversion` PF 0.59 (-$306) ↑ from 0.35, `pairs` 1 trade -$196, `momentum` 0 entries (gate too strict; relaxation tried + reverted because it traded only on discovery names with worse logic than `discovery_momentum`). **Caveat**: all of these numbers come from the first 12 simulated days, not the full 6 months — see #1 above.
+**Per-strategy state (post-Phase 2.6, real fills only)**:
+- `discovery_momentum`: 6 trades, **66.7% WR**, +$270.60, avg winner $65 / avg loser $-2 ✓ shows real edge
+- `multi_timeframe`: 10 trades, **0% WR**, all 10 lost, -$150 — prior +$295 was phantom
+- `mean_reversion`: 1 trade, lost $26 — barely fires under cash constraint
+- `pairs`: 0 trades
+- `momentum`: 0 trades
 
-**Phase 2.5 deliverables** (PR `validation-and-improvements`): per-symbol P&L breakdown in every strategy's report section; portfolio Sharpe is now meaningful (0.91 in latest run); fills timestamped on simulated bar time so analytics see the simulated period; per-strategy Sharpe suppressed to N/A when sparse (the sparse-data symptom of the 12-day cliff).
+**Phase 2.5 + 2.6 deliverables** (PR `validation-and-improvements`): per-symbol P&L breakdown in every strategy's report section; portfolio Sharpe now meaningful when strategies trade enough; fills timestamped on simulated bar time (`PaperBroker.set_current_time`); PaperBroker cash check rejecting buys that would overdraw — surfaced the fact that the 1,298 "fills" of the prior baseline were 95% phantom and the 122-trade baseline was really 17 trades.
 
-**Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup. `run_in_executor` removal saved 6% — that's the partial answer to "real fulltest bottleneck." Remaining ~94% wall clock is somewhere else (replay, Redis ops, OMS rejection path); not yet investigated.
+**Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup. `run_in_executor` removal saved 6% — partial answer to "real fulltest bottleneck." Remaining ~94% wall clock is somewhere else (replay, Redis ops, OMS rejection path); not yet investigated. C5 (cash check) fixed.
 
 ## Deferred (don't work on these yet)
 

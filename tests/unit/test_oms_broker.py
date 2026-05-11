@@ -8,6 +8,7 @@ import pytest
 
 from axtrade.common import Bar
 from axtrade.oms import Fill, Order, OrderSide, OrderStatus, PaperBroker, Position
+from axtrade.oms.broker import InsufficientCashError
 
 
 class TestPaperBroker:
@@ -287,3 +288,85 @@ class TestPaperBroker:
 
         assert len(fills) == 1
         assert fills[0].commission == Decimal("1.00")
+
+
+class TestPaperBrokerCashCheck:
+    """Tests for the initial_cash cash-check path."""
+
+    async def test_cash_is_none_by_default(self) -> None:
+        """Legacy behavior: no cash limit when initial_cash isn't set."""
+        broker = PaperBroker(slippage_bps=0)
+        assert broker.cash is None
+
+    async def test_buy_within_cash_succeeds(self) -> None:
+        broker = PaperBroker(slippage_bps=0, initial_cash=Decimal("10000"))
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"))
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("50"),
+        )
+        await broker.submit_order(order)
+
+        # Cost = 50 * 100 = $5000, commission = $1 (minimum). Cash = 10000 - 5001 = 4999.
+        assert order.status == OrderStatus.FILLED
+        assert broker.cash == Decimal("4999.00")
+
+    async def test_buy_exceeding_cash_raises(self) -> None:
+        broker = PaperBroker(slippage_bps=0, initial_cash=Decimal("1000"))
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"))
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("50"),  # Would cost $5001 with commission
+        )
+        with pytest.raises(InsufficientCashError, match="Need"):
+            await broker.submit_order(order)
+
+        # Cash unchanged; order still in submitted state from caller's perspective.
+        assert broker.cash == Decimal("1000")
+
+    async def test_sell_credits_cash(self) -> None:
+        broker = PaperBroker(slippage_bps=0, initial_cash=Decimal("10000"))
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"))
+
+        # Buy then sell — buy debits, sell credits.
+        buy = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("50"),
+        )
+        await broker.submit_order(buy)
+        cash_after_buy = broker.cash
+
+        # Price went up
+        broker.update_price("AAPL", Decimal("120"))
+        sell = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.SELL,
+            quantity=Decimal("50"),
+        )
+        await broker.submit_order(sell)
+
+        # Sell proceeds: 50 * 120 = 6000, minus commission. Cash should jump.
+        assert broker.cash > cash_after_buy
+        # Round trip: buy -$5001 ($5000 + $1 min commission), sell +$5999
+        # ($6000 - $1 min commission). Net = -$5001 + $5999 = +$998.
+        # Final cash = $10000 + $998 = $10998.
+        assert broker.cash == Decimal("10998.00")
+
+    async def test_unmatched_sell_credits_without_check(self) -> None:
+        """Sells don't need cash; they always go through (paper short)."""
+        broker = PaperBroker(slippage_bps=0, initial_cash=Decimal("1000"))
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"))
+
+        sell = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.SELL,
+            quantity=Decimal("50"),
+        )
+        await broker.submit_order(sell)
+
+        # Cash went up by proceeds (no cash check on sells).
+        assert broker.cash > Decimal("1000")

@@ -34,6 +34,14 @@ def calculate_commission(
     return max(min(comm, max_comm), config.minimum)
 
 
+class InsufficientCashError(Exception):
+    """Raised by PaperBroker when a buy would overdraw the cash balance.
+
+    Caught upstream by OrderManager and translated to OrderRejectedError
+    so the strategy sees a clean rejection rather than a crash.
+    """
+
+
 class BrokerProtocol(ABC):
     """Abstract base class for order execution brokers."""
 
@@ -109,12 +117,16 @@ class PaperBroker(BrokerProtocol):
         self,
         slippage_bps: int = 10,
         commission_config: CommissionConfig | None = None,
+        initial_cash: Decimal | None = None,
     ):
         """Initialize paper broker.
 
         Args:
             slippage_bps: Slippage in basis points (1 bp = 0.01%)
             commission_config: Commission model configuration
+            initial_cash: Starting cash balance. When set, buys are rejected
+                if they would overdraw. None = unlimited (legacy live-mode
+                behavior; real brokers enforce cash on their side).
         """
         self.slippage_bps = slippage_bps
         self.commission_config = commission_config or CommissionConfig()
@@ -127,6 +139,12 @@ class PaperBroker(BrokerProtocol):
         # Simulated clock: when set, fills are timestamped with this rather than
         # wall-clock. Fulltest advances it per bar so analytics see sim time.
         self._current_time: Optional[datetime] = None
+        self._cash: Optional[Decimal] = initial_cash
+
+    @property
+    def cash(self) -> Optional[Decimal]:
+        """Current cash balance, or None if unlimited."""
+        return self._cash
 
     def set_current_time(self, ts: datetime) -> None:
         """Override the broker's notion of 'now' for fill timestamps.
@@ -177,6 +195,20 @@ class PaperBroker(BrokerProtocol):
             exec_price = price / slippage_mult
         exec_price = exec_price.quantize(Decimal("0.01"))
 
+        commission = calculate_commission(
+            order.quantity, exec_price, self.commission_config
+        )
+
+        # Cash check (paper-only, when initial_cash was set). On a buy: reject
+        # if cash can't cover cost + commission. On a sell: cash will go up.
+        if self._cash is not None and order.side == OrderSide.BUY:
+            required = exec_price * order.quantity + commission
+            if self._cash < required:
+                raise InsufficientCashError(
+                    f"Need ${required:.2f} for {order.quantity}@{exec_price} {order.symbol} "
+                    f"(commission ${commission:.2f}); have ${self._cash:.2f}"
+                )
+
         # Create fill (simulated clock if set, else wall-clock default).
         fill_kwargs: dict = {
             "order_id": order.id,
@@ -185,13 +217,19 @@ class PaperBroker(BrokerProtocol):
             "side": order.side,
             "quantity": order.quantity,
             "price": exec_price,
-            "commission": calculate_commission(
-                order.quantity, exec_price, self.commission_config
-            ),
+            "commission": commission,
         }
         if self._current_time is not None:
             fill_kwargs["filled_at"] = self._current_time
         fill = Fill(**fill_kwargs)
+
+        # Update cash. Buy reduces by cost+commission; sell adds proceeds net
+        # of commission. Only when cash tracking is enabled.
+        if self._cash is not None:
+            if order.side == OrderSide.BUY:
+                self._cash -= exec_price * order.quantity + commission
+            else:
+                self._cash += exec_price * order.quantity - commission
 
         # Update order status
         order.status = OrderStatus.FILLED

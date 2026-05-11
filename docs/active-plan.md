@@ -127,28 +127,41 @@ The Phase 2 exit criteria (WR ≥ 40%, PF > 1.0 on 2+ rule-based strategies) wer
 
 **Mean-reversion diagnostic from per-symbol breakdown**: each closed trade is on a different symbol (~all 51 trades on different names). Not a bad-apple problem. Structural — but tuning is gated on Phase 2.6 because the strategy effectively only ran for 12 days.
 
-### Phase 2.6 — Fix the 12-day trading cliff (next up)
+### Phase 2.6 — PaperBroker cash check — DONE 2026-05-11
 
-The whole 6-month "validation" was 12 days of trading. Two related root causes:
+**What landed**: `PaperBroker(initial_cash=...)` tracks cash; buys reject via `InsufficientCashError` (translated to `OrderRejectedError` upstream); sells credit cash. Fulltest orchestrator passes `--capital` through `config.oms.initial_capital` so the broker enforces reality. Live mode unchanged (default `initial_cash=None` = unlimited; live brokers enforce cash themselves).
 
-1. **PaperBroker has no cash check** (audit C5). It accepts buys at any size; over 12 days of replay, thousands of buys accumulate $4.2M of phantom open cost on $100K capital. Strategies' `at_capacity()` self-limit and the OMS `Position value > $50K` check block *additional* buys per-symbol, but unconnected positions across many symbols still accumulate freely until the per-strategy cap is hit on every symbol they care about.
-2. Once strategies are wedged against caps, they can only trade by closing existing positions — but exits depend on entry conditions inverting (RSI overbought, regime flip, upper band reached), which may simply not happen on the held names within the period.
+**Phase 2.6 fulltest result** (`fulltest_20260511_062659.txt`): 54 real fills, 17 closed round-trips, +$94 portfolio P&L. Per-strategy:
+| Strategy | Trades | WR | P&L |
+|---|---:|---:|---:|
+| `discovery_momentum` | 6 | 66.7% | +$270.60 |
+| `multi_timeframe` | 10 | 0% | -$150.47 |
+| `mean_reversion` | 1 | 0% | -$26.24 |
+| `pairs` | 0 | — | $0 |
+| `momentum` | 0 | — | $0 |
 
-**Fix direction**:
-- Add `cash_available` tracking to `PaperBroker.submit_order`. On a buy: reject if cash < price × qty + commission. On a sell: cash += proceeds.
-- Verify with a short fulltest that fills now span the full 6 months.
-- Re-run baseline. Every per-strategy number we have now is suspect; the new run becomes the real baseline.
+**The bigger reveal**: the 1,298 fills / 122 trades / "+$57 over 6 months" baseline from Phase 2.5 was 95% phantom. Real result is 54 fills / 17 trades on a SINGLE day (Aug 1). The original "12-day trading cliff" was really a 1-day burst — the prior 11 days of activity were also phantom fills that *would* have been rejected with proper cash accounting.
 
-**Exit**: fulltest fills span at least 80% of the simulated period (vs the current 7%).
+**The cash check did NOT make strategies trade across more days.** It revealed that:
+1. Real rule-based strategies open ~17 positions on Aug 1 and then sit. 8 of those positions stay open the whole 6 months, tying up ~$82K of $100K capital.
+2. The strategies don't have edge to close those positions (their exit conditions — RSI > 70, regime flip, upper band — don't trigger on the held names) and don't have cash to open new ones.
 
-### Phase 3 — Mean-reversion deep dive (gated on 2.5)
+So the 12-day cliff became a 1-day cliff, but the underlying issue (strategies don't trade enough to evaluate) got *worse*, because at least the phantom-fill version gave us 122 data points.
 
-With per-symbol breakdown in hand, decide between:
-- **Structural fix**: tighter entry (e.g. require RSI ≤ 30 instead of ≤ 35, or two-bar confirmation at lower band)
-- **Symbol filter**: blacklist the worst-performing names from the strategy
-- **Volatility gate**: skip RANGING_VOLATILE entries — those moved against us harder
+### Phase 3 — Strategy edge work (next up)
 
-This phase was Phase 4 in the original plan; promoting it now that we know the rest of the rule-based strategies are healthy.
+The honest read after Phase 2.6: only `discovery_momentum` shows real edge (66.7% WR, +$270 on 6 trades). The rule-based strategies need redesign, not tuning.
+
+Concrete sub-items, in rough priority:
+
+1. **`multi_timeframe` is broken** — 0/10 win rate on real trades is brutal. The pullback-to-trend logic isn't catching pullbacks; it's catching peaks that fall. Likely the entry needs confirmation (e.g., a green candle close after the pullback) before firing.
+2. **Strategy turnover** — figure out which lever to pull so the portfolio rotates instead of dying on Aug 1:
+   - (a) Smaller positions ($2K vs $5K → ~50 concurrent slots) — more trades but harder to see edge per trade
+   - (b) Time-based forced exit (close anything held > N bars) — forces rotation but masks bad entries
+   - (c) Just better strategies that exit naturally — preferred but the slowest path
+3. **`mean_reversion` deep dive** — barely fires under cash constraint. RANGING-regime + lower-band + RSI < 35 is too narrow; needs either a wider entry filter or a different signal entirely.
+
+**Exit for Phase 3**: at least 2 of the 4 rule-based strategies post positive expectancy (PF > 1.0) with real cash-checked fills, AND trade across at least 30 of 125 trading days.
 
 ### Phase 4 — Cheap cleanup (B1, B2)
 

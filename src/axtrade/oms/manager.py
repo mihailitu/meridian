@@ -11,7 +11,7 @@ from axtrade.common.config import Config
 from axtrade.common.db import DatabasePool
 from axtrade.common.logging import get_logger
 
-from .broker import BrokerProtocol, IBKRBroker, PaperBroker
+from .broker import BrokerProtocol, IBKRBroker, InsufficientCashError, PaperBroker
 from .repository import OrderRepository, PositionRepository
 from .risk import RiskCheckResult, RiskLimits, RiskManager
 from .types import Fill, Order, OrderSide, OrderStatus, Position
@@ -82,6 +82,7 @@ class OrderManager:
             self._broker = PaperBroker(
                 slippage_bps=self.config.oms.slippage_bps,
                 commission_config=self.config.oms.commission,
+                initial_cash=self.config.oms.initial_capital,
             )
         else:
             self._broker = IBKRBroker(self.config.gateway.ibkr)
@@ -215,6 +216,12 @@ class OrderManager:
                 order_id=str(order.id),
                 broker_order_id=broker_order_id,
             )
+        except InsufficientCashError as e:
+            # Paper-mode cash check tripped — clean rejection, not a crash.
+            self._risk_manager.order_completed()
+            order.status = OrderStatus.REJECTED
+            await self._order_repo.update(order)
+            raise OrderRejectedError(str(e)) from e
         except Exception as e:
             self._risk_manager.order_completed()
             order.status = OrderStatus.REJECTED

@@ -207,6 +207,13 @@ class FullBacktestOrchestrator:
         # Force paper mode
         config.oms.paper_mode = True
 
+        # Tell the PaperBroker how much cash we actually have so it rejects
+        # buys that would overdraw. Without this, the broker accepts any
+        # quantity of buys and the open-position book balloons (see audit C5);
+        # strategies hit per-position caps in the first ~12 simulated days
+        # and stop trading for the rest of the period.
+        config.oms.initial_capital = Decimal(str(self._bt_config.initial_capital))
+
         # Set gateway symbols from backtest config
         config.gateway.symbols = [
             SymbolConfig(symbol=s, base_price=100.0)
