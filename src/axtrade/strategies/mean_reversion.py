@@ -42,11 +42,17 @@ class MeanReversionStrategy(BaseStrategy):
         self.stop_loss_pct = config.get("stop_loss_pct", 0.015)
         self.position_size = Decimal(str(config.get("position_size", 100)))
 
+        syms = config.get("allowed_symbols")
+        self.allowed_symbols: Optional[set[str]] = set(syms) if syms else None
+
     @property
     def name(self) -> str:
         return "MeanReversion"
 
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
+        if self.allowed_symbols is not None and data.symbol not in self.allowed_symbols:
+            return None
+
         if data.bb_upper is None or data.bb_lower is None or data.bb_middle is None:
             return None
 

@@ -45,6 +45,9 @@ class MultiTimeframeStrategy(BaseStrategy):
         self.take_profit_pct = config.get("take_profit_pct", 0.03)
         self.position_size = Decimal(str(config.get("position_size", 100)))
 
+        syms = config.get("allowed_symbols")
+        self.allowed_symbols: Optional[set[str]] = set(syms) if syms else None
+
         # Higher timeframe data storage
         self._trend_closes: dict[str, list[float]] = {}
         self._current_htf_candle: dict[str, dict] = {}
@@ -100,6 +103,9 @@ class MultiTimeframeStrategy(BaseStrategy):
         return "up" if current > sma else "down"
 
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
+        if self.allowed_symbols is not None and data.symbol not in self.allowed_symbols:
+            return None
+
         symbol = data.symbol
         price = float(data.close)
         bar_time = data.bar.timestamp

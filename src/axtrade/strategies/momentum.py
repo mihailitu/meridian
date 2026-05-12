@@ -34,6 +34,9 @@ class MomentumBreakout(BaseStrategy):
         self.stop_loss_pct = config.get("stop_loss_pct", 0.03)
         self.position_size = Decimal(str(config.get("position_size", 100)))
 
+        syms = config.get("allowed_symbols")
+        self.allowed_symbols: Optional[set[str]] = set(syms) if syms else None
+
         # Previous RSI per symbol so we can detect a level cross.
         self._prev_rsi: dict[str, float] = {}
 
@@ -42,6 +45,9 @@ class MomentumBreakout(BaseStrategy):
         return "MomentumBreakout"
 
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
+        if self.allowed_symbols is not None and data.symbol not in self.allowed_symbols:
+            return None
+
         if data.sma_20 is None or data.rsi_14 is None:
             return None
 

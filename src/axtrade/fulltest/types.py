@@ -26,6 +26,7 @@ class FullBacktestConfig:
     output_dir: str = "data/fulltest_results"
     report_format: str = "text"
     skip_download: bool = True
+    strategy_overrides: dict[str, dict] = field(default_factory=dict)
 
 
 @dataclass

@@ -183,20 +183,37 @@ class FullBacktestOrchestrator:
         # Per-strategy cap so signals self-limit instead of being rejected at
         # the OMS. discovery_momentum already defaults to 10 internally.
         per_strategy_max_positions = 10
+        # These strategies were designed for the static gateway universe but
+        # don't gate by symbol on their own, so they end up trading whatever
+        # discovery pushes onto the bar stream. Inject `allowed_symbols` so
+        # they stay within the gateway 5. discovery_momentum gates by score
+        # and pairs is symbol-bound by config, so neither needs this.
+        narrowed_types = {"multi_timeframe", "mean_reversion", "momentum"}
+        gateway_symbol_list = list(self._bt_config.symbols)
+        overrides = self._bt_config.strategy_overrides
         config.strategies.enabled = []
         skip_strategies = {"ml_prediction"}
         for stype, sclass in STRATEGY_TYPES.items():
             if stype in skip_strategies:
                 continue
+            strat_cfg: dict = {
+                "position_size": safe_position_size,
+                "max_positions": per_strategy_max_positions,
+            }
+            if stype in narrowed_types:
+                strat_cfg["allowed_symbols"] = gateway_symbol_list
+            strat_cfg.update(overrides.get(stype, {}))
+            logger.info(
+                "Strategy config built",
+                strategy_type=stype,
+                config=strat_cfg,
+            )
             config.strategies.enabled.append(
                 StrategyInstanceConfig(
                     type=stype,
                     id=f"{stype}-bt",
                     enabled=True,
-                    config={
-                        "position_size": safe_position_size,
-                        "max_positions": per_strategy_max_positions,
-                    },
+                    config=strat_cfg,
                 )
             )
 
