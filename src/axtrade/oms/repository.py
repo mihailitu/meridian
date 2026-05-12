@@ -540,11 +540,13 @@ class PositionRepository:
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (strategy_id, symbol)
             DO UPDATE SET
+                side = EXCLUDED.side,
                 quantity = EXCLUDED.quantity,
                 avg_entry_price = EXCLUDED.avg_entry_price,
                 current_price = EXCLUDED.current_price,
                 unrealized_pnl = EXCLUDED.unrealized_pnl,
                 realized_pnl = EXCLUDED.realized_pnl,
+                opened_at = EXCLUDED.opened_at,
                 closed_at = EXCLUDED.closed_at,
                 updated_at = EXCLUDED.updated_at
         """

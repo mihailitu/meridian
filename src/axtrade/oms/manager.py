@@ -294,11 +294,20 @@ class OrderManager:
         if not self._position_repo or not self._risk_manager:
             return
 
-        position = await self._position_repo.get(fill.strategy_id, fill.symbol)
+        existing = await self._position_repo.get(fill.strategy_id, fill.symbol)
         pnl: Optional[Decimal] = None
 
-        if position is None:
-            # New position
+        # A closed row (quantity==0 or closed_at set) should be treated as no
+        # open position — the next fill starts a fresh position era. Without
+        # this, re-entries pyramid onto the stale row and closed_at never
+        # clears, leaving the strategy convinced it has no position.
+        is_open = existing is not None and existing.closed_at is None and existing.quantity > 0
+
+        if not is_open:
+            # New position (or re-opening after a prior close). Carry forward
+            # realized_pnl so the row reflects cumulative P&L for this
+            # strategy+symbol; the fills table remains source of truth.
+            prior_realized = existing.realized_pnl if existing is not None else Decimal("0")
             position = Position(
                 strategy_id=fill.strategy_id,
                 symbol=fill.symbol,
@@ -307,8 +316,12 @@ class OrderManager:
                 avg_entry_price=fill.price,
                 current_price=fill.price,
                 unrealized_pnl=Decimal("0"),
+                realized_pnl=prior_realized,
+                opened_at=fill.filled_at,
+                closed_at=None,
             )
         else:
+            position = existing  # type: ignore[assignment]
             if fill.side == OrderSide.BUY:
                 if position.side == "long":
                     # Adding to long position - calculate new average

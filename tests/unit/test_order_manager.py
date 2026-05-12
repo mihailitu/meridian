@@ -519,6 +519,90 @@ class TestOrderManager:
         assert call_args.quantity == Decimal("0")
         assert call_args.realized_pnl == Decimal("1000")
 
+    async def test_update_position_reopen_after_close_same_side(
+        self, manager: OrderManager
+    ) -> None:
+        """Re-entry after a full close must produce a fresh long position,
+        not pyramid onto the closed row. Regression for the ghost-position
+        bug where closed_at never cleared and avg_entry_price/quantity got
+        merged with the prior (closed) row.
+        """
+        closed_position = Position(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal("0"),
+            avg_entry_price=Decimal("180.00"),
+            realized_pnl=Decimal("1000"),
+            opened_at=datetime(2025, 8, 1, 10, 0, tzinfo=timezone.utc),
+            closed_at=datetime(2025, 8, 1, 10, 40, tzinfo=timezone.utc),
+        )
+
+        reopen_fill = Fill(
+            order_id=uuid4(),
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("50"),
+            price=Decimal("200.00"),
+            filled_at=datetime(2025, 8, 1, 11, 6, tzinfo=timezone.utc),
+        )
+
+        mock_position_repo = AsyncMock()
+        mock_position_repo.get.return_value = closed_position
+        mock_risk_manager = MagicMock()
+        manager._position_repo = mock_position_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._update_position(reopen_fill)
+
+        upserted = mock_position_repo.upsert.call_args[0][0]
+        assert upserted.side == "long"
+        assert upserted.quantity == Decimal("50"), "must not pyramid onto closed row"
+        assert upserted.avg_entry_price == Decimal("200.00"), "must use the new fill price, not blended"
+        assert upserted.closed_at is None, "closed_at must clear on re-open"
+        assert upserted.opened_at == reopen_fill.filled_at, "opened_at must reset to the new fill time"
+        assert upserted.realized_pnl == Decimal("1000"), "prior realized P&L preserved as cumulative"
+
+    async def test_update_position_reopen_after_close_opposite_side(
+        self, manager: OrderManager
+    ) -> None:
+        """Re-entry after close can flip side; the new position must reflect
+        the fill's side, not the prior closed side."""
+        closed_long = Position(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal("0"),
+            avg_entry_price=Decimal("180.00"),
+            realized_pnl=Decimal("500"),
+            closed_at=datetime(2025, 8, 1, 10, 40, tzinfo=timezone.utc),
+        )
+
+        short_entry = Fill(
+            order_id=uuid4(),
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("30"),
+            price=Decimal("190.00"),
+            filled_at=datetime(2025, 8, 1, 11, 0, tzinfo=timezone.utc),
+        )
+
+        mock_position_repo = AsyncMock()
+        mock_position_repo.get.return_value = closed_long
+        mock_risk_manager = MagicMock()
+        manager._position_repo = mock_position_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._update_position(short_entry)
+
+        upserted = mock_position_repo.upsert.call_args[0][0]
+        assert upserted.side == "short"
+        assert upserted.quantity == Decimal("30")
+        assert upserted.avg_entry_price == Decimal("190.00")
+        assert upserted.closed_at is None
+
     async def test_fill_callback_invoked(
         self, manager: OrderManager, sample_order: Order, sample_fill: Fill
     ) -> None:
