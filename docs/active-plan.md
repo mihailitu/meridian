@@ -148,20 +148,180 @@ The Phase 2 exit criteria (WR ≥ 40%, PF > 1.0 on 2+ rule-based strategies) wer
 
 So the 12-day cliff became a 1-day cliff, but the underlying issue (strategies don't trade enough to evaluate) got *worse*, because at least the phantom-fill version gave us 122 data points.
 
-### Phase 3 — Strategy edge work (next up)
+### Phase 2.7 — OMS position re-entry fix — DONE 2026-05-12 (commit `08c9224`)
 
-The honest read after Phase 2.6: only `discovery_momentum` shows real edge (66.7% WR, +$270 on 6 trades). The rule-based strategies need redesign, not tuning.
+Investigating Phase 2.6's "multi_timeframe 0/10 WR" finding surfaced an OMS
+bug, not a strategy logic problem. `_update_position` (`oms/manager.py:288`)
+fetched the position row by `(strategy_id, symbol)` regardless of state.
+When a strategy closed a position and re-entered the same symbol:
 
-Concrete sub-items, in rough priority:
+1. New fill landed on the closed row's "Adding to long" branch.
+2. `closed_at` was never cleared on the upsert.
+3. `BaseStrategy.update_position` popped the position from cache (it
+   checked `closed_at is not None`), so the strategy thought it had no
+   position.
+4. Next bar: strategy re-entered, the OMS pyramided onto the stale row
+   again. Result: invisible "ghost" positions — `get_open_positions`
+   filtered them out (`closed_at IS NULL AND quantity > 0`), but the
+   PaperBroker still deducted cash for them.
 
-1. **`multi_timeframe` is broken** — 0/10 win rate on real trades is brutal. The pullback-to-trend logic isn't catching pullbacks; it's catching peaks that fall. Likely the entry needs confirmation (e.g., a green candle close after the pullback) before firing.
-2. **Strategy turnover** — figure out which lever to pull so the portfolio rotates instead of dying on Aug 1:
-   - (a) Smaller positions ($2K vs $5K → ~50 concurrent slots) — more trades but harder to see edge per trade
-   - (b) Time-based forced exit (close anything held > N bars) — forces rotation but masks bad entries
-   - (c) Just better strategies that exit naturally — preferred but the slowest path
-3. **`mean_reversion` deep dive** — barely fires under cash constraint. RANGING-regime + lower-band + RSI < 35 is too narrow; needs either a wider entry filter or a different signal entirely.
+AMZN example: 5 buys at 11:06–11:12 after a sell at 10:40 accumulated 205
+ghost shares (~$44K). The "0/10 WR" multi_timeframe stat was the first
+closed trade per symbol being recorded; everything after that was the
+hidden pyramid.
 
-**Exit for Phase 3**: at least 2 of the 4 rule-based strategies post positive expectancy (PF > 1.0) with real cash-checked fills, AND trade across at least 30 of 125 trading days.
+**Fix**:
+- `_update_position` treats a closed row (`closed_at is not None` OR
+  `quantity == 0`) as a fresh new position era. Resets `side`,
+  `quantity`, `avg_entry_price`, `opened_at`, `closed_at`. Carries
+  `realized_pnl` forward as cumulative per-strategy-symbol P&L. Fills
+  table remains source of truth.
+- `PositionRepository.upsert` SQL now includes `side` and `opened_at`
+  in `DO UPDATE SET` so re-opens and side flips persist correctly at
+  the DB level. The flip case was previously silently failing.
+
+**Regression tests**: `test_update_position_reopen_after_close_same_side`
+and `test_update_position_reopen_after_close_opposite_side` in
+`tests/unit/test_order_manager.py`. All 30 OrderManager tests pass.
+
+**Effect on the Phase 2.6 numbers**: the prior 6-month run's 17-trade /
++$94 result was correct *for the trades it counted*; it just missed all
+the pyramided fills. A post-fix 6-month run on the same period produced
+1,110 trades / -$7,258 — exposing the strategies' real P&L, which
+Phase 2.8 then validated against IS/OOS.
+
+### Phase 2.8 — Universe narrowing + IS/OOS validation — DONE 2026-05-12 (commit `8ed17f1`)
+
+Two changes shipped together. Plumbing-first scope; no automated parameter
+grid yet.
+
+**B — Universe narrowing**: `multi_timeframe`, `mean_reversion`, and
+`momentum` had no symbol filter and were trading the 50+ symbols pushed
+by the discovery feed. They were designed for the static gateway
+universe; `discovery_momentum` and `pairs` self-restrict.
+
+- Added optional `allowed_symbols` config to all three strategies using
+  the same pattern `PairsStrategy` uses. Empty / None disables the
+  filter. The filter precedes HTF aggregation in `multi_timeframe` and
+  `_prev_rsi` writes in `momentum` so out-of-universe state never
+  accumulates.
+- `FullBacktestOrchestrator._build_isolated_config` injects
+  `allowed_symbols = list(self._bt_config.symbols)` for the three
+  narrowed types and logs the per-strategy merged config at startup.
+
+**D — IS/OOS validation plumbing**:
+
+- `FullBacktestConfig.strategy_overrides: dict[str, dict]` for per-type
+  config patches. Orchestrator applies them after defaults and after
+  `allowed_symbols`, so overrides always win.
+- `--strategy-overrides PATH` on `run` and `oos` loads a YAML mapping
+  `{strategy_type: {key: value, ...}}`. Unknown keys are ignored by
+  the strategies' `config.get(...)`.
+- New `fulltest oos` subcommand runs `FullBacktestOrchestrator` twice
+  (IS then OOS) and emits a side-by-side comparison. DB and Redis
+  isolation between the two runs is handled by the existing
+  `BacktestInfrastructure.setup()` (truncate + flush on every call) —
+  no new DB names needed.
+- `src/axtrade/fulltest/comparison.py` (NEW) builds
+  `StrategyComparison` + `OOSComparison` from two `FullBacktestResult`s.
+  Heuristic verdict: `is_unprofitable` (IS PF < 1 or PnL ≤ 0) →
+  `broken` (IS profitable, OOS PF < 1 or PnL < 0) → `degraded` (both
+  profitable but OOS PF < 0.75 × IS PF or OOS Sharpe < 0.50 × IS
+  Sharpe) → `holds_up`. Text + JSON formatters. Verdicts are
+  quick-scan only; underlying metrics are source of truth.
+
+**Tests added** (29 total, all passing):
+- `tests/unit/test_strategy_universe.py` — `allowed_symbols` filter on
+  each of the 3 strategies, including blocked-symbol HTF/RSI state
+  preservation.
+- `tests/unit/test_orchestrator_overrides.py` — orchestrator merges
+  overrides correctly, injects `allowed_symbols` for the right
+  strategy types, leaves discovery_momentum and pairs alone.
+- `tests/unit/test_oos_comparison.py` — verdict matrix + formatter
+  round-trips.
+
+**Validation runs** (in `data/fulltest_results/`):
+- `oos_comparison_20260512_203144.txt` — no-discovery smoke run.
+  Confirmed plumbing: narrowed strategies trade only AAPL/MSFT/GOOGL/
+  AMZN/NVDA. All 3 strategies show IS_UNPROFITABLE.
+- `oos_comparison_20260512_211515.txt` — full discovery-on run, the
+  new regression baseline.
+
+**Baseline results (post-Phase 2.8, discovery on):**
+
+| Strategy | IS Trades | IS PF | IS P&L | OOS PF | OOS P&L | Verdict |
+|----------|----------:|------:|-------:|-------:|--------:|---------|
+| discovery_momentum | 69 | 0.04 | -$148 | 0.56 | -$1,975 | IS_UNPROFITABLE |
+| mean_reversion | 78 | **1.29** | **+$714** | 0.27 | -$606 | **BROKEN** |
+| multi_timeframe | 613 | 0.24 | -$10,773 | 0.28 | -$5,159 | IS_UNPROFITABLE |
+| pairs | 7 | 0.00 | -$253 | 0.01 | -$235 | IS_UNPROFITABLE |
+
+### Phase 3 — Strategy direction (current decision point)
+
+The post-2.8 verdict: **none of the four enabled strategies has
+demonstrated a real edge.** Three fail IS; the one that passes IS
+(mean_reversion, PF 1.29 +$714 over 12 months) collapses OOS to PF 0.27
+— textbook in-sample overfit. The earlier single-period testing was
+hiding this because we were tuning and testing on the same 6-month
+window.
+
+This is not a tuning problem. PF 0.17 → 0.20 with a parameter tweak
+doesn't move the needle. The signals don't have edge. Three branches,
+listed in the order to consider them:
+
+**Branch A — Diagnose discovery_momentum's IS/OOS asymmetry** (1–2
+sessions). IS PF 0.04 on 69 trades vs OOS PF 0.56 on 485 trades is too
+lopsided to be sample variance. Three possible causes:
+
+1. **Bug in scoring** on the 2024-08→2025-08 window. The `DiscoveryService`
+   scoring or its inputs may behave differently — e.g., volatility-based
+   screeners reading stale data, regime detection trip-points different
+   between periods.
+2. **Discovery feed composition** drifts sharply. IS year fed different
+   symbols than OOS half. If the IS-fed symbols were systematically
+   worse trades (low-cap noise rather than momentum names), the IS PF
+   reflects the universe, not the strategy.
+3. **Real but unstable edge.** The strategy works in some market
+   regimes and not others. Possible but the asymmetry feels too large
+   to be pure regime.
+
+Action: take the `oos_comparison_20260512_211515.txt` per-symbol
+breakdown, look at what IS got fed vs OOS, sanity-check 5 individual
+IS trades that lost big. ~1 day of work. If a bug surfaces, the OOS PF
+0.56 might be the real number and discovery_momentum becomes a
+candidate worth tuning. If no bug, branch A closes and we move to B
+or C.
+
+**Branch B — Replace with a research-backed signal** (1–2 weeks). The
+B/D plumbing is now ready: any new strategy plugged into the same
+`oos` flow gets IS+OOS evaluation immediately. Candidate signals (all
+have published evidence on US equities, but most have been arbitraged
+down):
+
+- **Overnight reversal** — buy at close, sell at open. Best-documented
+  retail-accessible edge; has weakened since 2010s.
+- **End-of-day momentum / opening drive** — time-of-day patterns with
+  modest published edge.
+- **VWAP reversion** intraday — execution-sensitive; harder to test
+  honestly without realistic fill modeling.
+- **Cross-sectional 12-1 momentum** — works on monthly rebal, requires
+  restructuring our 1m-bar pipeline.
+
+Pick one, implement, run through `fulltest oos`. If IS+OOS both clear
+PF 1.2+, keep iterating. If not, the answer is "this signal doesn't
+work either" and the project's strategy-development experiment is
+honest evidence that retail edges on 1-min S&P bars are scarce.
+
+**Branch C — Reframe project as a platform, not a strategy lab**.
+Pipeline works, OOS validation works, OMS bugs are now caught. If the
+goal is "working trading infrastructure" rather than "profitable bot",
+the next work is A3 (IBKR `add_symbols`) + C2 (paper integration test)
++ alert channels + multi-market support. This is the legitimate
+choice if branches A and B both fail. The strategies become example
+implementations rather than the project's purpose.
+
+**Exit for Phase 3**: a user decision on A/B/C. Each branch has its
+own follow-on phases.
 
 ### Phase 4 — Cheap cleanup (B1, B2)
 

@@ -1,6 +1,6 @@
 # Strategy Logic Fixes
 
-> Working doc for the strategy-logic rewrite (now on `main`) and the followups it surfaced.
+> Working doc for the strategy-logic rewrite (now on `main`), the OMS re-entry bug fix, and the OOS validation that followed.
 > Broader architectural issues live in [`AUDIT-2026-05-02.md`](AUDIT-2026-05-02.md). Project-level priorities live in [`../ROADMAP.md`](../ROADMAP.md). Phased execution plan lives in [`active-plan.md`](active-plan.md). This file stays scoped to strategy logic.
 
 ## Context
@@ -9,14 +9,36 @@ Fulltest baseline (2025-08-01 to 2026-02-01, 5 symbols + discovery, $100K) retur
 
 Root causes from the audit: contradictory entry logic, unused regime/volatility data from indicators, tight stops, and a 93% order rejection rate from risk limits.
 
-## Followup tuning items
+## Post-OMS-fix + OOS findings (2026-05-12)
 
-Surfaced by the partial fulltest run + the post-rewrite validation.
+**Stop using the Phase 2 / Phase 2.6 per-strategy numbers below as ground truth.** The OMS re-entry bug (Phase 2.7, commit `08c9224`) hid the real per-strategy P&L behind ghost positions for any strategy that closed and re-entered the same symbol. With the bug fixed and proper IS/OOS validation (Phase 2.8, commit `8ed17f1`) on the full historical window, every strategy's real story changed:
 
-1. **Mean reversion exit** — APPLIED + KEPT 2026-05-10. Reverted middle-band exit back to upper-band exit. Validation had shown avg winner shrank $41 → $16 with middle-band while avg loser only shrank $-45 → $-17, so PF dropped from 0.61 → 0.35. **Phase 2 result with upper-band restored**: PF 0.35 → 0.59, avg winner $16 → $35, WR 27.5% → 33.3%. Still net-loss but trajectory is right.
-2. **Momentum entry gate** — TRIED + REVERTED 2026-05-10. Lowered `trend_strength_min` 30 → 20 and widened the RSI cross window from 1 → 5 bars. This enabled trades (0 → 6 over 6 months) but they net-lost $135. Strategy was trading exclusively on discovery-fed names (TAP, TRGP, CL, CRL, IDXX, FOX), competing with `discovery_momentum` (52.9% WR, +$264) on the same opportunities with worse logic. Tightening the stop from 3% → 2% changed nothing — losses don't exit via stop, they exit via regime-flip / RSI. Conclusion: momentum needs deeper rework (exit asymmetry — winners exit early on regime/RSI while losers run wider). Reverted to validation defaults; revisit once other phases land.
-3. **Multi-timeframe re-entry cooldown** — DEFERRED. Validation showed 53 trades over 6 months (down from the 692-fills partial-run snapshot once `at_capacity()` lands), so the original whipsaw concern is no longer urgent. Re-evaluate if a future run shows excess fills.
-4. **Pairs follow-through** — DEFERRED. Validation: 1 trade, 0 wins. Strategy is structurally low-frequency. Don't tune further until other strategies post positive expectancy.
+**Baseline (`data/fulltest_results/oos_comparison_20260512_211515.txt`)** — IS year 2024-08→2025-08 vs OOS half-year 2025-08→2026-02, AAPL/MSFT/GOOGL/AMZN/NVDA + discovery on, `multi_timeframe` / `mean_reversion` / `momentum` narrowed to the 5 gateway symbols:
+
+| Strategy | IS Trades | IS WR | IS PF | IS P&L | OOS Trades | OOS WR | OOS PF | OOS P&L | Verdict |
+|----------|----------:|------:|------:|-------:|-----------:|-------:|-------:|--------:|---------|
+| `discovery_momentum` | 69 | 4.3% | 0.04 | -$148 | 485 | 33.4% | 0.56 | -$1,975 | IS_UNPROFITABLE — but IS sample asymmetric, worth a diagnosis pass |
+| `mean_reversion` | 78 | 52.6% | **1.29** | **+$714** | 29 | 27.6% | 0.27 | -$606 | **BROKEN** — IS edge does not generalize |
+| `multi_timeframe` | 613 | 14.5% | 0.24 | -$10,773 | 294 | 13.9% | 0.28 | -$5,159 | IS_UNPROFITABLE — signal has no edge |
+| `pairs` | 7 | 0% | 0.00 | -$253 | 3 | 33.3% | 0.01 | -$235 | IS_UNPROFITABLE — too low-frequency |
+
+**Honest read:**
+
+1. **`multi_timeframe`** lost ~$11K IS on 613 trades, 14% WR. The pullback-to-trend signal is not catching pullbacks; it's catching peaks that fall. A 2% stop / 3% take-profit on a 14% WR is mathematically a losing strategy regardless of tuning. **Not a tuning problem — a signal problem.**
+2. **`mean_reversion`** is the only strategy that passed IS (PF 1.29, +$714 on 78 trades). The OOS collapse to PF 0.27 / -$606 is the canonical in-sample overfit signature. Worth understanding what made IS profitable (regime mix? specific symbols? specific 2024 events?) before concluding the strategy is dead — but the OOS evidence strongly suggests the IS edge was period-specific.
+3. **`discovery_momentum`**'s asymmetry is the most interesting finding: IS PF 0.04 (catastrophic, 69 trades) but OOS PF 0.56 (485 trades). Too lopsided to be sample variance. Three likely causes: (a) scoring bug specific to the 2024-08→2025-08 window, (b) discovery feed composition drifts sharply between periods so the strategy was trading systematically worse symbols IS, (c) real but regime-dependent edge. Priority diagnostic — this is the only strategy that ever showed positive expectancy in any test.
+4. **`pairs`** is structurally low-frequency. 7 IS trades over 12 months on AAPL/MSFT can't meaningfully be evaluated. If kept, retune to a wider pair set or accept it as a low-priority experiment.
+
+**Conclusion**: parameter tuning won't lift any of these from PF 0.17–0.30 to PF >1.0. The signals don't have edge. Three paths forward are laid out in [`active-plan.md`](active-plan.md) Phase 3 (diagnose discovery_momentum / replace with research-backed signal / reframe as platform project).
+
+## Followup tuning items — SUPERSEDED by Post-OMS-fix findings above
+
+The four items below were generated before the OMS bug was found and before OOS validation existed. They are kept as historical record; **don't act on them**. Each item's conclusion was based on bug-masked per-strategy numbers (see Phase 2.7 in `active-plan.md` for the AMZN ghost-pyramid example that made the 0/10 multi_timeframe WR misleading).
+
+1. ~~**Mean reversion exit** — APPLIED + KEPT 2026-05-10~~. Outcome is now subsumed by the IS/OOS verdict above: PF 1.29 IS → 0.27 OOS confirms the strategy doesn't generalize regardless of the exit choice.
+2. ~~**Momentum entry gate** — TRIED + REVERTED 2026-05-10~~. With universe narrowing live, momentum no longer competes with `discovery_momentum` on the discovered universe. Whether to re-enable momentum is gated on Phase 3 direction.
+3. ~~**Multi-timeframe re-entry cooldown** — DEFERRED~~. 613 IS / 294 OOS trades suggest re-entry isn't the bottleneck; signal quality is.
+4. ~~**Pairs follow-through** — DEFERRED~~. Still deferred and no longer in the top-of-mind list.
 
 ## Status — 2026-05-10
 

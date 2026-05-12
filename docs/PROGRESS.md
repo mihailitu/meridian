@@ -182,6 +182,23 @@
   - AlertBadge in header showing unacknowledged count
   - Custom hooks for API polling (useOrders, useFills, useAlerts, useHealth)
 
+### Phase 2.7 — OMS position re-entry bug fix (2026-05-12, `08c9224`)
+- Found while investigating multi_timeframe's "0/10 WR" from Phase 2.6: `_update_position` fetched the position row by `(strategy_id, symbol)` regardless of state, so a fill after a full close pyramided onto the stale row and `closed_at` never cleared.
+- Strategy cache popped the position (its `is_open` check), so it kept re-entering — creating "ghost" positions invisible to `get_open_positions` but consuming real PaperBroker cash.
+- Patched `_update_position` to treat closed rows as fresh new position eras (reset side/quantity/avg_entry_price/opened_at/closed_at; carry realized_pnl forward).
+- Patched `PositionRepository.upsert` SQL: `side` and `opened_at` now in `DO UPDATE SET` so re-opens and side flips persist to the DB (the flip case was silently failing).
+- Two regression tests in `tests/unit/test_order_manager.py` (same-side and opposite-side re-entry).
+- A post-fix 6-month fulltest on the same period jumped from 17 trades / +$94 to 1,110 trades / -$7,258 — exposing the real per-strategy P&L.
+
+### Phase 2.8 — Universe narrowing + IS/OOS validation plumbing (2026-05-12, `8ed17f1`)
+- **B: Universe narrowing.** Added opt-in `allowed_symbols` filter (set-membership at top of `on_bar`) to `multi_timeframe`, `mean_reversion`, `momentum`. Same pattern PairsStrategy already used. Filter precedes HTF aggregation and `_prev_rsi` writes so out-of-universe state never accumulates.
+- Orchestrator's `_build_isolated_config` injects `allowed_symbols = gateway symbols` for the narrowed types and logs the per-strategy merged config at startup.
+- **D: IS/OOS validation.** Added `FullBacktestConfig.strategy_overrides` for per-type config patches. `--strategy-overrides PATH` on `run` and `oos` loads YAML.
+- New `fulltest oos` subcommand: runs `FullBacktestOrchestrator` twice (IS then OOS) and emits a side-by-side comparison report. DB and Redis are auto-isolated by the existing `BacktestInfrastructure.setup()` truncate+flush.
+- `src/axtrade/fulltest/comparison.py` (new): builds `StrategyComparison` + `OOSComparison`, heuristic verdict (`is_unprofitable` / `broken` / `degraded` / `holds_up`), text + JSON report formatters.
+- 29 new unit tests: `test_strategy_universe.py`, `test_orchestrator_overrides.py`, `test_oos_comparison.py`. All pass; 906 pre-existing tests still pass (4 pre-existing failures unrelated).
+- First baseline: `data/fulltest_results/oos_comparison_20260512_211515.txt`. Three of four strategies fail IS; the fourth (mean_reversion, IS PF 1.29 / +$714) collapses OOS to PF 0.27 — classic in-sample overfit. Detail in `docs/strategy-logic-fixes.md`.
+
 ## Test Coverage
 
 Total tests: 803+
