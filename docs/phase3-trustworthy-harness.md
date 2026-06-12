@@ -165,15 +165,33 @@ Validated against real data: entry fills matched first-bar-close × 1.001 (10 bp
 the cent; accounting identity `equity = initial + Σqty×(mark − fill) − commissions` holds
 exactly against DB fills.
 
-### Iteration 3 — Calibration at scale + metrics sanity
+### Iteration 3 — Calibration at scale + metrics sanity ✅ (2026-06-12)
 
-- Same `buy_hold` comparison over the full IS year (~1 h, background).
-- While it runs: check the Sharpe annualization in `analytics/` — reported −24/−43 portfolio
-  Sharpe is dimensionally implausible (F5 note); buy-and-hold over a year gives a known-order
-  benchmark to validate against.
+- Same `buy_hold` comparison over the full IS year (~34 min with the drain).
+- While it ran: checked the Sharpe annualization in analytics — reported −24/−43 portfolio
+  Sharpe is dimensionally implausible (F5 note).
 
 **Gate**: P&L matches arithmetic AND reported Sharpe for buy_hold is plausible (±50% of a
 hand-computed value). Both fixable here if not.
+
+**Result**: final equity **$108,595.57 vs hand-computed $108,595.57 — exact**, coverage
+through the window's last trading minute (1.13M bars). Metrics required fixes (F8):
+
+- **F8 — analytics were realized-only and trade-gated.** Three compounding artifacts of the
+  same cost-basis era: (a) the daily equity curve fed to Sharpe/drawdown was cash-flow-only —
+  flat between fills — which is what produced Sharpe −24/−43 (steady small negative steps,
+  near-zero variance); (b) `calculate_metrics` short-circuited ALL metrics to 0 when no trades
+  closed (buy-and-hold "had" 0% return and 0 drawdown); (c) `compute_analytics` overrode
+  total/annualized return with positions-table realized P&L. Fixed: new `mark_to_market_daily`
+  curve (cash + open positions at each day's last close, carry-forward across gaps); curve
+  metrics computed regardless of trade count; the realized-P&L override now applies only on
+  the cost-basis fallback. The old "don't MTM, PaperBroker has no cash check" rationale died
+  with Phase 2.6.
+
+Post-fix IS-year buy_hold analytics: total return 8.60%, max drawdown −13.15% (hand: 12.9%),
+Sharpe 0.28 — that is the *excess-return* Sharpe (rf=5%/yr baked into `calculate_sharpe`);
+raw Sharpe of the same curve is 0.69 vs hand-computed 0.69–0.83. Definitions reconciled,
+numbers match. 36 new MTM-curve unit tests.
 
 ### Iteration 4 — Discovery smoke (mechanics, not P&L)
 
@@ -188,6 +206,25 @@ Verify from logs/DB, not vibes:
   score-decay exits).
 
 **Gate**: all four observed. Then — and only then — spend 2 h on iteration 5.
+
+**First pass (2026-06-12)**: scan cadence ✅ (21 scans for 21 trading days), universe
+isolation ✅ (non-fed symbols only have day-end-stamped `1d` rows), coverage line ✅ — but
+the fed symbols produced **zero** 1m bars and discovery_momentum traded 0 times. Two causes:
+
+- **F9 — the replay producer outran the sim clock.** The producer pushed the entire window
+  into Redis in ~1 minute and exited; discovery (correctly on sim time since iteration 1) fed
+  50 symbols on sim-day 21, when there was nothing left to replay. In pre-fix history this
+  also meant fed symbols joined at the producer's far-future position, not the decision time —
+  yet another silent distortion of all old discovery results. Fixed: `ReplayAdapter` takes a
+  `throttle` hook; the orchestrator paces the producer to the aggregator consumer-group lag
+  (≤20k ticks ≈ 12 s of sim lead), so fed symbols join the replay at the decision time.
+- **Structural**: a 1-month window is all warm-up — screeners need 20–25 daily bars, so the
+  first discoveries can only happen on the last day or two. The smoke re-runs on a 2-month
+  window (≈20 days warm-up + ≈22 active days).
+
+Also noted: `momentum` still traded 0 times in the smoke month even with the fixed config
+keys — watch in iteration 5; if it stays at 0 over a year, the regime+cross gates simply
+never co-fire and the strategy should be retired with the others.
 
 ### Iteration 5 — Honest IS/OOS re-run (closes ROADMAP #1)
 

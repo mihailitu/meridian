@@ -95,6 +95,21 @@ def daily_rows_from_minute_df(df: pd.DataFrame, symbol: str) -> list[tuple]:
     return rows
 
 
+async def _consumer_lag(
+    client: "aioredis.Redis", stream: str, group: str
+) -> Optional[int]:
+    """Undelivered-entry count for a consumer group, or None if unknowable
+    (stream/group missing, or pre-7.0 Redis without the lag field)."""
+    try:
+        groups = await client.xinfo_groups(stream)
+    except aioredis.ResponseError:
+        return None
+    ginfo = next((g for g in groups if g.get("name") == group), None)
+    if ginfo is None:
+        return None
+    return ginfo.get("lag")
+
+
 async def _drain_stream(
     client: "aioredis.Redis",
     stream: str,
@@ -495,12 +510,36 @@ class FullBacktestOrchestrator:
             end_time=datetime.now(timezone.utc),
         )
 
+        # Pace the replay producer to the aggregator: cap the tick-stream
+        # backlog so the producer's position stays close to the consumer's
+        # sim clock. Without this the producer finishes the whole window in
+        # seconds, and discovery-driven add_symbols() (which fires on sim
+        # time) arrives after the producer has exited — fed symbols never
+        # replay. 20k ticks ≈ 5k bars ≈ ~12s of aggregator work.
+        pace_client = aioredis.Redis(
+            host=config.redis.host,
+            port=config.redis.port,
+            db=config.redis.db,
+            decode_responses=True,
+        )
+        tick_stream = config.aggregator.source_stream
+        agg_group = config.aggregator.consumer_group
+        max_lag = 20_000
+
+        async def _pace_producer() -> None:
+            while True:
+                lag = await _consumer_lag(pace_client, tick_stream, agg_group)
+                if lag is None or lag <= max_lag:
+                    return
+                await asyncio.sleep(0.2)
+
         # Create replay adapter
         replay = ReplayAdapter(
             data_dir=self._bt_config.data_dir,
             ticks_per_bar=self._bt_config.ticks_per_bar,
             start_date=self._bt_config.start,
             end_date=self._bt_config.end,
+            throttle=_pace_producer,
         )
 
         # Create services with isolated config
@@ -556,15 +595,9 @@ class FullBacktestOrchestrator:
         # 2025-08 calibration run kept only the first 7 trading days of
         # bars (28%) before the aggregator was stopped. Wait until each
         # consumer group has actually consumed its backlog instead.
-        drain_client = aioredis.Redis(
-            host=config.redis.host,
-            port=config.redis.port,
-            db=config.redis.db,
-            decode_responses=True,
-        )
         try:
             await _drain_stream(
-                drain_client,
+                pace_client,
                 config.aggregator.source_stream,
                 config.aggregator.consumer_group,
                 label="ticks->aggregator",
@@ -573,7 +606,7 @@ class FullBacktestOrchestrator:
             logger.info("Aggregator stopped")
 
             await _drain_stream(
-                drain_client,
+                pace_client,
                 config.strategies.bar_stream,
                 config.strategies.consumer_group,
                 label="bars->strategies",
@@ -581,7 +614,7 @@ class FullBacktestOrchestrator:
             await strategy_runner.stop()
             logger.info("Strategy runner stopped")
         finally:
-            await drain_client.aclose()
+            await pace_client.aclose()
 
         # Stop gateway
         await gateway.stop()

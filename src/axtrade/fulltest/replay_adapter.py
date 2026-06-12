@@ -5,7 +5,7 @@ import heapq
 import json
 import sys
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -85,11 +85,23 @@ class ReplayAdapter(DataAdapter):
         ticks_per_bar: int = 4,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        throttle: Optional[Callable[[], Awaitable[None]]] = None,
     ):
+        """
+        Args:
+            throttle: Optional async callback awaited periodically during
+                streaming. Used by the orchestrator to pace the producer to
+                the consumers: without it the whole window is pushed into
+                Redis in seconds while the aggregator's sim clock is still
+                on day one, so discovery-driven add_symbols() fires after
+                the producer has already finished and fed symbols never
+                replay a single bar.
+        """
         self._data_dir = Path(data_dir)
         self._ticks_per_bar = max(ticks_per_bar, 4)
         self._start_date = start_date
         self._end_date = end_date
+        self._throttle = throttle
         self._manifest: Optional[dict] = None
         self._file_entries: list[tuple[str, Path]] = []
         self._symbols: list[str] = []
@@ -382,6 +394,10 @@ class ReplayAdapter(DataAdapter):
 
             ticks = self._make_ticks(symbol, ts, o, h, l, c, vol)
             bar_count += 1
+
+            # Pace the producer to the consumers (see __init__ docstring).
+            if self._throttle is not None and bar_count % 500 == 0:
+                await self._throttle()
 
             if bar_count % 1000 == 0 and self.estimated_bars > 0:
                 pct = min(bar_count * 100 // self.estimated_bars, 99)

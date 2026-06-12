@@ -32,13 +32,23 @@ def _make_fill_row(strategy_id, symbol, side, quantity, price, commission, fille
 
 
 class FakeConnection:
-    """Minimal async connection stub returning preset rows."""
+    """Minimal async connection stub returning preset rows.
+
+    Routes by SQL content so that fills queries and the daily-closes bars
+    query (added in Phase 2.8) don't cross-contaminate each other.
+    """
 
     def __init__(self, rows, realized_pnl=Decimal("0")):
         self._rows = rows
         self._realized_pnl = realized_pnl
 
     async def fetch(self, query, *args):
+        # _fetch_daily_closes queries the bars table; return empty so that
+        # compute_analytics falls back to the cost-basis curve in tests that
+        # don't need mark-to-market.
+        if "FROM bars" in query:
+            return []
+        # _fetch_fills queries the fills table, optionally with a strategy filter
         if args:
             strategy_id = args[0]
             return [r for r in self._rows if r["strategy_id"] == strategy_id]

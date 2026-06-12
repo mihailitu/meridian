@@ -35,21 +35,29 @@ class PerformanceAnalyzer:
         total_trades = len(closing_trades)
 
         if total_trades == 0:
-            return {
-                "total_trades": 0,
-                "winning_trades": 0,
-                "losing_trades": 0,
-                "win_rate": 0.0,
-                "total_return": 0.0,
-                "annualized_return": 0.0,
-                "sharpe_ratio": 0.0,
-                "max_drawdown": 0.0,
-                "profit_factor": 0.0,
-                "avg_trade_pnl": Decimal("0"),
-                "avg_winner": Decimal("0"),
-                "avg_loser": Decimal("0"),
-                "total_commission": sum((t.commission for t in trades), Decimal("0")),
-            }
+            # No closed round-trips: trade statistics are zero, but the
+            # curve-based metrics (returns, Sharpe, drawdown) are still
+            # well-defined — a strategy that buys and holds for the whole
+            # window has real returns and real drawdowns.
+            metrics = PerformanceAnalyzer._curve_metrics(
+                equity_curve, initial_capital, start_date, end_date
+            )
+            metrics.update(
+                {
+                    "total_trades": 0,
+                    "winning_trades": 0,
+                    "losing_trades": 0,
+                    "win_rate": 0.0,
+                    "profit_factor": 0.0,
+                    "avg_trade_pnl": Decimal("0"),
+                    "avg_winner": Decimal("0"),
+                    "avg_loser": Decimal("0"),
+                    "total_commission": sum(
+                        (t.commission for t in trades), Decimal("0")
+                    ),
+                }
+            )
+            return metrics
 
         # Win/loss statistics
         winners = [t for t in closing_trades if t.pnl and t.pnl > 0]
@@ -73,7 +81,37 @@ class PerformanceAnalyzer:
             else Decimal("0")
         )
 
-        # Returns
+        curve_metrics = PerformanceAnalyzer._curve_metrics(
+            equity_curve, initial_capital, start_date, end_date
+        )
+
+        # Profit factor
+        profit_factor = PerformanceAnalyzer.calculate_profit_factor(closing_trades)
+
+        # Total commission
+        total_commission = sum((t.commission for t in trades), Decimal("0"))
+
+        return {
+            "total_trades": total_trades,
+            "winning_trades": winning_trades,
+            "losing_trades": losing_trades,
+            "win_rate": win_rate,
+            **curve_metrics,
+            "profit_factor": profit_factor,
+            "avg_trade_pnl": avg_trade_pnl,
+            "avg_winner": avg_winner,
+            "avg_loser": avg_loser,
+            "total_commission": total_commission,
+        }
+
+    @staticmethod
+    def _curve_metrics(
+        equity_curve: list[EquityPoint],
+        initial_capital: Decimal,
+        start_date: date,
+        end_date: date,
+    ) -> dict:
+        """Metrics derived from the equity curve alone (no trades needed)."""
         final_equity = equity_curve[-1].equity if equity_curve else initial_capital
         total_return = float((final_equity - initial_capital) / initial_capital * 100)
 
@@ -95,32 +133,11 @@ class PerformanceAnalyzer:
         else:
             annualized_return = 0.0
 
-        # Sharpe ratio
-        sharpe_ratio = PerformanceAnalyzer.calculate_sharpe(equity_curve)
-
-        # Max drawdown
-        max_drawdown = PerformanceAnalyzer.calculate_max_drawdown(equity_curve)
-
-        # Profit factor
-        profit_factor = PerformanceAnalyzer.calculate_profit_factor(closing_trades)
-
-        # Total commission
-        total_commission = sum((t.commission for t in trades), Decimal("0"))
-
         return {
-            "total_trades": total_trades,
-            "winning_trades": winning_trades,
-            "losing_trades": losing_trades,
-            "win_rate": win_rate,
             "total_return": total_return,
             "annualized_return": annualized_return,
-            "sharpe_ratio": sharpe_ratio,
-            "max_drawdown": max_drawdown,
-            "profit_factor": profit_factor,
-            "avg_trade_pnl": avg_trade_pnl,
-            "avg_winner": avg_winner,
-            "avg_loser": avg_loser,
-            "total_commission": total_commission,
+            "sharpe_ratio": PerformanceAnalyzer.calculate_sharpe(equity_curve),
+            "max_drawdown": PerformanceAnalyzer.calculate_max_drawdown(equity_curve),
         }
 
     @staticmethod

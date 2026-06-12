@@ -27,6 +27,128 @@ class SymbolStats:
     trades: int = 0  # closed round-trips (sells with matched buys)
 
 
+async def _fetch_daily_closes(
+    conn: asyncpg.Connection,
+) -> dict[str, dict[date, Decimal]]:
+    """Last 1m close per (symbol, calendar day) from the bars table.
+
+    Used to mark open positions to market when building the daily equity
+    curve.
+    """
+    rows = await conn.fetch(
+        """
+        SELECT DISTINCT ON (symbol, time::date)
+               symbol, time::date AS day, close
+        FROM bars
+        WHERE interval = '1m'
+        ORDER BY symbol, time::date, time DESC
+        """
+    )
+    closes: dict[str, dict[date, Decimal]] = defaultdict(dict)
+    for row in rows:
+        closes[row["symbol"]][row["day"]] = Decimal(str(row["close"]))
+    return dict(closes)
+
+
+def mark_to_market_daily(
+    rows: list,
+    initial_capital: Decimal,
+    daily_closes: dict[str, dict[date, Decimal]],
+    start_date: date,
+    end_date: date,
+) -> list[EquityPoint]:
+    """Daily equity curve with open positions marked to each day's close.
+
+    A cost-basis curve (cash flow from fills only) is NOT a portfolio
+    equity series: for a strategy that mostly holds, it steps on fill days
+    and is flat otherwise, so its daily mean/std produce dimensionally
+    absurd Sharpe values (the -24/-43 readings of the Phase 2.8 reports).
+    Here equity(day) = cash + sum(net_qty[sym] * close[sym][day]), with the
+    last known close carried forward across non-trading days for held
+    symbols.
+
+    Args:
+        rows: Fill rows ordered by filled_at ascending (strategy-filtered
+              by the caller for per-strategy curves)
+        initial_capital: Starting cash
+        daily_closes: symbol -> {day: last close} from _fetch_daily_closes
+        start_date: First day of the curve (gets an initial-capital point)
+        end_date: Last day of the curve (inclusive)
+
+    Returns:
+        One EquityPoint per calendar day that has any bar data, plus the
+        synthetic day-zero point.
+    """
+    # Days with any market data inside the window
+    all_days = sorted(
+        {
+            d
+            for per_symbol in daily_closes.values()
+            for d in per_symbol
+            if start_date <= d <= end_date
+        }
+    )
+
+    cash = initial_capital
+    qty: dict[str, Decimal] = defaultdict(Decimal)
+    last_close: dict[str, Decimal] = {}
+    peak = initial_capital
+    fill_idx = 0
+
+    curve = [
+        EquityPoint(
+            timestamp=datetime.combine(start_date, datetime.min.time()),
+            equity=initial_capital,
+            drawdown=Decimal("0"),
+        )
+    ]
+
+    for day in all_days:
+        # Apply all fills up to and including this day
+        while fill_idx < len(rows):
+            row = rows[fill_idx]
+            filled_at = row["filled_at"]
+            fill_day = filled_at.date() if isinstance(filled_at, datetime) else filled_at
+            if fill_day > day:
+                break
+            q = Decimal(str(row["quantity"]))
+            price = Decimal(str(row["price"]))
+            commission = Decimal(str(row["commission"]))
+            if row["side"] == "buy":
+                cash -= price * q + commission
+                qty[row["symbol"]] += q
+            else:
+                cash += price * q - commission
+                qty[row["symbol"]] -= q
+            fill_idx += 1
+
+        position_value = Decimal("0")
+        for sym, q in qty.items():
+            if q == 0:
+                continue
+            close = daily_closes.get(sym, {}).get(day)
+            if close is not None:
+                last_close[sym] = close
+            else:
+                close = last_close.get(sym)
+            if close is None:
+                continue  # no price yet for a just-opened symbol; rare
+            position_value += q * close
+
+        equity = cash + position_value
+        peak = max(peak, equity)
+        drawdown = ((peak - equity) / peak * 100) if peak > 0 else Decimal("0")
+        curve.append(
+            EquityPoint(
+                timestamp=datetime.combine(day, datetime.min.time()),
+                equity=equity,
+                drawdown=drawdown,
+            )
+        )
+
+    return curve
+
+
 async def _fetch_fills(
     conn: asyncpg.Connection,
     strategy_id: Optional[str] = None,
@@ -342,29 +464,33 @@ async def compute_analytics(
         return empty
 
     trades, curve, per_symbol = _process_fills(rows, capital)
-    daily_curve = resample_equity_daily(
-        curve, initial_capital=capital, start_date=start_date
-    )
+
+    # Daily curve is mark-to-market: cash from fills plus open positions
+    # valued at each day's last close. (The previous cost-basis-only curve
+    # ignored held positions entirely — flat between fills — which made
+    # Sharpe/drawdown/returns dimensionally meaningless for any strategy
+    # that holds. The old rationale, "PaperBroker has no cash check, MTM
+    # would value fantasy positions", became obsolete when the cash check
+    # landed in Phase 2.6.) Falls back to the cost-basis curve if the bars
+    # table has no usable closes.
+    daily_closes = await _fetch_daily_closes(conn)
+    if daily_closes:
+        daily_curve = mark_to_market_daily(
+            rows, capital, daily_closes, start_date, end_date
+        )
+    else:
+        daily_curve = resample_equity_daily(
+            curve, initial_capital=capital, start_date=start_date
+        )
 
     metrics = PerformanceAnalyzer.calculate_metrics(
         trades, daily_curve, capital, start_date, end_date
     )
 
-    # Sharpe uses the cost-basis daily curve. With fills timestamped on
-    # simulated bar time (PaperBroker.set_current_time), this curve has
-    # cash-flow variance spread across the period — enough for a meaningful
-    # daily Sharpe at the portfolio level.
-    #
     # Per-strategy Sharpe is unreliable when trading is sparse (a single
     # strategy may have <20 distinct trading days, where mean is small but
     # std is also tiny, and the ratio explodes). Suppress to None outside a
     # safe range.
-    #
-    # We also deliberately do NOT mark unmatched open positions to market:
-    # the PaperBroker accepts buys without a cash check, so the open-position
-    # book balloons to fantasy size. Marking those to market produces wildly
-    # inflated equity. Until the broker grows a cash-check (separate change),
-    # cost-basis equity is the trustworthy metric.
     sharpe = PerformanceAnalyzer.calculate_sharpe(daily_curve, periods_per_year=252)
     if strategy_id is not None and (sharpe is None or abs(sharpe) > 10 or len(daily_curve) < 20):
         # Per-strategy: suppress when noisy. Portfolio (strategy_id=None) keeps it.
@@ -374,31 +500,34 @@ async def compute_analytics(
 
     metrics["per_symbol"] = per_symbol
 
-    # Override return metrics using positions-table realized P&L (source of truth).
-    # The fills-based equity curve can diverge from actual P&L when sells have
-    # no matching buys or open positions are valued at cost basis.
-    if strategy_id:
-        total_realized = await conn.fetchval(
-            "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions WHERE strategy_id = $1",
-            strategy_id,
-        )
-    else:
-        total_realized = await conn.fetchval(
-            "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions"
-        )
-    pnl_return = float(Decimal(str(total_realized)) / capital * 100) if capital else 0.0
-    metrics["total_return"] = pnl_return
+    # With a mark-to-market curve, the curve's return IS the portfolio
+    # return (cash + positions at close, net of commissions) — leave it
+    # alone. Only on the cost-basis fallback do we override the return
+    # metrics with positions-table realized P&L, since that curve values
+    # open positions at cost and can diverge from actual P&L.
+    if not daily_closes:
+        if strategy_id:
+            total_realized = await conn.fetchval(
+                "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions WHERE strategy_id = $1",
+                strategy_id,
+            )
+        else:
+            total_realized = await conn.fetchval(
+                "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions"
+            )
+        pnl_return = float(Decimal(str(total_realized)) / capital * 100) if capital else 0.0
+        metrics["total_return"] = pnl_return
 
-    # Recompute annualized return from the corrected total_return
-    days = (end_date - start_date).days
-    years = days / 365.0 if days > 0 else 0.0
-    ratio = 1 + pnl_return / 100
-    if years >= 0.25 and ratio > 0:
-        try:
-            metrics["annualized_return"] = (math.pow(ratio, 1 / years) - 1) * 100
-        except (OverflowError, ValueError):
+        # Recompute annualized return from the corrected total_return
+        days = (end_date - start_date).days
+        years = days / 365.0 if days > 0 else 0.0
+        ratio = 1 + pnl_return / 100
+        if years >= 0.25 and ratio > 0:
+            try:
+                metrics["annualized_return"] = (math.pow(ratio, 1 / years) - 1) * 100
+            except (OverflowError, ValueError):
+                metrics["annualized_return"] = pnl_return
+        else:
             metrics["annualized_return"] = pnl_return
-    else:
-        metrics["annualized_return"] = pnl_return
 
     return metrics
