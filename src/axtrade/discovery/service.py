@@ -102,6 +102,7 @@ class DiscoveryService:
         screener_names: Optional[list[str]] = None,
         interval: str = "1m",
         bar_limit: int = 50,
+        as_of: Optional[datetime] = None,
     ) -> list[ScreenerResult]:
         """Run screeners on a list of symbols.
 
@@ -110,6 +111,8 @@ class DiscoveryService:
             screener_names: Specific screeners to run (None = all)
             interval: Bar interval to use for analysis
             bar_limit: Number of recent bars to fetch
+            as_of: Only consider bars at or before this time (backtest
+                sim clock). None means "now" (live mode)
 
         Returns:
             List of ScreenerResult from each screener
@@ -123,7 +126,7 @@ class DiscoveryService:
 
         try:
             # Fetch bar data for all symbols
-            bars_data = await self._fetch_bars_data(symbols, interval, bar_limit)
+            bars_data = await self._fetch_bars_data(symbols, interval, bar_limit, as_of)
 
             # Determine which screeners to run
             if screener_names:
@@ -143,14 +146,29 @@ class DiscoveryService:
 
             # Filter out exceptions and process results
             valid_results = []
+            fresh: dict[str, DiscoveredSymbol] = {}
             for result in results:
                 if isinstance(result, Exception):
                     self.logger.error("Screener error", error=str(result))
                 elif isinstance(result, ScreenerResult):
                     valid_results.append(result)
-                    # Update discovered symbols cache
                     for symbol in result.symbols:
-                        self._update_discovered(symbol)
+                        existing = fresh.get(symbol.symbol)
+                        if existing is None or abs(symbol.score) > abs(existing.score):
+                            fresh[symbol.symbol] = symbol
+
+            # Rebuild the cache from this scan: a symbol's score reflects the
+            # latest scan only, so scores can decay and symbols can drop out.
+            # Manually added symbols survive scans (they carry no score).
+            # If every screener errored we have no information — keep the
+            # previous cache rather than treating it as "nothing qualifies".
+            if valid_results:
+                manual = {
+                    sym: disc
+                    for sym, disc in self._discovered.items()
+                    if disc.source == "manual" and sym not in fresh
+                }
+                self._discovered = {**manual, **fresh}
 
             self._last_scan = datetime.utcnow()
             self.logger.info(
@@ -170,6 +188,7 @@ class DiscoveryService:
         symbols: list[str],
         interval: str,
         limit: int,
+        as_of: Optional[datetime] = None,
     ) -> dict:
         """Fetch bar data for multiple symbols.
 
@@ -177,6 +196,7 @@ class DiscoveryService:
             symbols: List of symbols
             interval: Bar interval
             limit: Number of bars to fetch
+            as_of: Only fetch bars at or before this time (None = no bound)
 
         Returns:
             Dict mapping symbol -> list of bar dicts
@@ -188,22 +208,15 @@ class DiscoveryService:
         bars_data = {}
         for symbol in symbols:
             try:
-                bars = await self._bar_repo.get_bars(symbol, interval, limit)
+                bars = await self._bar_repo.get_bars(
+                    symbol, interval, limit, end_time=as_of
+                )
                 # Sort by time ascending (oldest first) for analysis
                 bars_data[symbol] = sorted(bars, key=lambda b: b["time"])
             except Exception as e:
                 self.logger.debug("Failed to fetch bars", symbol=symbol, error=str(e))
 
         return bars_data
-
-    def _update_discovered(self, symbol: DiscoveredSymbol) -> None:
-        """Update discovered symbols cache.
-
-        Keeps the highest scoring discovery per symbol.
-        """
-        existing = self._discovered.get(symbol.symbol)
-        if existing is None or abs(symbol.score) > abs(existing.score):
-            self._discovered[symbol.symbol] = symbol
 
     def get_discovered(
         self,

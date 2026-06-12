@@ -22,7 +22,6 @@ class FullBacktestConfig:
     consumer_group_prefix: str = "bt_"
     initial_capital: float = 100000.0
     discovery_enabled: bool = True
-    discovery_scan_interval_bars: int = 60
     output_dir: str = "data/fulltest_results"
     report_format: str = "text"
     skip_download: bool = True

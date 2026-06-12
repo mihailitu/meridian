@@ -86,8 +86,12 @@ strategies:
       id: momentum_us_01
       enabled: true
       config:
-        rsi_oversold: 30
+        # Keys must match what MomentumBreakout reads: entry fires when RSI
+        # crosses up through rsi_cross_level (a previous `rsi_oversold` key
+        # here was silently ignored by the strategy).
+        rsi_cross_level: 50
         rsi_overbought: 70
+        trend_strength_min: 30.0
         stop_loss_pct: 0.02
         position_size: 100
 

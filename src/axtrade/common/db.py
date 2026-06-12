@@ -126,6 +126,7 @@ class BarRepository:
         symbol: str,
         interval: str = "1m",
         limit: int = 100,
+        end_time: Optional[datetime] = None,
     ) -> list[dict]:
         """Get recent bars for a symbol.
 
@@ -133,19 +134,33 @@ class BarRepository:
             symbol: Symbol to query
             interval: Bar interval
             limit: Maximum number of bars to return
+            end_time: Only return bars at or before this time. Used by
+                backtests to keep pre-seeded future bars invisible until
+                the simulation clock reaches them.
 
         Returns:
             List of bar dictionaries with indicators
         """
-        query = """
-            SELECT time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14
-            FROM bars
-            WHERE symbol = $1 AND interval = $2
-            ORDER BY time DESC
-            LIMIT $3
-        """
+        if end_time is not None:
+            query = """
+                SELECT time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14
+                FROM bars
+                WHERE symbol = $1 AND interval = $2 AND time <= $4
+                ORDER BY time DESC
+                LIMIT $3
+            """
+            args = (symbol, interval, limit, end_time)
+        else:
+            query = """
+                SELECT time, symbol, interval, open, high, low, close, volume, sma_20, rsi_14
+                FROM bars
+                WHERE symbol = $1 AND interval = $2
+                ORDER BY time DESC
+                LIMIT $3
+            """
+            args = (symbol, interval, limit)
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(query, symbol, interval, limit)
+            rows = await conn.fetch(query, *args)
 
         return [
             {

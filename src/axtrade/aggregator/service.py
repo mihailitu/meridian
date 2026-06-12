@@ -29,7 +29,9 @@ class AggregatorService:
 
         Args:
             config: Application configuration
-            on_bar_callback: Optional async callback invoked after each bar completes
+            on_bar_callback: Optional async callback invoked after each bar
+                completes, receiving the bar's timestamp (the sim clock in
+                a backtest)
         """
         self.config = config
         self.logger = get_logger("aggregator")
@@ -213,7 +215,7 @@ class AggregatorService:
         self._print_bar(bar, interval, result.sma_20, result.rsi_14, result.regime)
 
         if self._on_bar_callback:
-            await self._on_bar_callback()
+            await self._on_bar_callback(bar.timestamp)
 
     def _print_bar(
         self,

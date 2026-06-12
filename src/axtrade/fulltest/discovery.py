@@ -1,5 +1,6 @@
-"""Bar-count-driven discovery runner for backtest."""
+"""Sim-time-driven discovery runner for backtest."""
 
+from datetime import date, datetime
 from typing import TYPE_CHECKING, Optional
 
 from axtrade.common import Config, SymbolConfig, get_logger
@@ -13,12 +14,14 @@ logger = get_logger("fulltest.discovery")
 
 
 class BacktestDiscoveryRunner:
-    """Runs discovery scans based on bar count instead of wall-clock time.
+    """Runs discovery scans on the simulation clock instead of wall-clock.
 
-    In a backtest, time moves at replay speed. This runner triggers
-    scans every N bars (configurable) instead of every N seconds.
-    When gateway_control is provided and auto_subscribe is enabled,
-    feeds discovered symbols to the gateway for dynamic replay.
+    The aggregator reports each completed bar's timestamp; that is the sim
+    clock. Scans run once per sim *day* (the universe is seeded with daily
+    bars, so intraday re-scans would see identical data), and every scan is
+    bounded by ``as_of`` so discovery can never read bars from the future.
+    When gateway_control is provided and auto_subscribe is enabled, feeds
+    discovered symbols to the gateway for dynamic replay.
     """
 
     def __init__(
@@ -26,34 +29,38 @@ class BacktestDiscoveryRunner:
         config: Config,
         discovery_service: DiscoveryService,
         symbol_provider: SymbolProvider,
-        scan_interval_bars: int = 60,
         gateway_control: Optional["GatewayControlPublisher"] = None,
     ):
         self._config = config
         self._discovery_service = discovery_service
         self._symbol_provider = symbol_provider
-        self._scan_interval_bars = scan_interval_bars
         self._gateway_control = gateway_control
         self._bar_count = 0
         self._scan_count = 0
         self._total_matches = 0
+        self._sim_time: Optional[datetime] = None
+        self._last_scan_date: Optional[date] = None
         self._subscribed_symbols: set[str] = set()
         self._symbols_fed: list[str] = []
 
-    async def on_bar(self) -> None:
+    async def on_bar(self, bar_time: datetime) -> None:
         """Called after each bar is processed by the aggregator.
 
-        Triggers a discovery scan every scan_interval_bars bars.
+        Advances the sim clock and triggers a discovery scan when the
+        sim date moves forward.
         """
         self._bar_count += 1
+        if self._sim_time is None or bar_time > self._sim_time:
+            self._sim_time = bar_time
 
-        if self._bar_count % self._scan_interval_bars != 0:
+        if self._last_scan_date == self._sim_time.date():
             return
+        self._last_scan_date = self._sim_time.date()
 
         await self._run_scan()
 
     async def _run_scan(self) -> None:
-        """Run a discovery scan."""
+        """Run a discovery scan bounded at the current sim time."""
         symbols = await self._symbol_provider.get_symbols()
         if not symbols:
             return
@@ -62,6 +69,7 @@ class BacktestDiscoveryRunner:
             symbols=symbols,
             interval=self._config.discovery.interval,
             bar_limit=self._config.discovery.bar_limit,
+            as_of=self._sim_time,
         )
 
         total_matches = sum(r.match_count for r in results)
@@ -104,8 +112,6 @@ class BacktestDiscoveryRunner:
 
         # New symbols to add (discovered but not yet subscribed, not static)
         new_symbols = discovered_names - self._subscribed_symbols - static_symbols
-        # Stale symbols to remove (previously subscribed but no longer discovered, not static)
-        stale_symbols = self._subscribed_symbols - discovered_names - static_symbols
 
         if new_symbols:
             configs = [
@@ -127,16 +133,10 @@ class BacktestDiscoveryRunner:
         if not new_symbols and not discovered_names:
             logger.debug("No symbols passed discovery filter")
 
-        if stale_symbols:
-            try:
-                await self._gateway_control.remove_symbols(list(stale_symbols))
-                self._subscribed_symbols -= stale_symbols
-                logger.info(
-                    "Removed stale symbols from gateway",
-                    symbols=sorted(stale_symbols),
-                )
-            except Exception as e:
-                logger.error("Failed to remove symbols from gateway", error=str(e))
+        # Unlike the live runner, symbols that drop out of discovery are NOT
+        # removed from the replay: stopping a symbol's bars would leave the
+        # strategy unable to fire the exit for any position it still holds.
+        # The strategy exits on score decay; the extra replay only costs time.
 
     @property
     def scan_count(self) -> int:

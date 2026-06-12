@@ -25,6 +25,7 @@ from axtrade.common import (
 )
 from axtrade.aggregator.service import AggregatorService
 from axtrade.discovery.service import DiscoveryService
+from axtrade.indicators import calculate_rsi, calculate_sma
 from axtrade.gateway.control import GatewayControlPublisher
 from axtrade.gateway.service import GatewayService
 from axtrade.strategies import STRATEGY_TYPES
@@ -39,6 +40,58 @@ from .types import FullBacktestConfig, FullBacktestResult
 from .universe import SP500SymbolProvider
 
 logger = get_logger("fulltest.orchestrator")
+
+
+def daily_rows_from_minute_df(df: pd.DataFrame, symbol: str) -> list[tuple]:
+    """Aggregate a 1m OHLCV frame into daily bar rows for the bars table.
+
+    Each daily bar is stamped with the day's last minute-bar timestamp, so a
+    query bounded by the sim clock only sees a day once it has fully closed.
+    SMA-20 / RSI-14 are computed over the daily closes because the discovery
+    screeners read them off the bar row.
+
+    Returns rows in bulk_insert_bars order:
+    (time, symbol, open, high, low, close, volume, sma_20, rsi_14)
+    """
+    ts = df["timestamp"]
+    if ts.dt.tz is None:
+        ts = ts.dt.tz_localize("UTC")
+    df = df.assign(timestamp=ts).sort_values("timestamp")
+
+    grouped = df.groupby(df["timestamp"].dt.date, sort=True)
+    daily = pd.DataFrame(
+        {
+            "timestamp": grouped["timestamp"].last(),
+            "open": grouped["open"].first(),
+            "high": grouped["high"].max(),
+            "low": grouped["low"].min(),
+            "close": grouped["close"].last(),
+            "volume": grouped["volume"].sum(),
+        }
+    )
+
+    closes = [float(c) for c in daily["close"]]
+    rows = []
+    for i in range(len(daily)):
+        # 100 closes are plenty for Wilder smoothing to converge; a full
+        # prefix would make seeding a year of 1500 symbols quadratic.
+        window = closes[max(0, i - 99) : i + 1]
+        sma_v = calculate_sma(window, 20)
+        rsi_v = calculate_rsi(window, 14)
+        rows.append(
+            (
+                daily["timestamp"].iloc[i].to_pydatetime(),
+                symbol,
+                Decimal(str(float(daily["open"].iloc[i]))),
+                Decimal(str(float(daily["high"].iloc[i]))),
+                Decimal(str(float(daily["low"].iloc[i]))),
+                Decimal(str(float(daily["close"].iloc[i]))),
+                int(daily["volume"].iloc[i]),
+                Decimal(str(sma_v)) if sma_v is not None else None,
+                Decimal(str(rsi_v)) if rsi_v is not None else None,
+            )
+        )
+    return rows
 
 
 class FullBacktestOrchestrator:
@@ -169,10 +222,16 @@ class FullBacktestOrchestrator:
         # Gateway control channel isolation
         config.gateway.control_channel = "bt:axtrade:gateway:control"
 
-        # Discovery settings
+        # Discovery settings. The universe is pre-seeded with DAILY bars
+        # (see _preseed_universe_bars): scanning 1m bars for ~1500 symbols
+        # would mean seeding ~150M rows, and daily data is the conventional
+        # granularity for universe screening anyway. Scans are bounded by
+        # the sim clock so they can't see future bars.
         config.discovery.auto_subscribe = True
         config.discovery.enabled = True
         config.discovery.min_score = 40.0
+        config.discovery.interval = "1d"
+        config.discovery.bar_limit = 50
 
         # Enable all strategies with position sizing within risk limits.
         # Default 100 shares * $500+ stocks exceeds max_position_value ($50K).
@@ -240,10 +299,17 @@ class FullBacktestOrchestrator:
         return config
 
     async def _preseed_universe_bars(self, config: Config) -> None:
-        """Pre-seed TimescaleDB with bars from all parquet files in the manifest.
+        """Pre-seed TimescaleDB with DAILY bars aggregated from the parquet files.
 
         This gives the discovery service data to scan against for the full
-        S&P universe, not just the user-specified backtest symbols.
+        S&P universe, not just the user-specified backtest symbols. Bars are
+        seeded for the entire window (daily granularity keeps that tractable:
+        ~250 rows/symbol/year vs ~100k at 1m), and each daily bar is stamped
+        with the day's LAST minute-bar timestamp. Combined with discovery's
+        sim-time-bounded queries, a day's bar only becomes visible after that
+        day closes — no look-ahead. (The previous implementation seeded the
+        final 50 minute-bars of the window, which discovery then saw from
+        sim t=0: it was scoring the universe on end-of-period prices.)
         """
         data_dir = Path(self._bt_config.data_dir)
         manifest_path = data_dir / "manifest.json"
@@ -267,22 +333,20 @@ class FullBacktestOrchestrator:
 
         start_dt = pd.Timestamp(self._bt_config.start)
         end_dt = pd.Timestamp(self._bt_config.end)
-        bar_limit = config.discovery.bar_limit  # only keep last N bars per symbol
 
         total_files = len(files)
-        print(f"Pre-seeding universe bars ({total_files} files, tail {bar_limit}/symbol)...", file=sys.stderr, flush=True)
+        print(f"Pre-seeding universe daily bars ({total_files} files)...", file=sys.stderr, flush=True)
 
         # Read and filter all parquet files in parallel using a thread pool
         loop = asyncio.get_event_loop()
 
         def _read_one(file_info: dict) -> tuple[str, str, list[tuple]]:
-            """Read a single parquet file with predicate pushdown, return rows."""
+            """Read a parquet file, aggregate to daily, return rows."""
             symbol = file_info["symbol"]
-            interval = file_info.get("interval", "1m")
             file_path = data_dir / file_info["filename"]
 
             if not file_path.exists():
-                return symbol, interval, []
+                return symbol, "1d", []
 
             try:
                 table = pq.read_table(
@@ -293,56 +357,21 @@ class FullBacktestOrchestrator:
                     ],
                 )
                 if table.num_rows == 0:
-                    return symbol, interval, []
+                    return symbol, "1d", []
 
                 df = table.to_pandas()
                 del table
 
-                # Keep only the last N bars per symbol (discovery only needs recent history)
-                df = df.tail(bar_limit)
-
-                # Ensure timezone-aware timestamps
-                ts_series = df["timestamp"]
-                if ts_series.dt.tz is None:
-                    ts_series = ts_series.dt.tz_localize("UTC")
-
-                has_sma = "sma_20" in df.columns
-                has_rsi = "rsi_14" in df.columns
-
-                rows = []
-                ts_vals = ts_series.to_list()
-                open_vals = df["open"].to_list()
-                high_vals = df["high"].to_list()
-                low_vals = df["low"].to_list()
-                close_vals = df["close"].to_list()
-                vol_vals = df["volume"].to_list()
-                sma_vals = df["sma_20"].to_list() if has_sma else [None] * len(ts_vals)
-                rsi_vals = df["rsi_14"].to_list() if has_rsi else [None] * len(ts_vals)
-
-                for i in range(len(ts_vals)):
-                    sma_v = sma_vals[i]
-                    rsi_v = rsi_vals[i]
-                    rows.append((
-                        ts_vals[i],
-                        symbol,
-                        Decimal(str(float(open_vals[i]))),
-                        Decimal(str(float(high_vals[i]))),
-                        Decimal(str(float(low_vals[i]))),
-                        Decimal(str(float(close_vals[i]))),
-                        int(vol_vals[i]),
-                        Decimal(str(float(sma_v))) if sma_v is not None and not pd.isna(sma_v) else None,
-                        Decimal(str(float(rsi_v))) if rsi_v is not None and not pd.isna(rsi_v) else None,
-                    ))
-                return symbol, interval, rows
+                return symbol, "1d", daily_rows_from_minute_df(df, symbol)
             except Exception as e:
                 logger.debug("Failed to pre-seed file", symbol=symbol, error=str(e))
-                return symbol, interval, []
+                return symbol, "1d", []
 
         try:
             all_rows: list[tuple] = []
             files_processed = 0
             total_inserted = 0
-            interval = "1m"
+            interval = "1d"
             batch_limit = 50_000  # insert in chunks to avoid huge transactions
 
             with ThreadPoolExecutor(max_workers=8) as executor:
@@ -426,7 +455,6 @@ class FullBacktestOrchestrator:
                 config=config,
                 discovery_service=discovery_service,
                 symbol_provider=symbol_provider,
-                scan_interval_bars=self._bt_config.discovery_scan_interval_bars,
                 gateway_control=gateway_control,
             )
 

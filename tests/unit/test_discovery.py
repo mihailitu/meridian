@@ -18,6 +18,38 @@ from axtrade.discovery import (
 )
 
 
+class _StubScreener:
+    """Screener returning scripted results, one list per scan call."""
+
+    def __init__(self, name: str, scripted: list[list[DiscoveredSymbol]]):
+        self.name = name
+        self.screener_type = ScreenerType.MOMENTUM
+        self._scripted = scripted
+        self._call = 0
+
+    async def scan(self, symbols, bars_data) -> ScreenerResult:
+        result = self._scripted[min(self._call, len(self._scripted) - 1)]
+        self._call += 1
+        return ScreenerResult(
+            screener_name=self.name,
+            screener_type=self.screener_type,
+            symbols=list(result),
+            scan_time_ms=0.0,
+            total_scanned=len(symbols),
+        )
+
+
+class _ExplodingScreener:
+    """Screener that always raises."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self.screener_type = ScreenerType.MOMENTUM
+
+    async def scan(self, symbols, bars_data):
+        raise RuntimeError("screener failure")
+
+
 class TestDiscoveredSymbol:
     """Tests for DiscoveredSymbol dataclass."""
 
@@ -580,24 +612,82 @@ class TestDiscoveryService:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_update_discovered(self):
-        """Test that scans update the discovered cache."""
-        service = DiscoveryService(screeners=[MomentumScreener(name="momentum", min_bars=10)])
-        # Can't easily test without mocking the bar repo, but we can test the internal method
-        symbol = DiscoveredSymbol(symbol="AAPL", source="test", score=0.5)
-        service._update_discovered(symbol)
+    async def test_scan_rebuilds_cache(self):
+        """Each scan replaces the cache: scores can decay and symbols drop out.
+
+        Regression guard for the bug where the cache kept the max score per
+        symbol forever, making score_decay_exit dead code and entry gates
+        permanently satisfied.
+        """
+        scripted: list[list[DiscoveredSymbol]] = [
+            [
+                DiscoveredSymbol(symbol="AAPL", source="stub", score=80.0),
+                DiscoveredSymbol(symbol="TSLA", source="stub", score=70.0),
+            ],
+            [DiscoveredSymbol(symbol="AAPL", source="stub", score=20.0)],
+        ]
+        service = DiscoveryService(screeners=[_StubScreener("stub", scripted)])
+
+        await service.scan(["AAPL", "TSLA"])
+        assert service._discovered["AAPL"].score == 80.0
+        assert "TSLA" in service._discovered
+
+        # Second scan: AAPL's score DROPS, TSLA disappears entirely.
+        await service.scan(["AAPL", "TSLA"])
+        assert service._discovered["AAPL"].score == 20.0
+        assert "TSLA" not in service._discovered
+
+    @pytest.mark.asyncio
+    async def test_scan_keeps_highest_score_within_one_scan(self):
+        """When two screeners flag the same symbol, the stronger score wins."""
+        service = DiscoveryService(
+            screeners=[
+                _StubScreener("a", [[DiscoveredSymbol(symbol="AAPL", source="a", score=50.0)]]),
+                _StubScreener("b", [[DiscoveredSymbol(symbol="AAPL", source="b", score=-90.0)]]),
+            ]
+        )
+        await service.scan(["AAPL"])
+        assert service._discovered["AAPL"].score == -90.0
+
+    @pytest.mark.asyncio
+    async def test_scan_preserves_manual_symbols(self):
+        """Manually added symbols survive scans that don't rediscover them."""
+        service = DiscoveryService(screeners=[_StubScreener("stub", [[]])])
+        service.add_manual_symbol("NVDA", price=900.0)
+
+        await service.scan(["AAPL"])
+
+        assert "NVDA" in service._discovered
+        assert service._discovered["NVDA"].source == "manual"
+
+    @pytest.mark.asyncio
+    async def test_scan_as_of_bounds_bar_queries(self):
+        """The as_of sim clock must reach the repository as end_time."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        service = DiscoveryService(screeners=[_StubScreener("stub", [[]])])
+        service._bar_repo = MagicMock()
+        service._bar_repo.get_bars = AsyncMock(return_value=[])
+
+        sim_time = datetime(2024, 9, 2, 20, 0)
+        await service.scan(["AAPL"], interval="1d", bar_limit=50, as_of=sim_time)
+
+        service._bar_repo.get_bars.assert_called_once_with(
+            "AAPL", "1d", 50, end_time=sim_time
+        )
+
+    @pytest.mark.asyncio
+    async def test_scan_with_all_screeners_failing_keeps_cache(self):
+        """A scan where every screener errors must not wipe the cache."""
+        service = DiscoveryService(
+            screeners=[_StubScreener("ok", [[DiscoveredSymbol(symbol="AAPL", source="ok", score=75.0)]])]
+        )
+        await service.scan(["AAPL"])
         assert "AAPL" in service._discovered
-        assert service._discovered["AAPL"].score == 0.5
 
-        # Higher score should replace
-        symbol2 = DiscoveredSymbol(symbol="AAPL", source="test", score=0.8)
-        service._update_discovered(symbol2)
-        assert service._discovered["AAPL"].score == 0.8
-
-        # Lower score should not replace
-        symbol3 = DiscoveredSymbol(symbol="AAPL", source="test", score=0.3)
-        service._update_discovered(symbol3)
-        assert service._discovered["AAPL"].score == 0.8
+        service._screeners = {"boom": _ExplodingScreener("boom")}
+        await service.scan(["AAPL"])
+        assert "AAPL" in service._discovered  # no information != nothing qualifies
 
 
 class TestScreenerType:

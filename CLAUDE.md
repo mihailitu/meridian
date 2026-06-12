@@ -49,7 +49,16 @@ python -m axtrade.cli bars AAPL --limit 10 --interval 1m
 python -m axtrade.cli backtest --strategy momentum --symbol AAPL --start 2024-01-01 --end 2024-01-31
 python -m axtrade.fulltest download --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL
 python -m axtrade.fulltest run      --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
+
+# Fulltest extras: --universe sp500|sp1500 instead of --symbols; --download on `run` auto-fetches missing data
+# IS/OOS comparison: two back-to-back fulltests + side-by-side per-strategy report (PnL/PF/WR/Sharpe/verdict)
+python -m axtrade.fulltest oos --is-start 2024-08-01 --is-end 2025-08-01 \
+    --oos-start 2025-08-01 --oos-end 2026-02-01 \
+    --symbols AAPL MSFT GOOGL AMZN NVDA --capital 100000 \
+    --strategy-overrides params.yaml   # optional YAML {strategy_type: {param: value}}
 ```
+
+Historical parquet data lives in `data/historical/` (~6.3 GB, S&P 1500 coverage for 2024-08→2025-08 and 2025-08→2026-02); fulltest reports go to `data/fulltest_results/`. Both are untracked (not in `.gitignore`) — never `git add` them.
 
 ## Architecture
 
@@ -91,7 +100,7 @@ Each service is runnable as a Python module:
 
 **Adding a data adapter**: Implement `DataAdapter` ABC in `gateway/base.py` (`connect`, `disconnect`, `subscribe`, `stream_ticks`). Register in gateway service.
 
-**Adding a strategy**: Inherit from `BaseStrategy` in `strategies/base.py`, implement `on_bar(data: BarWithIndicators) -> Optional[Order]`. Register the strategy name in `strategies/__init__.py` and add to `strategies.enabled` list in `config/default.yaml`.
+**Adding a strategy**: Inherit from `BaseStrategy` in `strategies/base.py`, implement `on_bar(data: BarWithIndicators) -> Optional[Order]`. Register the strategy name in `strategies/__init__.py` and add to `strategies.enabled` list in `config/default.yaml`. Non-discovery strategies should honor the `allowed_symbols` config key (universe filter) — when discovery `auto_subscribe` is on, the bar stream carries 50+ discovered symbols, and strategies without the filter will trade all of them. The fulltest orchestrator injects `allowed_symbols` (the gateway symbol list) into `momentum`, `mean_reversion`, and `multi_timeframe`.
 
 **Adding a broker**: Implement `BrokerProtocol` in `oms/broker.py` (`submit_order`, `cancel_order`, `get_positions`, `set_fill_callback`).
 
@@ -107,7 +116,7 @@ Each service is runnable as a Python module:
 - `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
-- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` for discovery universe. Defaults to `--redis-db 1` and `--db-name axtrade_backtest` so it never touches live state (db=0 / `axtrade`)
+- `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` / `SP1500SymbolProvider` in `fulltest/universe.py` for discovery universes. `comparison.py` backs the `oos` subcommand (IS vs OOS per-strategy report). Defaults to `--redis-db 1` and `--db-name axtrade_backtest` so it never touches live state (db=0 / `axtrade`)
 - `api/`: FastAPI app with route modules in `api/routes/`. OpenAPI docs at `/docs`
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
@@ -124,6 +133,10 @@ TimescaleDB (PostgreSQL) with schema initialized by `scripts/init-db.sql` (creat
 Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
 
 `discovery_momentum` is shipped with `enabled: false` in `config/default.yaml` — flip it on to exercise the discovery→trading bridge.
+
+### Project Docs
+
+`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings).
 
 ### Helper Scripts
 
