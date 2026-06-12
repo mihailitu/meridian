@@ -251,6 +251,33 @@ bars, enter on the ~15:50 ET bar, exit on the open bar).
 (backup: cross-sectional 12-1 momentum, monthly rebalance — lowest cost sensitivity, most
 robust documented anomaly, data on disk, F4 caveat applies) and repeat this iteration once.
 
+**IS run #1 (2026-06-12, threshold −1%)**: FAIL. 284 trades, WR 45.4%, PF 0.50, −$8,136.
+Avg loser $112 vs avg winner $67 — megacap intraday losers kept falling overnight. Gross edge
+≈ −30 bps/trade before costs, so not cost drag: the naive version of the signal is negative
+on these five names in this window. No symbol was profitable (best: GOOGL −$216).
+
+**Tuning pass (the one allowed)**: threshold −1% → −2%, via `--strategy-overrides`. Rationale:
+documented reversal strength increases with drop magnitude; restricting to extreme
+dislocations is the highest-prior single change. If this also fails IS, the signal is swapped
+for 12-1 momentum per the gate — no second tweak.
+
+**IS run #2 (threshold −2%)**: FAIL. 127 trades, WR 53.5%, PF 0.63, −$2,479. Better in the
+expected direction (magnitude helps) but the loser/winner asymmetry persists ($124 vs $67).
+**Verdict: overnight reversal on the gateway 5 is dead.** No further tuning.
+
+**Structural finding before invoking the swap clause**: the backup (cross-sectional 12-1
+momentum) collides with F4 head-on. Every remaining documented daily-horizon anomaly is
+cross-sectional over a broad universe — and our universe data is survivorship-biased
+(downloaded from today's index membership; 2024's delisted losers don't exist on disk). A
+long-the-winners strategy tested on a winners-only universe produces an upper bound, not a
+verdict: PF < 1 would still falsify, but PF > 1 could NOT graduate. Additionally, 12-month
+formation windows don't fit inside the test windows (no pre-window data on disk for the IS
+start; the OOS window is only 6 months), so honest cross-sectional momentum also needs
+(a) pre-window daily seeding from the adjacent period file where it exists, and (b) a
+point-in-time membership source (Wikipedia's S&P constituent-change history can approximately
+reconstruct it) or delisting-inclusive data. Decision on whether to invest in that data work
+vs. calling the strategy-search phase concluded is deferred to after iteration 5's verdict.
+
 ### Iteration 7 — Overnight reversal: single OOS shot
 
 One OOS run (2025-08→2026-02), no parameter changes after seeing results.
