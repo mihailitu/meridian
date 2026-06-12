@@ -14,6 +14,7 @@ from .mean_reversion import MeanReversionStrategy
 from .ml_prediction import MLPredictionStrategy
 from .momentum import MomentumBreakout
 from .multi_timeframe import MultiTimeframeStrategy
+from .overnight_reversal import OvernightReversalStrategy
 from .pairs import PairsStrategy
 
 # Strategy type registry
@@ -25,6 +26,7 @@ STRATEGY_TYPES: dict[str, type[BaseStrategy]] = {
     "pairs": PairsStrategy,
     "ml_prediction": MLPredictionStrategy,
     "discovery_momentum": DiscoveryMomentumStrategy,
+    "overnight_reversal": OvernightReversalStrategy,
 }
 
 __all__ = [
@@ -37,6 +39,7 @@ __all__ = [
     "MLPredictionStrategy",
     "MomentumBreakout",
     "MultiTimeframeStrategy",
+    "OvernightReversalStrategy",
     "PairsStrategy",
     "Signal",
     "StrategyControlPublisher",

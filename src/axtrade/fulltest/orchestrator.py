@@ -327,7 +327,13 @@ class FullBacktestOrchestrator:
         # discovery pushes onto the bar stream. Inject `allowed_symbols` so
         # they stay within the gateway 5. discovery_momentum gates by score
         # and pairs is symbol-bound by config, so neither needs this.
-        narrowed_types = {"multi_timeframe", "mean_reversion", "momentum", "buy_hold"}
+        narrowed_types = {
+            "multi_timeframe",
+            "mean_reversion",
+            "momentum",
+            "buy_hold",
+            "overnight_reversal",
+        }
         gateway_symbol_list = list(self._bt_config.symbols)
         overrides = self._bt_config.strategy_overrides
         config.strategies.enabled = []
@@ -341,7 +347,14 @@ class FullBacktestOrchestrator:
             chosen = list(self._bt_config.enabled_strategies)
         else:
             # buy_hold is a calibration benchmark, opt-in only.
-            chosen = [t for t in STRATEGY_TYPES if t not in {"ml_prediction", "buy_hold"}]
+            # overnight_reversal stays opt-in until it passes its IS/OOS
+            # graduation gate (phase 3 iteration 7) — don't let a candidate
+            # contaminate default comparison runs mid-validation.
+            chosen = [
+                t
+                for t in STRATEGY_TYPES
+                if t not in {"ml_prediction", "buy_hold", "overnight_reversal"}
+            ]
         for stype in chosen:
             strat_cfg: dict = {
                 "position_size": safe_position_size,
