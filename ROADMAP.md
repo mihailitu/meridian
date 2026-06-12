@@ -3,46 +3,71 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-05-12._
+_Last refreshed: 2026-06-13._
 
 ## Today
 
-- **Pipeline works end-to-end** in paper / fulltest mode: gateway → aggregator (with SMA, RSI, BB, ATR, regime) → strategies → OMS → DB. Web UI shows positions, P&L, alerts.
-- **OMS re-entry bug fixed (Phase 2.7, `08c9224`).** Closed positions weren't clearing `closed_at` on re-entry; new fills pyramided onto the stale row, creating "ghost" positions invisible to `get_open_positions` but consuming real PaperBroker cash. Affected any strategy that closed and re-entered the same symbol. Patched `_update_position` to treat closed rows as fresh, plus repository upsert now persists `side` / `opened_at` changes. Two regression tests cover same-side and side-flip re-entry. Detail: [`docs/strategy-logic-fixes.md`](docs/strategy-logic-fixes.md).
-- **Universe narrowing + IS/OOS validation plumbing landed (Phase 2.8, `8ed17f1`).** `multi_timeframe`, `mean_reversion`, `momentum` now honor an `allowed_symbols` config — the orchestrator restricts them to the gateway 5 (previously they traded 50+ discovery-fed symbols too). New `fulltest oos` subcommand runs two backtests back-to-back and emits a side-by-side comparison (per-strategy IS vs OOS PnL / PF / WR / Sharpe / verdict). YAML strategy-parameter overrides via `--strategy-overrides`. 29 new unit tests.
-- **Strategies have no demonstrated edge** after the OMS fix + B/D shipped. IS year (2024-08 → 2025-08) on AAPL/MSFT/GOOGL/AMZN/NVDA with discovery on: 3 of 4 strategies fail IS outright; the 4th (`mean_reversion`, IS PF 1.29) collapses OOS to PF 0.27 — textbook in-sample overfit. Detail: [`data/fulltest_results/oos_comparison_20260512_211515.txt`](data/fulltest_results/oos_comparison_20260512_211515.txt).
-- **Data inventory**: `data/historical/` holds 1,447 unique symbols across two periods (2024-08 → 2025-08 and 2025-08 → 2026-02), ~6.3 GB. Covers full S&P 1500 universe in both windows.
-- **Active plan**: phased execution doc at [`docs/active-plan.md`](docs/active-plan.md).
+- **The backtest harness is now trustworthy — and that changed every prior conclusion.**
+  Phase 3 (branch `phase3-harness-fixes`, plan + findings in
+  [`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md)) calibrated the
+  fulltest pipeline against hand-computable benchmarks and found/fixed five serious harness
+  bugs: discovery scored the universe on end-of-window data (F1) with a sticky max-score cache
+  (F2); pipeline shutdown truncated every run's tail — old runs covered an unknown *prefix* of
+  their window (F7); equity ignored open positions and commissions (F6); analytics were
+  realized-only with a cost-basis curve — the source of the absurd −24/−43 Sharpes (F8); and
+  the replay producer outran the sim clock so discovery-fed symbols joined at the wrong time
+  or never (F9). Calibration now passes to the cent: year-long buy_hold reproduces the
+  hand-computed $108,595.57 exactly, with plausible Sharpe (0.69 raw) and drawdown (13.15%).
+- **Honest verdict: every strategy loses.** Post-fix IS/OOS comparison
+  (`data/fulltest_results/oos_comparison_20260613_*.txt`, label `post-harness-fixes`):
+  discovery_momentum IS PF 0.42 / OOS PF 0.45 — the old 0.04-vs-0.56 asymmetry (item #1 of the
+  previous roadmap) was the bugs, not regime. mean_reversion's celebrated IS PF 1.29 is 0.40
+  in the honest harness — the only "edge" ever measured was a truncation artifact.
+  A new daily-horizon strategy (overnight reversal, the previous item #2) was implemented,
+  tested, and failed IS at PF 0.50, and 0.63 after its one allowed tuning pass. momentum
+  trades 0 times even with its config bug fixed.
+- **New harness capabilities**: `buy_hold` calibration benchmark + `--strategies` selection
+  flag; mark-to-market daily equity curve; per-strategy unrealized P&L in reports;
+  `Data Through` coverage guard; producer pacing; sim-time-bounded discovery on seeded daily
+  universe bars; per-scan score decay. ~120 new unit tests across phase 3.
+- **Data inventory**: `data/historical/` holds 1,447 unique symbols across two periods
+  (2024-08 → 2025-08 and 2025-08 → 2026-02), ~6.3 GB. **Known limitation (F4): downloaded
+  from today's index membership — survivorship-biased.** Universe-wide long results are upper
+  bounds only.
 
-## What's next (chop order)
+## What's next (decision pending)
 
-Priorities shifted on 2026-05-12. The OOS validation killed the "tune the existing rule-based strategies" path that was item #1 — three of four fail IS, the fourth fails OOS, and no parameter tweak lifts PF from 0.17 to 1.0. The path forward is one of three branches, listed below in the order I'd recommend. Full discussion in [`docs/active-plan.md`](docs/active-plan.md) Phase 3.
+The strategy-search question is now a fork, discussed at the end of
+[`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md):
 
-| # | Item | Why now | Status |
-|---|------|---------|--------|
-| 1 | **Diagnose `discovery_momentum` IS/OOS asymmetry** | IS PF 0.04 with only 69 trades vs OOS PF 0.56 with 485 trades — too lopsided to be sample variance. Possible bug in scoring on the 2024-08→2025-08 window, possible regime mismatch, possible discovery feed differs sharply between periods. One focused session before discarding the only strategy that ever showed edge. | next up |
-| 2 | **Pick a research-backed signal and run it through the OOS comparison** | The B/D plumbing is now ready for any new strategy. Candidates: overnight reversal (buy close, sell open), end-of-day momentum, opening-drive fade. Implement one, drop the other four enabled strategies from the run, see if it survives IS+OOS. | gated on #1 outcome |
-| 3 | **Accept that strategy-design isn't the project goal — pivot to architecture** | Pipeline + OOS validation work; if the project's real value is the platform (paper trading, monitoring, multi-market, ML feature layer), call the rule-based-strategies experiment closed and move to A3 (IBKR `add_symbols`) + C2 (paper integration test). Trades the "build a profitable bot" framing for "build a working trading platform." | alternative path |
-| 4 | B2: delete `ml/` (966 LoC of disabled hand-rolled GD) | Cheap simplification; stops "what's this for?" friction. ~2 hours, orthogonal to #1–#3 | not started |
-| 5 | Expand testing: 18-month window + S&P 1500 universe | Worth it only if a strategy clears IS+OOS on the current set first. Data already on disk. | gated on a strategy surviving #1 or #2 |
-| 6 | IBKR `add_symbols` (A3) + paper integration test (C2) | Gate before any live IBKR submission. Part of branch #3 if the user picks the platform pivot. | gated on intent (see #3) |
+| Option | What | Cost | When it makes sense |
+|--------|------|------|---------------------|
+| **A** | Survivorship-clean data: reconstruct point-in-time S&P membership (Wikipedia constituent-change history) + pre-window daily seeding; then give cross-sectional 12-1 momentum an honest trial | ~1–2 days + reruns | If "build a profitable bot" still gets one properly-resourced attempt |
+| **B** | Conclude the strategy-search phase; pivot to platform (previous item #3): IBKR `add_symbols` (A3), paper integration test (C2), delete `ml/` (B2) | starts immediately | Five-for-five honest failures is a result; the platform + trustworthy harness is the demonstrated value |
 
-**Per-strategy state (post-Phase 2.8, IS year vs OOS half-year, discovery on, narrowed universe)**:
+Recommendation as of 2026-06-13: **B**, unless A is explicitly wanted. Either way B2
+(delete `ml/`, ~2h) is cheap and orthogonal — do it whenever.
 
-| Strategy | IS Trades | IS PF | IS P&L | OOS PF | OOS P&L | Verdict |
-|----------|----------:|------:|-------:|-------:|--------:|---------|
-| `discovery_momentum` | 69 | 0.04 | -$148 | 0.56 | -$1,975 | IS_UNPROFITABLE — but IS sample is suspicious, see #1 |
-| `mean_reversion` | 78 | **1.29** | **+$714** | 0.27 | -$606 | BROKEN — passes IS, OOS collapse is textbook overfit |
-| `multi_timeframe` | 613 | 0.24 | -$10,773 | 0.28 | -$5,159 | IS_UNPROFITABLE — no edge at the signal level |
-| `pairs` | 7 | 0.00 | -$253 | 0.01 | -$235 | IS_UNPROFITABLE — too low-frequency to evaluate |
+**Per-strategy state (post-harness-fixes, IS year vs OOS half-year, discovery on, narrowed universe)**:
 
-**Phase 2.7 + 2.8 deliverables** (commits `08c9224`, `8ed17f1`): OMS re-entry bug fix; `allowed_symbols` filter on three rule-based strategies; orchestrator wires gateway symbols into the filter; YAML `strategy_overrides` for manual parameter iteration; `fulltest oos` subcommand + comparison module + text/JSON report. The new validation reports in `data/fulltest_results/` (e.g., `oos_comparison_20260512_211515.txt`) are the new regression baseline.
+| Strategy | IS Trades | IS PF | IS P&L | OOS Trades | OOS PF | OOS P&L | Verdict |
+|----------|----------:|------:|-------:|-----------:|-------:|--------:|---------|
+| `discovery_momentum` | 1,506 | 0.42 | -$13,530 | 6,659 | 0.45 | -$21,938 | DEAD — consistent, large-sample, unprofitable |
+| `mean_reversion` | 319 | 0.40 | -$4,061 | 164 | 0.36 | -$2,368 | DEAD — old IS PF 1.29 was a harness artifact |
+| `multi_timeframe` | 3,810 | 0.21 | -$64,634 | 1,933 | 0.21 | -$38,481 | DEAD — no edge at the signal level |
+| `pairs` | 12 | 0.06 | -$824 | 3 | 0.01 | -$235 | DEAD — too low-frequency to evaluate, loses anyway |
+| `momentum` | 0 | — | — | 0 | — | — | DEAD — gates never co-fire even with fixed config |
+| `overnight_reversal` (new) | 127 | 0.63 | -$2,479 | — | — | — | DEAD — failed IS after one tuning pass; OOS never earned |
 
-**Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup. `run_in_executor` removal saved 6%. Remaining ~94% wall clock unaccounted-for; not investigated. C5 (cash check) fixed in 2.6.
+All six should ship `enabled: false` for any non-research run.
+
+**Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup.
+`run_in_executor` removal saved 6%. C5 (cash check) fixed in 2.6. Note: wall-clock per run
+roughly doubled with the F7 drain fix — old timings measured truncated runs.
 
 ## Deferred (don't work on these yet)
 
-Real gaps, but not worth the effort until strategies post positive expectancy.
+Real gaps, but not worth the effort until the Option A/B decision lands.
 
 - **External alert channels** (email/SMS/Slack) — was "Iteration 12" in older planning. Audit C1.
 - **Multi-market (EU/Asia)** — design doc roadmap, never shipped. Audit B4.
@@ -53,6 +78,8 @@ Real gaps, but not worth the effort until strategies post positive expectancy.
 
 ## History
 
+- Phase 3 (harness trust + strategy verdicts): [`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md).
+- Phase 2 era plans: [`docs/active-plan.md`](docs/active-plan.md) (superseded by phase 3 doc).
 - What was built, when: [`docs/PROGRESS.md`](docs/PROGRESS.md).
 - Original Jan v2.0 design vision: [`next-gen-trading-platform-design.md`](next-gen-trading-platform-design.md). Useful for component-level design context, but several sections have drifted from reality — the audit's §B1–B5 list every divergence.
 - Old iteration plans (3, 4, 5, 6, 7, 8, 9, 11): [`docs/iterations/archive/`](docs/iterations/archive/).

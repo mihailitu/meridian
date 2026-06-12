@@ -236,6 +236,28 @@ periods → disable it alongside the other four; iteration 6 starts from a clean
 anywhere → one diagnosis session before touching parameters. Either way, write the verdict
 into ROADMAP (per-strategy state table).
 
+**Result (2026-06-13, `oos_comparison` labeled post-harness-fixes)**: **KILL.**
+
+| strategy | IS trades | IS PF | OOS trades | OOS PF |
+|---|---|---|---|---|
+| discovery_momentum | 1,506 | 0.42 | 6,659 | 0.45 |
+| mean_reversion | 319 | 0.40 | 164 | 0.36 |
+| multi_timeframe | 3,810 | 0.21 | 1,933 | 0.21 |
+| pairs | 12 | 0.06 | 3 | 0.01 |
+| momentum | 0 | — | 0 | — |
+
+ROADMAP item #1 is closed: the old 0.04-vs-0.56 IS/OOS asymmetry is gone (0.42 vs 0.45 —
+it was the bugs, not regime). discovery_momentum is consistently unprofitable with large
+samples in both periods. Note the trade counts vs the broken-era runs (multi_timeframe 3,810
+vs 613): the old harness really was processing only a fraction of each window. mean_reversion's
+broken-era IS PF 1.29 is now 0.40 — the one "edge" we ever measured was a harness artifact.
+The remaining OOS-vs-IS trade-rate difference for discovery_momentum (~9x/day) tracks the
+higher-volatility OOS period producing more discoveries — and PF consistency across the
+periods says it's regime, not leakage.
+
+**Five for five: every strategy, honestly measured, loses.** The strategy-search phase
+question moves to the Option A / Option B fork documented under iteration 6.
+
 ### Iteration 6 — Overnight reversal: implement + IS run
 
 Buy the day's biggest intraday losers shortly before the close, exit at next open
