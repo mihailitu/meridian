@@ -50,6 +50,11 @@ class ReportGenerator:
         )
 
         try:
+            # Data coverage: how far the persisted bars actually reach.
+            result.last_bar_time = await conn.fetchval(
+                "SELECT MAX(time) FROM bars WHERE interval = '1m'"
+            )
+
             # Count orders and fills
             result.total_orders = await conn.fetchval(
                 "SELECT COUNT(*) FROM orders"
@@ -63,12 +68,29 @@ class ReportGenerator:
                 conn, config
             )
 
-            # Calculate final equity
+            # Mark open positions to the last available 1m close so equity
+            # reflects what's still held (realized_pnl alone reports $0 for
+            # anything not yet closed). Distribute per strategy too.
+            unrealized_by_strategy = await self._get_unrealized_by_strategy(conn)
+            total_unrealized = sum(unrealized_by_strategy.values())
+            for sr in result.strategy_results:
+                sr.unrealized_pnl = unrealized_by_strategy.get(sr.strategy_id, 0.0)
+
+            # Final equity = capital + realized + open-position value change
+            # - commissions (realized_pnl is gross of commissions; they only
+            # ever leave cash via fills).
             total_realized_pnl = await conn.fetchval(
                 "SELECT COALESCE(SUM(realized_pnl), 0) FROM positions"
             )
-            result.final_equity = config.initial_capital + float(
-                total_realized_pnl or 0
+            total_commission = await conn.fetchval(
+                "SELECT COALESCE(SUM(commission), 0) FROM fills"
+            )
+            result.total_unrealized_pnl = total_unrealized
+            result.final_equity = (
+                config.initial_capital
+                + float(total_realized_pnl or 0)
+                + total_unrealized
+                - float(total_commission or 0)
             )
 
             # Get discovery results from DB (supplements in-memory stats)
@@ -108,6 +130,41 @@ class ReportGenerator:
             await conn.close()
 
         return result
+
+    async def _get_unrealized_by_strategy(
+        self, conn: asyncpg.Connection
+    ) -> dict[str, float]:
+        """Mark-to-market P&L of open positions, keyed by strategy_id.
+
+        Each open position is valued at its symbol's last persisted 1m bar
+        close (the end of the replayed window).
+        """
+        rows = await conn.fetch(
+            """
+            SELECT p.strategy_id, p.symbol, p.side, p.quantity,
+                   p.avg_entry_price, b.close AS last_close
+            FROM positions p
+            JOIN LATERAL (
+                SELECT close FROM bars
+                WHERE symbol = p.symbol AND interval = '1m'
+                ORDER BY time DESC
+                LIMIT 1
+            ) b ON TRUE
+            WHERE p.closed_at IS NULL AND p.quantity > 0
+            """
+        )
+        unrealized: dict[str, float] = {}
+        for row in rows:
+            sign = -1 if row["side"] == "short" else 1
+            pnl = (
+                (float(row["last_close"]) - float(row["avg_entry_price"]))
+                * float(row["quantity"])
+                * sign
+            )
+            unrealized[row["strategy_id"]] = (
+                unrealized.get(row["strategy_id"], 0.0) + pnl
+            )
+        return unrealized
 
     async def _get_strategy_results(
         self, conn: asyncpg.Connection, config: FullBacktestConfig
@@ -267,14 +324,24 @@ def format_text_report(result: FullBacktestResult) -> str:
     lines.append(f"  Ticks Generated:  {result.total_ticks_generated:,}")
     lines.append(f"  Total Orders:     {result.total_orders:,}")
     lines.append(f"  Total Fills:      {result.total_fills:,}")
+    if result.last_bar_time is not None:
+        lines.append(f"  Data Through:     {result.last_bar_time:%Y-%m-%d %H:%M} (window end {cfg.end})")
+        shortfall = (cfg.end - result.last_bar_time.date()).days
+        if shortfall > 4:
+            lines.append(
+                f"  *** WARNING: bars stop {shortfall} days before the window end - "
+                "pipeline truncated, all metrics understate the period ***"
+            )
     lines.append("")
 
     # Overall P&L
     lines.append("Overall:")
     lines.append(f"  Final Equity:     ${result.final_equity:,.2f}")
-    lines.append(f"  Total P&L:        ${result.total_pnl:,.2f}")
-    pct = (result.total_pnl / cfg.initial_capital * 100) if cfg.initial_capital else 0
-    lines.append(f"  Return:           {pct:+.2f}%")
+    lines.append(f"  Realized P&L:     ${result.total_pnl:,.2f}")
+    lines.append(f"  Unrealized P&L:   ${result.total_unrealized_pnl:,.2f} (open positions at last close)")
+    total = result.total_pnl + result.total_unrealized_pnl
+    pct = (total / cfg.initial_capital * 100) if cfg.initial_capital else 0
+    lines.append(f"  Return:           {pct:+.2f}% (realized + unrealized, before commissions)")
     lines.append("")
 
     # Portfolio analytics
@@ -305,7 +372,9 @@ def format_text_report(result: FullBacktestResult) -> str:
             lines.append(f"  {'~' * 40}")
             lines.append(f"    Trades:          {sr.trade_count} ({sr.win_count}W / {sr.loss_count}L)")
             lines.append(f"    Win Rate:        {sr.win_rate * 100:.1f}%")
-            lines.append(f"    Total P&L:       {_fmt_dollar(sr.total_pnl)}")
+            lines.append(f"    Realized P&L:    {_fmt_dollar(sr.total_pnl)}")
+            if sr.unrealized_pnl:
+                lines.append(f"    Unrealized P&L:  {_fmt_dollar(sr.unrealized_pnl)} (open positions)")
             lines.append(f"    Sharpe Ratio:    {_fmt_ratio(sr.sharpe_ratio)}")
             lines.append(f"    Max Drawdown:    {_fmt_pct(sr.max_drawdown)}")
             lines.append(f"    Annualized Ret:  {_fmt_pct(sr.annualized_return)}")
@@ -377,12 +446,16 @@ def format_json_report(result: FullBacktestResult) -> str:
         "data": {
             "bars_processed": result.total_bars_processed,
             "ticks_generated": result.total_ticks_generated,
+            "last_bar_time": result.last_bar_time.isoformat()
+            if result.last_bar_time
+            else None,
         },
         "results": {
             "total_orders": result.total_orders,
             "total_fills": result.total_fills,
             "final_equity": result.final_equity,
             "total_pnl": result.total_pnl,
+            "total_unrealized_pnl": result.total_unrealized_pnl,
             "return_pct": (result.total_pnl / result.config.initial_capital * 100)
             if result.config.initial_capital
             else 0,
@@ -407,6 +480,7 @@ def format_json_report(result: FullBacktestResult) -> str:
                 "loss_count": sr.loss_count,
                 "win_rate": sr.win_rate,
                 "total_pnl": sr.total_pnl,
+                "unrealized_pnl": sr.unrealized_pnl,
                 "sharpe_ratio": sr.sharpe_ratio,
                 "max_drawdown": sr.max_drawdown,
                 "annualized_return": sr.annualized_return,

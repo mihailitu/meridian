@@ -13,6 +13,7 @@ from typing import Optional
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import redis.asyncio as aioredis
 
 from axtrade.common import (
     BarRepository,
@@ -92,6 +93,70 @@ def daily_rows_from_minute_df(df: pd.DataFrame, symbol: str) -> list[tuple]:
             )
         )
     return rows
+
+
+async def _drain_stream(
+    client: "aioredis.Redis",
+    stream: str,
+    group: str,
+    label: str,
+    poll_seconds: float = 0.5,
+    stall_timeout: float = 30.0,
+) -> None:
+    """Wait until `group` has fully consumed `stream`.
+
+    Drained means the group's last-delivered-id has reached the stream's
+    last-generated-id and no delivered message is pending acknowledgement
+    (the consumers ack only after processing). Bails out with a warning if
+    the consumer stops making progress, so a dead consumer can't hang the
+    run forever.
+    """
+    last_seen: Optional[str] = None
+    stalled = 0.0
+    logged = 0.0
+    while True:
+        try:
+            info = await client.xinfo_stream(stream)
+            groups = await client.xinfo_groups(stream)
+        except aioredis.ResponseError:
+            return  # stream never created — nothing was produced
+        target = info.get("last-generated-id")
+        ginfo = next((g for g in groups if g.get("name") == group), None)
+        if ginfo is None:
+            return  # consumer group never attached
+        delivered = ginfo.get("last-delivered-id")
+        pending = ginfo.get("pending", 0)
+
+        if delivered == target and not pending:
+            logger.info("Stream drained", stream=label)
+            return
+
+        if delivered == last_seen:
+            stalled += poll_seconds
+            if stalled >= stall_timeout:
+                logger.warning(
+                    "Stream drain stalled, giving up",
+                    stream=label,
+                    delivered=str(delivered),
+                    target=str(target),
+                    pending=pending,
+                )
+                return
+        else:
+            stalled = 0.0
+            last_seen = delivered
+
+        logged += poll_seconds
+        if logged >= 15.0:
+            logged = 0.0
+            logger.info(
+                "Draining stream",
+                stream=label,
+                delivered=str(delivered),
+                target=str(target),
+                pending=pending,
+            )
+        await asyncio.sleep(poll_seconds)
 
 
 class FullBacktestOrchestrator:
@@ -247,14 +312,22 @@ class FullBacktestOrchestrator:
         # discovery pushes onto the bar stream. Inject `allowed_symbols` so
         # they stay within the gateway 5. discovery_momentum gates by score
         # and pairs is symbol-bound by config, so neither needs this.
-        narrowed_types = {"multi_timeframe", "mean_reversion", "momentum"}
+        narrowed_types = {"multi_timeframe", "mean_reversion", "momentum", "buy_hold"}
         gateway_symbol_list = list(self._bt_config.symbols)
         overrides = self._bt_config.strategy_overrides
         config.strategies.enabled = []
-        skip_strategies = {"ml_prediction"}
-        for stype, sclass in STRATEGY_TYPES.items():
-            if stype in skip_strategies:
-                continue
+        if self._bt_config.enabled_strategies is not None:
+            unknown = set(self._bt_config.enabled_strategies) - set(STRATEGY_TYPES)
+            if unknown:
+                raise ValueError(
+                    f"Unknown strategy types: {sorted(unknown)}. "
+                    f"Available: {sorted(STRATEGY_TYPES)}"
+                )
+            chosen = list(self._bt_config.enabled_strategies)
+        else:
+            # buy_hold is a calibration benchmark, opt-in only.
+            chosen = [t for t in STRATEGY_TYPES if t not in {"ml_prediction", "buy_hold"}]
+        for stype in chosen:
             strat_cfg: dict = {
                 "position_size": safe_position_size,
                 "max_positions": per_strategy_max_positions,
@@ -478,15 +551,37 @@ class FullBacktestOrchestrator:
         await replay.completion_event.wait()
         logger.info("Replay complete, draining pipeline...")
 
-        # Give aggregator time to process remaining ticks
-        await asyncio.sleep(2)
-        await aggregator.stop()
-        logger.info("Aggregator stopped")
+        # The replay producer finishes far ahead of the consumers. A fixed
+        # grace period here used to truncate the simulation tail — the
+        # 2025-08 calibration run kept only the first 7 trading days of
+        # bars (28%) before the aggregator was stopped. Wait until each
+        # consumer group has actually consumed its backlog instead.
+        drain_client = aioredis.Redis(
+            host=config.redis.host,
+            port=config.redis.port,
+            db=config.redis.db,
+            decode_responses=True,
+        )
+        try:
+            await _drain_stream(
+                drain_client,
+                config.aggregator.source_stream,
+                config.aggregator.consumer_group,
+                label="ticks->aggregator",
+            )
+            await aggregator.stop()
+            logger.info("Aggregator stopped")
 
-        # Give strategy runner time to process remaining bars
-        await asyncio.sleep(2)
-        await strategy_runner.stop()
-        logger.info("Strategy runner stopped")
+            await _drain_stream(
+                drain_client,
+                config.strategies.bar_stream,
+                config.strategies.consumer_group,
+                label="bars->strategies",
+            )
+            await strategy_runner.stop()
+            logger.info("Strategy runner stopped")
+        finally:
+            await drain_client.aclose()
 
         # Stop gateway
         await gateway.stop()

@@ -8,6 +8,7 @@ from .control import (
     StrategyState,
     StrategyStateRepository,
 )
+from .buy_hold import BuyHoldStrategy
 from .discovery_momentum import DiscoveryMomentumStrategy
 from .mean_reversion import MeanReversionStrategy
 from .ml_prediction import MLPredictionStrategy
@@ -17,6 +18,7 @@ from .pairs import PairsStrategy
 
 # Strategy type registry
 STRATEGY_TYPES: dict[str, type[BaseStrategy]] = {
+    "buy_hold": BuyHoldStrategy,
     "momentum": MomentumBreakout,
     "mean_reversion": MeanReversionStrategy,
     "multi_timeframe": MultiTimeframeStrategy,
@@ -28,6 +30,7 @@ STRATEGY_TYPES: dict[str, type[BaseStrategy]] = {
 __all__ = [
     "BarWithIndicators",
     "BaseStrategy",
+    "BuyHoldStrategy",
     "ControlCommand",
     "DiscoveryMomentumStrategy",
     "MeanReversionStrategy",

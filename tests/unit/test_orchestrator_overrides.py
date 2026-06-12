@@ -103,3 +103,48 @@ class TestStrategyOverrides:
         for entry in cfg.strategies.enabled:
             assert "position_size" in entry.config
             assert "max_positions" in entry.config
+
+
+class TestEnabledStrategiesSelection:
+    def test_default_excludes_buy_hold_and_ml_prediction(self) -> None:
+        orch = _make_orchestrator()
+        cfg = orch._build_isolated_config()
+        enabled_types = {entry.type for entry in cfg.strategies.enabled}
+        assert "buy_hold" not in enabled_types
+        assert "ml_prediction" not in enabled_types
+
+    def test_default_includes_core_strategies(self) -> None:
+        orch = _make_orchestrator()
+        cfg = orch._build_isolated_config()
+        enabled_types = {entry.type for entry in cfg.strategies.enabled}
+        for stype in ("momentum", "mean_reversion", "multi_timeframe", "pairs", "discovery_momentum"):
+            assert stype in enabled_types, f"{stype!r} missing from default enabled strategies"
+
+    def test_explicit_buy_hold_gives_exactly_one_strategy(self) -> None:
+        orch = _make_orchestrator()
+        orch._bt_config.enabled_strategies = ["buy_hold"]
+        cfg = orch._build_isolated_config()
+        assert len(cfg.strategies.enabled) == 1
+        assert cfg.strategies.enabled[0].type == "buy_hold"
+
+    def test_explicit_buy_hold_gets_allowed_symbols(self) -> None:
+        # buy_hold is in narrowed_types, so allowed_symbols must be injected.
+        orch = _make_orchestrator(symbols=["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"])
+        orch._bt_config.enabled_strategies = ["buy_hold"]
+        cfg = orch._build_isolated_config()
+        entry = cfg.strategies.enabled[0]
+        assert entry.config["allowed_symbols"] == ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+
+    def test_unknown_strategy_raises_value_error(self) -> None:
+        orch = _make_orchestrator()
+        orch._bt_config.enabled_strategies = ["nonexistent"]
+        with pytest.raises(ValueError, match="nonexistent"):
+            orch._build_isolated_config()
+
+    def test_buy_hold_and_momentum_gives_exactly_two(self) -> None:
+        orch = _make_orchestrator()
+        orch._bt_config.enabled_strategies = ["buy_hold", "momentum"]
+        cfg = orch._build_isolated_config()
+        assert len(cfg.strategies.enabled) == 2
+        enabled_types = {entry.type for entry in cfg.strategies.enabled}
+        assert enabled_types == {"buy_hold", "momentum"}

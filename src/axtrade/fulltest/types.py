@@ -22,6 +22,9 @@ class FullBacktestConfig:
     consumer_group_prefix: str = "bt_"
     initial_capital: float = 100000.0
     discovery_enabled: bool = True
+    # Strategy types to enable for this run. None = all registered types
+    # except ml_prediction and the buy_hold calibration benchmark.
+    enabled_strategies: Optional[list[str]] = None
     output_dir: str = "data/fulltest_results"
     report_format: str = "text"
     skip_download: bool = True
@@ -61,6 +64,9 @@ class StrategyResult:
     win_count: int = 0
     loss_count: int = 0
     total_pnl: float = 0.0
+    # Mark-to-market P&L of positions still open at the end of the window
+    # (total_pnl above is realized-only).
+    unrealized_pnl: float = 0.0
     max_drawdown: float = 0.0
     sharpe_ratio: Optional[float] = None
     profit_factor: Optional[float] = None
@@ -102,9 +108,15 @@ class FullBacktestResult:
     end_time: datetime
     total_bars_processed: int = 0
     total_ticks_generated: int = 0
+    # Timestamp of the last 1m bar actually persisted. If this is well short
+    # of config.end the pipeline was truncated and every metric understates
+    # the window (see the 2025-08 calibration run: only 7 of 21 days made it
+    # to the DB before the drain fix).
+    last_bar_time: Optional[datetime] = None
     total_orders: int = 0
     total_fills: int = 0
     final_equity: float = 0.0
+    total_unrealized_pnl: float = 0.0
     strategy_results: list[StrategyResult] = field(default_factory=list)
     discovery: DiscoveryResultSummary = field(default_factory=DiscoveryResultSummary)
     overall_sharpe: Optional[float] = None

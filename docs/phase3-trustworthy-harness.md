@@ -132,12 +132,38 @@ that before any strategy work.
 
 - Implement trivial `buy_hold` strategy: buy each allowed symbol once on its first bar, never
   exit. ~40 LoC + registration; `allowed_symbols` = gateway 5; no discovery dependency.
+  Opt-in only via new `--strategies` flag (excluded from default fulltest runs).
 - Hand-compute expected P&L from parquet closes for **one month** (2025-08): sum over symbols
   of `qty × (last_close − first_close)` minus commissions and one entry slippage.
 - Run fulltest for that month with ONLY `buy_hold` enabled (`--no-discovery`), ~10 min.
 
 **Gate**: |fulltest P&L − expected| within commissions + slippage tolerance. Pass → iteration
 3. Fail → the divergence is the bug; fix inside this iteration before anything else runs.
+
+**Found during execution (2026-06-12)** — the gate did its job; two harness bugs, both fixed
+inside this iteration:
+
+- **F6 — report ignored open positions and commissions.** `final_equity` was
+  `initial + SUM(realized_pnl)`: unrealized P&L of anything still held at window end simply
+  didn't exist (buy_hold would have read $0.00 by construction), and commissions never left
+  equity even though they leave PaperBroker cash. Fixed: open positions are marked to their
+  symbol's last persisted 1m close (per strategy and overall), and
+  `final_equity = initial + realized + unrealized − commissions`. Every prior fulltest report
+  understated/overstated any strategy holding positions at the end.
+- **F7 — pipeline shutdown truncated the simulation tail.** After the replay producer
+  finished, the orchestrator slept a fixed 2s, then stopped the aggregator (and 2s later the
+  strategy runner). The producer finishes far ahead of the consumers, so the backlog was
+  guillotined: the first calibration run persisted bars only through **Aug 11 of a 31-day
+  window (28%)** while reporting "95,409 bars processed" (a replay-side count). Every prior
+  fulltest result — including both periods of the IS/OOS comparison — covered an unknown
+  prefix of its window, not the window. Fixed: shutdown now drains each Redis consumer group
+  (last-delivered-id == last-generated-id, pending 0, with stall detection) before stopping
+  services, and the report prints a `Data Through:` coverage line with a loud warning when
+  persisted bars stop >4 days before the window end.
+
+Validated against real data: entry fills matched first-bar-close × 1.001 (10 bps slippage) to
+the cent; accounting identity `equity = initial + Σqty×(mark − fill) − commissions` holds
+exactly against DB fills.
 
 ### Iteration 3 — Calibration at scale + metrics sanity
 

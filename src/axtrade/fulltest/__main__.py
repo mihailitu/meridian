@@ -138,6 +138,13 @@ def _add_run_only_args(parser: argparse.ArgumentParser) -> None:
         help="Disable discovery scanning"
     )
     parser.add_argument(
+        "--strategies", nargs="+", default=None, metavar="TYPE",
+        help=(
+            "Strategy types to enable (e.g. --strategies buy_hold). "
+            "Default: all except ml_prediction and buy_hold"
+        ),
+    )
+    parser.add_argument(
         "--format", choices=["text", "json"], default="text",
         help="Report format (default: text)"
     )
@@ -205,6 +212,7 @@ def _build_run_config(args, start: date, end: date, symbols: list[str],
         backtest_db_name=args.db_name,
         initial_capital=args.capital,
         discovery_enabled=not args.no_discovery,
+        enabled_strategies=args.strategies,
         output_dir=args.output_dir,
         report_format=args.format,
         skip_download=not args.download,
