@@ -51,6 +51,8 @@ python -m axtrade.fulltest download --start 2025-08-01 --end 2026-02-01 --symbol
 python -m axtrade.fulltest run      --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
 
 # Fulltest extras: --universe sp500|sp1500 instead of --symbols; --download on `run` auto-fetches missing data
+# --strategies TYPE [TYPE ...] selects strategy types; default runs all EXCEPT ml_prediction,
+# buy_hold, and overnight_reversal (opt-in: calibration benchmark / not yet through the IS/OOS gate)
 # IS/OOS comparison: two back-to-back fulltests + side-by-side per-strategy report (PnL/PF/WR/Sharpe/verdict)
 python -m axtrade.fulltest oos --is-start 2024-08-01 --is-end 2025-08-01 \
     --oos-start 2025-08-01 --oos-end 2026-02-01 \
@@ -100,7 +102,7 @@ Each service is runnable as a Python module:
 
 **Adding a data adapter**: Implement `DataAdapter` ABC in `gateway/base.py` (`connect`, `disconnect`, `subscribe`, `stream_ticks`). Register in gateway service.
 
-**Adding a strategy**: Inherit from `BaseStrategy` in `strategies/base.py`, implement `on_bar(data: BarWithIndicators) -> Optional[Order]`. Register the strategy name in `strategies/__init__.py` and add to `strategies.enabled` list in `config/default.yaml`. Non-discovery strategies should honor the `allowed_symbols` config key (universe filter) — when discovery `auto_subscribe` is on, the bar stream carries 50+ discovered symbols, and strategies without the filter will trade all of them. The fulltest orchestrator injects `allowed_symbols` (the gateway symbol list) into `momentum`, `mean_reversion`, and `multi_timeframe`.
+**Adding a strategy**: Inherit from `BaseStrategy` in `strategies/base.py`, implement `on_bar(data: BarWithIndicators) -> Optional[Order]`. Register the strategy name in `strategies/__init__.py` and add to `strategies.enabled` list in `config/default.yaml`. Non-discovery strategies should honor the `allowed_symbols` config key (universe filter) — when discovery `auto_subscribe` is on, the bar stream carries 50+ discovered symbols, and strategies without the filter will trade all of them. The fulltest orchestrator injects `allowed_symbols` (the gateway symbol list) into `momentum`, `mean_reversion`, `multi_timeframe`, `buy_hold`, and `overnight_reversal` (see `narrowed_types` in `fulltest/orchestrator.py` — add new non-discovery strategies there too).
 
 **Adding a broker**: Implement `BrokerProtocol` in `oms/broker.py` (`submit_order`, `cancel_order`, `get_positions`, `set_fill_callback`).
 
@@ -113,7 +115,7 @@ Each service is runnable as a Python module:
 - `common/`: Shared types (`Tick`, `Bar` as frozen dataclasses), config loading (`load_config()` from `config/default.yaml`), Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
 - `gateway/`: Data adapters implementing `DataAdapter` - Mock, IBKR (`ib_insync`), Alpaca, Yahoo
 - `indicators/`: `IndicatorEngine` with rolling buffers for SMA, RSI, Bollinger Bands, ATR, and market regime detection
-- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`
+- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`, `overnight_reversal`, and `buy_hold` (a calibration benchmark whose fulltest result is computable by hand — used to validate the harness's fill/accounting/reporting paths, not to trade)
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
 - `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` / `SP1500SymbolProvider` in `fulltest/universe.py` for discovery universes. `comparison.py` backs the `oos` subcommand (IS vs OOS per-strategy report). Defaults to `--redis-db 1` and `--db-name axtrade_backtest` so it never touches live state (db=0 / `axtrade`)
@@ -136,7 +138,7 @@ Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come f
 
 ### Project Docs
 
-`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings).
+`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log).
 
 ### Helper Scripts
 
