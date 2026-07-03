@@ -2,7 +2,18 @@
 
 ## Design Document v2.0
 
-> **Status (2026-05-04):** Original January 2026 vision. Useful for component-level design context, but several sections have diverged from what was actually built. Treat as historical: see [`docs/AUDIT-2026-05-02.md`](docs/AUDIT-2026-05-02.md) §B1–B5 for explicit deviations (macro regime, ML layer, on_tick/on_regime_change hooks, multi-market, horizontal scaling) and [`ROADMAP.md`](ROADMAP.md) for what's actually planned next.
+> **Status (2026-07-03, supersedes 2026-05-04 note):** Historical document — the original
+> January 2026 vision. Useful for component-level design context only. The following
+> ambitions are **retired, not deferred** (phase-4 platform pivot,
+> [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md)): multi-market coverage
+> (§2), millisecond-level execution latency, horizontal scaling / clone-and-distribute,
+> the ML/AI strategy layer, `on_tick`/`on_regime_change` strategy hooks, and dynamic
+> capital allocation. Rationale: the strategy-search phase concluded 2026-06-13 with six
+> honest failures (see [`ROADMAP.md`](ROADMAP.md) per-strategy table); there is no strategy
+> to scale, and millisecond latency is irrelevant at any horizon this stack can compete at.
+> The project's success criterion is now a trustworthy strategy-evaluation platform with
+> live paper-trading capability. See [`docs/AUDIT-2026-05-02.md`](docs/AUDIT-2026-05-02.md)
+> §B1–B5 for the build-vs-design deviations.
 
 ---
 

@@ -3,10 +3,20 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-06-13._
+_Last refreshed: 2026-07-03._
 
 ## Today
 
+- **Decision (2026-07-03): the strategy-search phase is concluded — the project is now a
+  platform.** The phase-3 fork below was resolved as **Option B**. Success criterion,
+  reframed: a **trustworthy strategy-evaluation platform with live paper-trading
+  capability**. Not the v2.0 design-doc ambition (multi-market, millisecond latency,
+  horizontal scaling, GPU ML) — those are retired, not deferred (see "Retired" below).
+  Active plan: [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md) —
+  seven gated iterations: docs reframe, green test baseline + all strategies shipped
+  disabled, delete `ml/`, IBKR dynamic subscribe (A3), paper integration test (C2),
+  PaperBroker fill realism (C3), wrap-up. An optional point-in-time-universe data
+  iteration (the useful half of Option A) is documented there but not approved.
 - **The backtest harness is now trustworthy — and that changed every prior conclusion.**
   Phase 3 (branch `phase3-harness-fixes`, plan + findings in
   [`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md)) calibrated the
@@ -35,18 +45,18 @@ _Last refreshed: 2026-06-13._
   from today's index membership — survivorship-biased.** Universe-wide long results are upper
   bounds only.
 
-## What's next (decision pending)
+## What's next
 
-The strategy-search question is now a fork, discussed at the end of
-[`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md):
+**Resolved 2026-07-03: Option B.** The fork (A: survivorship-clean data + one cross-sectional
+momentum trial; B: conclude strategy search, pivot to platform) is discussed at the end of
+[`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md). Rationale for B:
+five-for-five honest failures is a result, not bad luck (phase-3 finding F5 — no edge exists
+at this horizon for this stack); the remaining documented anomaly family (cross-sectional
+momentum) would at best replicate an ETF factor exposure; the demonstrated value is the
+platform + calibrated harness. Option A's *data work* survives as an optional, unapproved
+iteration in the phase-4 plan — it is a harness-quality feature, not a bot revival.
 
-| Option | What | Cost | When it makes sense |
-|--------|------|------|---------------------|
-| **A** | Survivorship-clean data: reconstruct point-in-time S&P membership (Wikipedia constituent-change history) + pre-window daily seeding; then give cross-sectional 12-1 momentum an honest trial | ~1–2 days + reruns | If "build a profitable bot" still gets one properly-resourced attempt |
-| **B** | Conclude the strategy-search phase; pivot to platform (previous item #3): IBKR `add_symbols` (A3), paper integration test (C2), delete `ml/` (B2) | starts immediately | Five-for-five honest failures is a result; the platform + trustworthy harness is the demonstrated value |
-
-Recommendation as of 2026-06-13: **B**, unless A is explicitly wanted. Either way B2
-(delete `ml/`, ~2h) is cheap and orthogonal — do it whenever.
+Work queue: [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md).
 
 **Per-strategy state (post-harness-fixes, IS year vs OOS half-year, discovery on, narrowed universe)**:
 
@@ -67,14 +77,23 @@ roughly doubled with the F7 drain fix — old timings measured truncated runs.
 
 ## Deferred (don't work on these yet)
 
-Real gaps, but not worth the effort until the Option A/B decision lands.
+Real gaps, not scheduled.
 
-- **External alert channels** (email/SMS/Slack) — was "Iteration 12" in older planning. Audit C1.
-- **Multi-market (EU/Asia)** — design doc roadmap, never shipped. Audit B4.
-- **Horizontal scaling / worker partitioning** — design doc only. Audit B5.
-- **`on_tick` / `on_regime_change` strategy hooks** — design doc only. Audit B3.
-- **PaperBroker volume realism** — audit C3.
+- **External alert channels** (email/SMS/Slack) — was "Iteration 12" in older planning. Audit
+  C1. Revisit after phase 4 lands.
 - **`axtrade` package vs `meridian` repo name** — cosmetic. Audit C4.
+
+Note: PaperBroker volume realism (audit C3) moved out of deferred — it is phase-4 iteration 6.
+
+## Retired (don't resurrect without a new written case)
+
+Design-doc ambitions retired with the 2026-07-03 platform pivot. There is no strategy to
+scale, and none of these change that.
+
+- **Multi-market (EU/Asia)** — audit B4.
+- **Horizontal scaling / worker partitioning / millisecond-latency targets** — audit B5.
+- **`on_tick` / `on_regime_change` strategy hooks** — audit B3.
+- **ML/AI strategy layer** — audit B2; `ml/` deletion is phase-4 iteration 3.
 
 ## History
 
