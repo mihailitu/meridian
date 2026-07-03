@@ -23,7 +23,7 @@ class FullBacktestConfig:
     initial_capital: float = 100000.0
     discovery_enabled: bool = True
     # Strategy types to enable for this run. None = all registered types
-    # except ml_prediction and the buy_hold calibration benchmark.
+    # except the buy_hold calibration benchmark and overnight_reversal.
     enabled_strategies: Optional[list[str]] = None
     output_dir: str = "data/fulltest_results"
     report_format: str = "text"

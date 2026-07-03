@@ -11,7 +11,6 @@ from .control import (
 from .buy_hold import BuyHoldStrategy
 from .discovery_momentum import DiscoveryMomentumStrategy
 from .mean_reversion import MeanReversionStrategy
-from .ml_prediction import MLPredictionStrategy
 from .momentum import MomentumBreakout
 from .multi_timeframe import MultiTimeframeStrategy
 from .overnight_reversal import OvernightReversalStrategy
@@ -24,7 +23,6 @@ STRATEGY_TYPES: dict[str, type[BaseStrategy]] = {
     "mean_reversion": MeanReversionStrategy,
     "multi_timeframe": MultiTimeframeStrategy,
     "pairs": PairsStrategy,
-    "ml_prediction": MLPredictionStrategy,
     "discovery_momentum": DiscoveryMomentumStrategy,
     "overnight_reversal": OvernightReversalStrategy,
 }
@@ -36,7 +34,6 @@ __all__ = [
     "ControlCommand",
     "DiscoveryMomentumStrategy",
     "MeanReversionStrategy",
-    "MLPredictionStrategy",
     "MomentumBreakout",
     "MultiTimeframeStrategy",
     "OvernightReversalStrategy",

@@ -51,8 +51,8 @@ python -m axtrade.fulltest download --start 2025-08-01 --end 2026-02-01 --symbol
 python -m axtrade.fulltest run      --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
 
 # Fulltest extras: --universe sp500|sp1500 instead of --symbols; --download on `run` auto-fetches missing data
-# --strategies TYPE [TYPE ...] selects strategy types; default runs all EXCEPT ml_prediction,
-# buy_hold, and overnight_reversal (opt-in: calibration benchmark / not yet through the IS/OOS gate)
+# --strategies TYPE [TYPE ...] selects strategy types; default runs all EXCEPT buy_hold and
+# overnight_reversal (opt-in: calibration benchmark / not yet through the IS/OOS gate)
 # IS/OOS comparison: two back-to-back fulltests + side-by-side per-strategy report (PnL/PF/WR/Sharpe/verdict)
 python -m axtrade.fulltest oos --is-start 2024-08-01 --is-end 2025-08-01 \
     --oos-start 2025-08-01 --oos-end 2026-02-01 \
@@ -115,7 +115,7 @@ Each service is runnable as a Python module:
 - `common/`: Shared types (`Tick`, `Bar` as frozen dataclasses), config loading (`load_config()` from `config/default.yaml`), Redis messaging (`RedisPublisher`, `RedisConsumer`, `BarPublisher`, `BarConsumer`), database (`DatabasePool`, `BarRepository`), `LoopSupervisor` for resilient service loops with exponential backoff
 - `gateway/`: Data adapters implementing `DataAdapter` - Mock, IBKR (`ib_insync`), Alpaca, Yahoo
 - `indicators/`: `IndicatorEngine` with rolling buffers for SMA, RSI, Bollinger Bands, ATR, and market regime detection
-- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `ml_prediction`, `discovery_momentum`, `overnight_reversal`, and `buy_hold` (a calibration benchmark whose fulltest result is computable by hand — used to validate the harness's fill/accounting/reporting paths, not to trade)
+- `strategies/`: `BaseStrategy` ABC with implementations: `momentum`, `mean_reversion`, `multi_timeframe`, `pairs`, `discovery_momentum`, `overnight_reversal`, and `buy_hold` (a calibration benchmark whose fulltest result is computable by hand — used to validate the harness's fill/accounting/reporting paths, not to trade)
 - `oms/`: `OrderManager`, `BrokerProtocol` (PaperBroker/IBKRBroker), `RiskManager`, `PositionSizer` (fixed/risk-pct/Kelly/ATR-based), `PortfolioRisk` tracking
 - `backtest/`: `BacktestEngine`, `SimulatedBroker`, `PerformanceAnalyzer`
 - `fulltest/`: Full system backtest running the complete pipeline (gateway, aggregator, strategy runner, discovery) against historical data with isolated Redis DB and TimescaleDB. `ReplayAdapter` converts parquet OHLCV data to synthetic ticks. `FullBacktestOrchestrator` coordinates all services in-process. Downloads data via Alpaca API. `SP500SymbolProvider` / `SP1500SymbolProvider` in `fulltest/universe.py` for discovery universes. `comparison.py` backs the `oos` subcommand (IS vs OOS per-strategy report). Defaults to `--redis-db 1` and `--db-name axtrade_backtest` so it never touches live state (db=0 / `axtrade`)
@@ -123,7 +123,6 @@ Each service is runnable as a Python module:
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
 - `analytics/`: Performance analytics (`metrics`, `drawdown`, `trades`, per-strategy aggregation) shared by backtest, fulltest, and the API
-- `ml/`: ML model scaffolding (`features`, `inference`, `models`, `types`) backing the `ml_prediction` strategy
 - `discovery/`: Symbol screening with momentum, volatility, volume, and trend screeners. `DiscoveryRunner` runs periodic background scans via `LoopSupervisor`, optionally feeds discovered symbols to gateway via `GatewayControlPublisher` when `auto_subscribe` is enabled. `SymbolProvider` protocol enables pluggable symbol sources (default: `ConfigSymbolProvider` reads from gateway config)
 
 ### Database

@@ -1,3 +1,4 @@
+-- ORPHANED (phase 4, 2026-07-03): the ML layer was removed (see docs/phase4-platform-pivot.md iteration 3). Tables remain for any DBs that applied this migration; nothing reads or writes them.
 -- ML models migration
 -- Stores ML model metadata and predictions
 

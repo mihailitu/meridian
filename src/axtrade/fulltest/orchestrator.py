@@ -353,7 +353,7 @@ class FullBacktestOrchestrator:
             chosen = [
                 t
                 for t in STRATEGY_TYPES
-                if t not in {"ml_prediction", "buy_hold", "overnight_reversal"}
+                if t not in {"buy_hold", "overnight_reversal"}
             ]
         for stype in chosen:
             strat_cfg: dict = {

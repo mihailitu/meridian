@@ -106,12 +106,12 @@ class TestStrategyOverrides:
 
 
 class TestEnabledStrategiesSelection:
-    def test_default_excludes_buy_hold_and_ml_prediction(self) -> None:
+    def test_default_excludes_buy_hold_and_overnight_reversal(self) -> None:
         orch = _make_orchestrator()
         cfg = orch._build_isolated_config()
         enabled_types = {entry.type for entry in cfg.strategies.enabled}
         assert "buy_hold" not in enabled_types
-        assert "ml_prediction" not in enabled_types
+        assert "overnight_reversal" not in enabled_types
 
     def test_default_includes_core_strategies(self) -> None:
         orch = _make_orchestrator()

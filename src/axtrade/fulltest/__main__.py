@@ -141,7 +141,7 @@ def _add_run_only_args(parser: argparse.ArgumentParser) -> None:
         "--strategies", nargs="+", default=None, metavar="TYPE",
         help=(
             "Strategy types to enable (e.g. --strategies buy_hold). "
-            "Default: all except ml_prediction and buy_hold"
+            "Default: all except buy_hold and overnight_reversal"
         ),
     )
     parser.add_argument(

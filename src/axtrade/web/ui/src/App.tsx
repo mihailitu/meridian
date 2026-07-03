@@ -5,7 +5,6 @@ import Overview from './components/Overview';
 import Strategies from './components/Strategies';
 import Monitor from './components/Monitor';
 import Discovery from './components/Discovery';
-import MLDashboard from './components/MLDashboard';
 
 function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
@@ -18,8 +17,6 @@ function App() {
         return <Strategies />;
       case 'discovery':
         return <Discovery />;
-      case 'ml':
-        return <MLDashboard />;
       case 'monitor':
         return <Monitor />;
     }
