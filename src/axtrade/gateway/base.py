@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
-from ..common import SymbolConfig, Tick
+from ..common import SymbolConfig, Tick, get_logger
+
+logger = get_logger(__name__)
 
 
 class DataAdapter(ABC):
@@ -43,9 +45,19 @@ class DataAdapter(ABC):
 
     async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
         """Dynamically subscribe to additional symbols. Override in adapters that support it."""
+        logger.warning(
+            "dynamic_subscribe_not_supported",
+            adapter=self.name,
+            symbols=[s.symbol for s in symbols],
+        )
 
     async def remove_symbols(self, symbols: list[str]) -> None:
         """Dynamically unsubscribe from symbols. Override in adapters that support it."""
+        logger.warning(
+            "dynamic_unsubscribe_not_supported",
+            adapter=self.name,
+            symbols=list(symbols),
+        )
 
     @property
     @abstractmethod

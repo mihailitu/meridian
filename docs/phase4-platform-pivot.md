@@ -28,7 +28,7 @@
 | 1 | Reframe docs: ROADMAP + design-doc status | docs only | ROADMAP states the pivot + criterion | **DONE** (2026-07-03) |
 | 2 | Green baseline + config hygiene | small code | full suite green; no strategy ships enabled | **DONE** (2026-07-03, 1002 passed; broker test was wrong, not the broker — raise-on-missing-price is the contract, manager translates to REJECTED) |
 | 3 | Delete `ml/` end-to-end (audit B2) | medium code | suite green, UI builds, grep-clean | **DONE** (2026-07-03, 966 passed after removing 36 ML tests; migration 006 kept with ORPHANED note) |
-| 4 | IBKR dynamic subscribe (audit A3) | medium code | bridge e2e test passes vs fake IBKR | pending |
+| 4 | IBKR dynamic subscribe (audit A3) | medium code | bridge e2e test passes vs fake IBKR | **DONE** (2026-07-03, 976 passed; control loop verified to survive adapter raises; live-IBKR validation out of scope) |
 | 5 | Paper integration test (audit C2) | code + ~min runs | deterministic e2e pass, bounded runtime | pending |
 | 6 | PaperBroker fill realism (audit C3) | medium code | buy_hold calibration unchanged; realism tested | pending |
 | 7 | Wrap-up: ROADMAP refresh, archive this doc | docs only | — | pending |

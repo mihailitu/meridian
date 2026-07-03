@@ -61,6 +61,32 @@ class IBKRAdapter(DataAdapter):
         self._connected = False
         logger.info("disconnected_from_ibkr")
 
+    async def _subscribe_symbol(self, symbol_config: SymbolConfig) -> bool:
+        """Qualify a contract and request market data for a single symbol.
+
+        Args:
+            symbol_config: Symbol to subscribe to
+
+        Returns:
+            True if the contract was qualified and market data requested, False otherwise
+        """
+        from ib_insync import Stock
+
+        contract = Stock(
+            symbol_config.symbol,
+            symbol_config.exchange,
+            symbol_config.currency,
+        )
+        qualified = await self._ib.qualifyContractsAsync(contract)
+        if qualified:
+            self._contracts[symbol_config.symbol] = qualified[0]
+            self._ib.reqMktData(qualified[0])
+            logger.info("subscribed", symbol=symbol_config.symbol)
+            return True
+        else:
+            logger.warning("failed_to_qualify", symbol=symbol_config.symbol)
+            return False
+
     async def subscribe(self, symbols: list[SymbolConfig]) -> None:
         """Subscribe to market data.
 
@@ -70,25 +96,53 @@ class IBKRAdapter(DataAdapter):
         if not self._ib:
             raise RuntimeError("Not connected to IBKR")
 
-        from ib_insync import Stock
-
         self._symbols = symbols
 
         for symbol_config in symbols:
-            contract = Stock(
-                symbol_config.symbol,
-                symbol_config.exchange,
-                symbol_config.currency,
-            )
-            qualified = await self._ib.qualifyContractsAsync(contract)
-            if qualified:
-                self._contracts[symbol_config.symbol] = qualified[0]
-                self._ib.reqMktData(qualified[0])
-                logger.info("subscribed", symbol=symbol_config.symbol)
-            else:
-                logger.warning("failed_to_qualify", symbol=symbol_config.symbol)
+            await self._subscribe_symbol(symbol_config)
 
         self._ib.pendingTickersEvent += self._on_pending_tickers
+
+    async def add_symbols(self, symbols: list[SymbolConfig]) -> None:
+        """Dynamically subscribe to additional symbols.
+
+        Args:
+            symbols: List of symbols to add
+        """
+        if not self._ib:
+            raise RuntimeError("Not connected to IBKR")
+
+        for symbol_config in symbols:
+            if symbol_config.symbol in self._contracts:
+                logger.info("symbol_already_subscribed", symbol=symbol_config.symbol)
+                continue
+            added = await self._subscribe_symbol(symbol_config)
+            if added:
+                self._symbols.append(symbol_config)
+
+        logger.info(
+            "symbols_added",
+            symbols=[s.symbol for s in symbols if s.symbol in self._contracts],
+        )
+
+    async def remove_symbols(self, symbols: list[str]) -> None:
+        """Dynamically unsubscribe from symbols.
+
+        Args:
+            symbols: List of symbol names to remove
+        """
+        if not self._ib:
+            raise RuntimeError("Not connected to IBKR")
+
+        for name in symbols:
+            contract = self._contracts.get(name)
+            if contract is None:
+                logger.info("symbol_not_subscribed", symbol=name)
+                continue
+            self._ib.cancelMktData(contract)
+            del self._contracts[name]
+            self._symbols = [s for s in self._symbols if s.symbol != name]
+            logger.info("unsubscribed", symbol=name)
 
     def _on_pending_tickers(self, tickers: list) -> None:
         """Handle incoming ticker updates.
