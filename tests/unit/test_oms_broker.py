@@ -42,16 +42,15 @@ class TestPaperBroker:
         with pytest.raises(RuntimeError, match="not connected"):
             await broker.submit_order(order)
 
-    async def test_submit_order_requires_price(
+    async def test_submit_order_without_price_raises(
         self, broker: PaperBroker, order: Order
     ) -> None:
         await broker.connect()
 
-        # No price set, order should be rejected
-        broker_id = await broker.submit_order(order)
-
-        assert broker_id == str(order.id)
-        assert order.status == OrderStatus.REJECTED
+        # No price set and no limit price on the order: broker raises. OrderManager
+        # is responsible for catching this and marking the order REJECTED.
+        with pytest.raises(RuntimeError, match="No price available"):
+            await broker.submit_order(order)
 
     async def test_submit_buy_order_fills_immediately(
         self, broker: PaperBroker, order: Order

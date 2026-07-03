@@ -84,7 +84,8 @@ strategies:
   enabled:
     - type: momentum
       id: momentum_us_01
-      enabled: true
+      # DEAD (phase 3): 0 trades IS and OOS — gates never co-fire. See ROADMAP per-strategy table.
+      enabled: false
       config:
         # Keys must match what MomentumBreakout reads: entry fires when RSI
         # crosses up through rsi_cross_level (a previous `rsi_oversold` key
@@ -97,7 +98,8 @@ strategies:
 
     - type: mean_reversion
       id: mean_rev_01
-      enabled: true
+      # DEAD (phase 3): IS PF 0.40 / OOS PF 0.36. See ROADMAP per-strategy table.
+      enabled: false
       # bb_period/bb_std now configured at indicators-level (single source
       # of truth); strategy reads bands from BarWithIndicators.
       config:
@@ -108,7 +110,8 @@ strategies:
 
     - type: multi_timeframe
       id: mtf_01
-      enabled: true
+      # DEAD (phase 3): IS PF 0.21 / OOS PF 0.21. See ROADMAP per-strategy table.
+      enabled: false
       config:
         trend_period: 20
         trend_interval_minutes: 5
@@ -120,7 +123,8 @@ strategies:
 
     - type: pairs
       id: pairs_aapl_msft
-      enabled: true
+      # DEAD (phase 3): IS PF 0.06 / OOS PF 0.01. See ROADMAP per-strategy table.
+      enabled: false
       config:
         symbol_a: AAPL
         symbol_b: MSFT
@@ -132,6 +136,7 @@ strategies:
 
     - type: discovery_momentum
       id: discovery_momentum_01
+      # DEAD (phase 3): IS PF 0.42 / OOS PF 0.45. See ROADMAP per-strategy table.
       enabled: false
       config:
         min_score: 60

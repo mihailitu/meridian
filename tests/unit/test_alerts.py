@@ -265,7 +265,7 @@ class TestLogChannel:
     def repo(self) -> AlertRepository:
         return AlertRepository()
 
-    def test_send_stores_in_repo(self, repo: AlertRepository) -> None:
+    async def test_send_stores_in_repo(self, repo: AlertRepository) -> None:
         channel = LogChannel(repository=repo)
         alert = Alert(
             severity=AlertSeverity.WARNING,
@@ -275,15 +275,13 @@ class TestLogChannel:
             source="test",
         )
 
-        import asyncio
-
-        result = asyncio.get_event_loop().run_until_complete(channel.send(alert))
+        result = await channel.send(alert)
 
         assert result is True
         assert len(repo) == 1
         assert repo.get_by_id(alert.id) is not None
 
-    def test_send_calls_broadcast(self, repo: AlertRepository) -> None:
+    async def test_send_calls_broadcast(self, repo: AlertRepository) -> None:
         broadcast_called = []
 
         def broadcast(alert: Alert) -> None:
@@ -298,9 +296,7 @@ class TestLogChannel:
             source="oms",
         )
 
-        import asyncio
-
-        asyncio.get_event_loop().run_until_complete(channel.send(alert))
+        await channel.send(alert)
 
         assert len(broadcast_called) == 1
         assert broadcast_called[0].id == alert.id
@@ -309,7 +305,7 @@ class TestLogChannel:
 class TestCallbackChannel:
     """Tests for CallbackChannel."""
 
-    def test_callback_invoked(self) -> None:
+    async def test_callback_invoked(self) -> None:
         received = []
 
         def callback(alert: Alert) -> bool:
@@ -325,9 +321,7 @@ class TestCallbackChannel:
             source="test",
         )
 
-        import asyncio
-
-        result = asyncio.get_event_loop().run_until_complete(channel.send(alert))
+        result = await channel.send(alert)
 
         assert result is True
         assert len(received) == 1

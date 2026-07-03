@@ -132,6 +132,21 @@ class TestStrategyRunner:
 
         assert len(runner._strategies) == 0
 
+    def test_load_strategies_all_disabled(self, mock_config: Config) -> None:
+        """Test loading when every configured strategy has enabled: false.
+
+        Mirrors the phase-3 production config, where all strategies were
+        disabled after failing IS/OOS gates: entries are present but none
+        should be instantiated, and _load_strategies must not raise.
+        """
+        for strat_config in mock_config.strategies.enabled:
+            strat_config.enabled = False
+        runner = StrategyRunner(mock_config)
+
+        runner._load_strategies()
+
+        assert len(runner._strategies) == 0
+
     async def test_load_positions(self, runner: StrategyRunner) -> None:
         """Test loading existing positions into strategies."""
         runner._load_strategies()
