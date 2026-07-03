@@ -208,8 +208,14 @@ class OrderManager:
         self._risk_manager.order_submitted()
         try:
             broker_order_id = await self._broker.submit_order(order)
-            order.status = OrderStatus.SUBMITTED
-            await self._order_repo.update(order)
+            # PaperBroker fills synchronously: its fill callback has already
+            # run inside submit_order and persisted a resolved status
+            # (FILLED/PARTIAL). Only stamp SUBMITTED while the order is still
+            # unresolved — an unconditional write here clobbered the resolved
+            # status of every immediately-filled paper order.
+            if order.status in (OrderStatus.PENDING, OrderStatus.SUBMITTED):
+                order.status = OrderStatus.SUBMITTED
+                await self._order_repo.update(order)
 
             self.logger.debug(
                 "Order sent to broker",

@@ -138,6 +138,43 @@ class TestOrderManager:
         mock_risk_manager.order_submitted.assert_called_once()
         assert sample_order.status == OrderStatus.SUBMITTED
 
+    async def test_submit_order_synchronous_fill_not_clobbered(
+        self, manager: OrderManager, sample_order: Order
+    ) -> None:
+        """A broker that fills synchronously inside submit_order (PaperBroker)
+        resolves the order to FILLED before submit_order returns; the manager
+        must not stamp it back to SUBMITTED afterwards. Regression for the
+        bug where every immediately-filled paper order persisted as
+        'submitted' (caught by tests/integration/test_paper_pipeline.py)."""
+        mock_order_repo = AsyncMock()
+        mock_position_repo = AsyncMock()
+        mock_position_repo.get.return_value = None
+        mock_risk_manager = MagicMock()
+        mock_risk_manager.check_order.return_value = RiskCheckResult(approved=True)
+
+        async def fill_synchronously(order: Order) -> str:
+            # Mimic PaperBroker: mutate the shared Order to its resolved
+            # state before submit_order returns.
+            order.status = OrderStatus.FILLED
+            order.filled_quantity = order.quantity
+            return str(order.id)
+
+        mock_broker = AsyncMock()
+        mock_broker.submit_order.side_effect = fill_synchronously
+
+        manager._order_repo = mock_order_repo
+        manager._position_repo = mock_position_repo
+        manager._broker = mock_broker
+        manager._risk_manager = mock_risk_manager
+        manager._last_prices["AAPL"] = Decimal("185.00")
+
+        await manager.submit_order(sample_order)
+
+        assert sample_order.status == OrderStatus.FILLED
+        # The only repo.update in the submit path is the SUBMITTED stamp;
+        # for an already-resolved order it must not happen at all.
+        mock_order_repo.update.assert_not_called()
+
     async def test_submit_order_risk_rejected(
         self, manager: OrderManager, sample_order: Order
     ) -> None:

@@ -43,6 +43,7 @@ make test                   # Run all tests
 .venv/bin/pytest tests/unit/test_indicators.py -v           # Single test file
 .venv/bin/pytest tests/unit/test_indicators.py::TestCalculateSMA -v  # Single test class
 .venv/bin/pytest -k "test_rsi" -v                           # Tests matching pattern
+make test-integration      # End-to-end paper-pipeline test (needs make infra; ~2 min)
 
 # CLI (note: subcommands are required)
 python -m axtrade.cli bars AAPL --limit 10 --interval 1m

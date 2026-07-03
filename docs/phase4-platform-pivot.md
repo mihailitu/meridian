@@ -29,7 +29,7 @@
 | 2 | Green baseline + config hygiene | small code | full suite green; no strategy ships enabled | **DONE** (2026-07-03, 1002 passed; broker test was wrong, not the broker — raise-on-missing-price is the contract, manager translates to REJECTED) |
 | 3 | Delete `ml/` end-to-end (audit B2) | medium code | suite green, UI builds, grep-clean | **DONE** (2026-07-03, 966 passed after removing 36 ML tests; migration 006 kept with ORPHANED note) |
 | 4 | IBKR dynamic subscribe (audit A3) | medium code | bridge e2e test passes vs fake IBKR | **DONE** (2026-07-03, 976 passed; control loop verified to survive adapter raises; live-IBKR validation out of scope) |
-| 5 | Paper integration test (audit C2) | code + ~min runs | deterministic e2e pass, bounded runtime | pending |
+| 5 | Paper integration test (audit C2) | code + ~min runs | deterministic e2e pass, bounded runtime | **DONE** (2026-07-03, 3× pass; caught + fixed F10 order-status clobber) |
 | 6 | PaperBroker fill realism (audit C3) | medium code | buy_hold calibration unchanged; realism tested | pending |
 | 7 | Wrap-up: ROADMAP refresh, archive this doc | docs only | — | pending |
 | A* | *(optional, separate go/no-go)* point-in-time universe data | ~1–2 days + reruns | see below | not approved |
@@ -115,6 +115,23 @@ The fulltest harness proves the pipeline against historical replay; nothing prov
 
 **Gate**: test passes 3× consecutively (determinism check); documented in CLAUDE.md test
 commands.
+
+**Found during execution (2026-07-03)** — the gate did its job on the first run:
+
+- **F10 — OrderManager clobbered resolved order status.** PaperBroker fills synchronously
+  inside `submit_order` (mutating the shared `Order` to FILLED; its fill callback persists
+  the resolved row), then `OrderManager.submit_order` unconditionally stamped
+  `order.status = SUBMITTED` and persisted again — so **every immediately-filled paper-mode
+  order ended up permanently `status='submitted'` in the orders table** (fills/positions
+  were correct, which is why fills-based fulltest analytics never noticed). Any consumer
+  filtering `orders WHERE status='filled'` silently got nothing. Fixed inside this
+  iteration: the SUBMITTED stamp now only applies while the order is still unresolved
+  (PENDING/SUBMITTED), plus a regression unit test mimicking the synchronous-fill broker.
+  Async brokers (IBKR) are unaffected — their fills arrive after the stamp.
+
+Result: 3 consecutive passes (10.5s / 49.1s / 61.3s — duration varies with wall-clock
+minute alignment), suite 980 passed, live state verified untouched (Redis db=0, `axtrade`
+DB) with the test isolated to Redis db=2 / `axtrade_itest` / `it:`-prefixed streams.
 
 ### Iteration 6 — PaperBroker fill realism (audit C3)
 

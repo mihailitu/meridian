@@ -27,6 +27,9 @@ class MockAdapter(DataAdapter):
         self._symbols: list[SymbolConfig] = []
         self._prices: dict[str, float] = {}
         self._running = False
+        # A None seed behaves like the module-level random functions did
+        # (nondeterministic); a set seed makes tick sequences reproducible.
+        self._rng = random.Random(config.seed)
 
     async def connect(self) -> None:
         """Simulate connection."""
@@ -75,7 +78,7 @@ class MockAdapter(DataAdapter):
                 symbol = symbol_config.symbol
                 current_price = self._prices[symbol]
 
-                change = random.gauss(0, self.config.volatility) * current_price
+                change = self._rng.gauss(0, self.config.volatility) * current_price
                 new_price = round(current_price + change, 2)
                 new_price = max(0.01, new_price)
 
@@ -91,7 +94,7 @@ class MockAdapter(DataAdapter):
                     timestamp=datetime.now(UTC),
                     bid=bid,
                     ask=ask,
-                    volume=random.randint(100, 10000),
+                    volume=self._rng.randint(100, 10000),
                 )
 
                 yield tick

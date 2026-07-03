@@ -16,6 +16,10 @@ class MockConfig:
 
     tick_interval_ms: int = 500
     volatility: float = 0.001
+    # Seeds the adapter's own random.Random instance for deterministic tick
+    # sequences (e.g. reproducible tests). None = nondeterministic, matching
+    # the previous global-random behavior.
+    seed: Optional[int] = None
 
 
 @dataclass
@@ -260,6 +264,7 @@ def load_config(path: Optional[Path] = None) -> Config:
             mock=MockConfig(
                 tick_interval_ms=mock_data.get("tick_interval_ms", 500),
                 volatility=mock_data.get("volatility", 0.001),
+                seed=mock_data.get("seed"),
             ),
             ibkr=IBKRConfig(
                 host=ibkr_data.get("host", "127.0.0.1"),

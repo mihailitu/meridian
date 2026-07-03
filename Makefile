@@ -1,4 +1,4 @@
-.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api run-fulltest run-fulltest-download test clean db db-stop infra infra-stop setup build-ui
+.PHONY: install dev redis run run-ibkr run-alpaca run-aggregator run-strategy run-api run-fulltest run-fulltest-download test test-integration clean db db-stop infra infra-stop setup build-ui
 
 install:
 	python3 -m venv .venv
@@ -58,6 +58,9 @@ bars:
 
 test:
 	.venv/bin/pytest -v
+
+test-integration:
+	.venv/bin/pytest tests/integration -m integration -v
 
 clean:
 	rm -rf .venv build *.egg-info src/*.egg-info

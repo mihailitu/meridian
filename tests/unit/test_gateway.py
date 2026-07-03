@@ -65,6 +65,41 @@ class TestMockAdapter:
         """Test adapter name."""
         assert adapter.name == "mock"
 
+    async def test_seeded_ticks_are_deterministic(self, symbols):
+        """Two adapters with the same seed must produce identical price
+        sequences (MockConfig.seed drives a per-adapter random.Random)."""
+
+        async def collect_prices(seed: int, count: int) -> list[float]:
+            cfg = MockConfig(tick_interval_ms=1, volatility=0.001, seed=seed)
+            adapter = MockAdapter(cfg)
+            await adapter.connect()
+            await adapter.subscribe(symbols)
+
+            prices = []
+            async for tick in adapter.stream_ticks():
+                prices.append(tick.price)
+                if len(prices) >= count:
+                    await adapter.disconnect()
+                    break
+            return prices
+
+        prices_a = await collect_prices(seed=42, count=10)
+        prices_b = await collect_prices(seed=42, count=10)
+
+        assert prices_a == prices_b
+
+    async def test_unseeded_ticks_are_still_generated(self, symbols):
+        """A None seed (the default) must not break tick generation."""
+        cfg = MockConfig(tick_interval_ms=1, volatility=0.001, seed=None)
+        adapter = MockAdapter(cfg)
+        await adapter.connect()
+        await adapter.subscribe(symbols)
+
+        async for tick in adapter.stream_ticks():
+            assert tick.price > 0
+            await adapter.disconnect()
+            break
+
 
 class TestTick:
     """Tests for Tick dataclass."""
