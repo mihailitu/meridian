@@ -31,7 +31,7 @@
 | 4 | IBKR dynamic subscribe (audit A3) | medium code | bridge e2e test passes vs fake IBKR | **DONE** (2026-07-03, 976 passed; control loop verified to survive adapter raises; live-IBKR validation out of scope) |
 | 5 | Paper integration test (audit C2) | code + ~min runs | deterministic e2e pass, bounded runtime | **DONE** (2026-07-03, 3× pass; caught + fixed F10 order-status clobber) |
 | 6 | PaperBroker fill realism (audit C3) | medium code | buy_hold calibration unchanged; realism tested | **DONE** (2026-07-03, reject-over-cap semantics; calibration exact: $101,008.40 recomputed from parquet = reported, 1-month buy_hold) |
-| 7 | Wrap-up: ROADMAP refresh, archive this doc | docs only | — | pending |
+| 7 | Wrap-up: ROADMAP refresh, archive this doc | docs only | — | **DONE** (2026-07-03; doc kept in docs/ + linked from ROADMAP History, matching what phase 3 actually did rather than this row's original "archive" wording) |
 | A* | *(optional, separate go/no-go)* point-in-time universe data | ~1–2 days + reruns | see below | not approved |
 
 ### Iteration 1 — Reframe docs

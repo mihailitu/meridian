@@ -3,21 +3,31 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-07-03._
+_Last refreshed: 2026-07-03 (phase 4 complete)._
 
 ## Today
 
-- **Decision (2026-07-03): the strategy-search phase is concluded — the project is now a
-  platform.** The phase-3 fork below was resolved as **Option B**. Success criterion,
-  reframed: a **trustworthy strategy-evaluation platform with live paper-trading
-  capability**. Not the v2.0 design-doc ambition (multi-market, millisecond latency,
-  horizontal scaling, GPU ML) — those are retired, not deferred (see "Retired" below).
-  Active plan: [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md) —
-  seven gated iterations: docs reframe, green test baseline + all strategies shipped
-  disabled, delete `ml/`, IBKR dynamic subscribe (A3), paper integration test (C2),
-  PaperBroker fill realism (C3), wrap-up. An optional point-in-time-universe data
-  iteration (the useful half of Option A) is documented there but not approved.
-- **The backtest harness is now trustworthy — and that changed every prior conclusion.**
+- **Phase 4 (platform pivot) is complete — all six work iterations landed 2026-07-03**
+  (branch `phase4-platform-pivot`, plan + findings in
+  [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md)). The strategy-search
+  phase concluded as **Option B**; the success criterion is a **trustworthy
+  strategy-evaluation platform with live paper-trading capability**. What landed:
+  green test baseline (4 long-standing test failures fixed) with **all strategies shipped
+  `enabled: false`**; the ML stack deleted end-to-end (audit B2); IBKR dynamic subscribe so
+  the discovery→trading bridge no longer silently no-ops on the production broker (A3);
+  an end-to-end live-paper integration test (`make test-integration`, C2); and an optional
+  PaperBroker volume-participation cap (`oms.max_volume_participation`, C3) whose off-state
+  was calibration-verified to the cent against raw parquet.
+- **The integration test caught F10 on its first run** — OrderManager stamped SUBMITTED
+  after the PaperBroker's synchronous fill had already persisted FILLED, so every
+  immediately-filled paper order read `status='submitted'` forever (fills/positions were
+  correct, which is why fills-based analytics never noticed). Fixed with a regression test.
+  Second time a calibration/integration gate has caught a real bug the unit suite missed
+  (phase 3: F6/F7).
+- **Platform state**: suite 987 green + integration test 3× deterministic; live-IBKR
+  validation of the dynamic-subscribe path explicitly remains (needs a TWS/Gateway
+  account). There is deliberately no enabled strategy — see the per-strategy table below.
+- **The backtest harness is trustworthy — and that changed every prior conclusion.**
   Phase 3 (branch `phase3-harness-fixes`, plan + findings in
   [`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md)) calibrated the
   fulltest pipeline against hand-computable benchmarks and found/fixed five serious harness
@@ -56,7 +66,20 @@ momentum) would at best replicate an ETF factor exposure; the demonstrated value
 platform + calibrated harness. Option A's *data work* survives as an optional, unapproved
 iteration in the phase-4 plan — it is a harness-quality feature, not a bot revival.
 
-Work queue: [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md).
+**Phase 4 is done.** What remains open, in rough priority order:
+
+1. **Live paper validation run** — the stack is integration-tested in-process; the next
+   confidence step is running the real services (`scripts/start-all.sh`, mock or Alpaca
+   adapter, paper mode) for a market day and checking the dashboard/DB against expectations.
+   Cheap, and exercises the exact `make run*` path.
+2. **Live-IBKR validation of dynamic subscribe** — needs a TWS/IB Gateway account wired up;
+   until then A3 is fake-verified only.
+3. **External alert channels (audit C1)** — the platform's first genuinely new feature
+   since the pivot; email first.
+4. **Optional iteration A (point-in-time universe data)** — documented in the phase-4 plan,
+   still not approved. Only worth it if a cross-sectional strategy trial is ever wanted;
+   it upgrades the harness from "falsification-capable on gateway symbols" to
+   "falsification-capable on universes".
 
 **Per-strategy state (post-harness-fixes, IS year vs OOS half-year, discovery on, narrowed universe)**:
 
@@ -97,6 +120,7 @@ scale, and none of these change that.
 
 ## History
 
+- Phase 4 (platform pivot: B2/A3/C2/C3, F10 fix): [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md).
 - Phase 3 (harness trust + strategy verdicts): [`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md).
 - Phase 2 era plans: [`docs/active-plan.md`](docs/active-plan.md) (superseded by phase 3 doc).
 - What was built, when: [`docs/PROGRESS.md`](docs/PROGRESS.md).

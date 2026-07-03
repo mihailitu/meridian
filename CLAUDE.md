@@ -132,13 +132,13 @@ TimescaleDB (PostgreSQL) with schema initialized by `scripts/init-db.sql` (creat
 
 ### Configuration
 
-Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
+Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits, max_volume_participation — optional paper-fill volume cap, 0 = off), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
 
-`discovery_momentum` is shipped with `enabled: false` in `config/default.yaml` — flip it on to exercise the discovery→trading bridge.
+Every strategy ships `enabled: false` in `config/default.yaml` (phase-3 verdicts — see the ROADMAP per-strategy table before enabling anything). Flip `discovery_momentum` on to exercise the discovery→trading bridge.
 
 ### Project Docs
 
-`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log).
+`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log, `phase4-platform-pivot.md` for the platform pivot).
 
 ### Helper Scripts
 
