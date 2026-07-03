@@ -66,6 +66,8 @@ oms:
   paper_mode: true
   slippage_bps: 10
   max_positions: 20
+  # Reject paper orders larger than this fraction of the symbol's last bar volume (0 = disabled). Audit C3.
+  max_volume_participation: 0.0
   commission:
     per_share: 0.005    # IBKR Pro Fixed: $0.005/share
     minimum: 1.00       # Min $1.00 per order

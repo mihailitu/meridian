@@ -148,6 +148,9 @@ class OMSConfig:
     # where the real broker enforces cash). Fulltest sets this from
     # --capital so the simulation can't accumulate unbounded phantom buys.
     initial_capital: Optional[Decimal] = None
+    # When > 0, the PaperBroker rejects orders larger than this fraction of
+    # the symbol's last known bar volume (0 = disabled). Audit C3.
+    max_volume_participation: float = 0.0
     risk: RiskConfig = field(default_factory=RiskConfig)
     commission: CommissionConfig = field(default_factory=CommissionConfig)
 
@@ -321,6 +324,7 @@ def load_config(path: Optional[Path] = None) -> Config:
             paper_mode=oms_data.get("paper_mode", True),
             slippage_bps=oms_data.get("slippage_bps", 10),
             max_positions=oms_data.get("max_positions", 20),
+            max_volume_participation=oms_data.get("max_volume_participation", 0.0),
             risk=RiskConfig(
                 max_position_size=oms_data.get("risk", {}).get("max_position_size", 1000),
                 max_position_value=oms_data.get("risk", {}).get("max_position_value", 50000.0),

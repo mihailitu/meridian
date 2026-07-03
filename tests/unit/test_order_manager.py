@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 
 from axtrade.common import Config, DatabaseConfig, OMSConfig, RedisConfig, RiskConfig
+from axtrade.oms.broker import VolumeCapExceededError
 from axtrade.oms.manager import OrderManager, OrderRejectedError
 from axtrade.oms.risk import RiskCheckResult
 from axtrade.oms.types import Fill, Order, OrderSide, OrderStatus, OrderType, Position
@@ -220,6 +221,34 @@ class TestOrderManager:
 
         assert sample_order.status == OrderStatus.REJECTED
         # Update should be called to persist rejection
+        mock_order_repo.update.assert_called_once()
+
+    async def test_submit_order_volume_cap_rejected(
+        self, manager: OrderManager, sample_order: Order
+    ) -> None:
+        """Broker raising VolumeCapExceededError is a clean rejection, not a
+        crash — mirrors how InsufficientCashError is handled."""
+        mock_order_repo = AsyncMock()
+        mock_position_repo = AsyncMock()
+        mock_position_repo.get.return_value = None
+        mock_broker = AsyncMock()
+        mock_broker.submit_order.side_effect = VolumeCapExceededError(
+            "AAPL order quantity 200 exceeds volume cap 100"
+        )
+        mock_risk_manager = MagicMock()
+        mock_risk_manager.check_order.return_value = RiskCheckResult(approved=True)
+
+        manager._order_repo = mock_order_repo
+        manager._position_repo = mock_position_repo
+        manager._broker = mock_broker
+        manager._risk_manager = mock_risk_manager
+
+        with pytest.raises(OrderRejectedError, match="volume cap"):
+            await manager.submit_order(sample_order)
+
+        assert sample_order.status == OrderStatus.REJECTED
+        mock_risk_manager.order_submitted.assert_called_once()
+        mock_risk_manager.order_completed.assert_called_once()
         mock_order_repo.update.assert_called_once()
 
     async def test_submit_order_not_connected(
@@ -718,7 +747,18 @@ class TestOrderManager:
         manager.update_price("AAPL", 185.50)
 
         assert manager._last_prices["AAPL"] == Decimal("185.50")
-        mock_broker.update_price.assert_called_once_with("AAPL", Decimal("185.50"))
+        mock_broker.update_price.assert_called_once_with("AAPL", Decimal("185.50"), volume=None)
+
+    def test_update_price_forwards_volume(self, manager: OrderManager) -> None:
+        """update_price with a volume converts and forwards it to the broker."""
+        mock_broker = MagicMock()
+        manager._broker = mock_broker
+
+        manager.update_price("AAPL", 185.50, volume=50000)
+
+        mock_broker.update_price.assert_called_once_with(
+            "AAPL", Decimal("185.50"), volume=Decimal("50000")
+        )
 
     async def test_get_position(self, manager: OrderManager) -> None:
         """Test get_position delegates to repository."""

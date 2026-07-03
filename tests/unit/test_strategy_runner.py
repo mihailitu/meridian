@@ -460,7 +460,7 @@ class TestStrategyRunnerBarProcessing:
 
         await runner._consume_loop()
 
-        mock_order_manager.update_price.assert_called_with("AAPL", 185.5)
+        mock_order_manager.update_price.assert_called_with("AAPL", 185.5, volume=10000)
 
     async def test_consume_loop_disabled_strategy_skipped(
         self, runner: StrategyRunner, sample_bar: Bar

@@ -30,7 +30,7 @@
 | 3 | Delete `ml/` end-to-end (audit B2) | medium code | suite green, UI builds, grep-clean | **DONE** (2026-07-03, 966 passed after removing 36 ML tests; migration 006 kept with ORPHANED note) |
 | 4 | IBKR dynamic subscribe (audit A3) | medium code | bridge e2e test passes vs fake IBKR | **DONE** (2026-07-03, 976 passed; control loop verified to survive adapter raises; live-IBKR validation out of scope) |
 | 5 | Paper integration test (audit C2) | code + ~min runs | deterministic e2e pass, bounded runtime | **DONE** (2026-07-03, 3× pass; caught + fixed F10 order-status clobber) |
-| 6 | PaperBroker fill realism (audit C3) | medium code | buy_hold calibration unchanged; realism tested | pending |
+| 6 | PaperBroker fill realism (audit C3) | medium code | buy_hold calibration unchanged; realism tested | **DONE** (2026-07-03, reject-over-cap semantics; calibration exact: $101,008.40 recomputed from parquet = reported, 1-month buy_hold) |
 | 7 | Wrap-up: ROADMAP refresh, archive this doc | docs only | — | pending |
 | A* | *(optional, separate go/no-go)* point-in-time universe data | ~1–2 days + reruns | see below | not approved |
 
@@ -138,9 +138,18 @@ DB) with the test isolated to Redis db=2 / `axtrade_itest` / `it:`-prefixed stre
 Last known gap between paper fills and anything defensible: PaperBroker fills any size
 instantly at close±slippage.
 
-- Add a volume-participation cap (e.g. fill ≤ N% of bar volume, configurable; default off →
-  behavior identical to today) with partial-fill handling through OrderManager.
-- Unit tests for cap on/off, partial-fill accounting, position math with partials.
+- Add a volume-participation cap (order quantity ≤ N% of the symbol's last bar volume,
+  configurable; default off → behavior identical to today). Semantics per audit C3:
+  **reject** over-cap orders (VolumeCapExceededError → OrderManager's existing
+  rejection path), not partial fills — a partial fill's unfilled remainder would need new
+  terminal-state machinery (the risk manager's open-order counter only decrements on full
+  fill), and nothing on the platform needs that complexity yet. Revisit partial fills only
+  if a live strategy earns it.
+- Volume plumbing: strategy runner already pushes bar closes into the broker via
+  `OrderManager.update_price`; extend it to carry bar volume. Unknown volume → no check
+  (permissive, matches default-off posture).
+- Unit tests for cap off (identical behavior), over-cap rejection (order REJECTED, counter
+  decremented), under-cap fill, missing-volume passthrough, sell-side capping.
 - **Calibration re-run**: 1-month buy_hold fulltest with realism OFF must still match the
   hand-computed value to the cent (regression guard on the phase-3 achievement).
 

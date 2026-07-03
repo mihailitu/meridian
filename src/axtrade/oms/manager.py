@@ -11,7 +11,13 @@ from axtrade.common.config import Config
 from axtrade.common.db import DatabasePool
 from axtrade.common.logging import get_logger
 
-from .broker import BrokerProtocol, IBKRBroker, InsufficientCashError, PaperBroker
+from .broker import (
+    BrokerProtocol,
+    IBKRBroker,
+    InsufficientCashError,
+    PaperBroker,
+    VolumeCapExceededError,
+)
 from .repository import OrderRepository, PositionRepository
 from .risk import RiskCheckResult, RiskLimits, RiskManager
 from .types import Fill, Order, OrderSide, OrderStatus, Position
@@ -83,6 +89,7 @@ class OrderManager:
                 slippage_bps=self.config.oms.slippage_bps,
                 commission_config=self.config.oms.commission,
                 initial_cash=self.config.oms.initial_capital,
+                max_volume_participation=self.config.oms.max_volume_participation,
             )
         else:
             self._broker = IBKRBroker(self.config.gateway.ibkr)
@@ -115,17 +122,20 @@ class OrderManager:
         """
         self._fill_callbacks.append(callback)
 
-    def update_price(self, symbol: str, price: float) -> None:
+    def update_price(self, symbol: str, price: float, volume: Optional[float] = None) -> None:
         """Update cached price for risk checks and paper trading.
 
         Args:
             symbol: Trading symbol
             price: Current price
+            volume: Current bar volume, if known. Forwarded to the broker
+                for the volume-participation cap (PaperBroker only).
         """
         decimal_price = Decimal(str(price))
         self._last_prices[symbol] = decimal_price
+        decimal_volume = Decimal(str(volume)) if volume is not None else None
         if self._broker:
-            self._broker.update_price(symbol, decimal_price)
+            self._broker.update_price(symbol, decimal_price, volume=decimal_volume)
 
     def set_current_time(self, ts) -> None:
         """Forward simulated-time updates to the broker (PaperBroker only).
@@ -222,8 +232,9 @@ class OrderManager:
                 order_id=str(order.id),
                 broker_order_id=broker_order_id,
             )
-        except InsufficientCashError as e:
-            # Paper-mode cash check tripped — clean rejection, not a crash.
+        except (InsufficientCashError, VolumeCapExceededError) as e:
+            # Paper-mode cash check or volume-participation cap tripped —
+            # clean rejection, not a crash.
             self._risk_manager.order_completed()
             order.status = OrderStatus.REJECTED
             await self._order_repo.update(order)

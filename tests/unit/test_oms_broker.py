@@ -8,7 +8,7 @@ import pytest
 
 from axtrade.common import Bar
 from axtrade.oms import Fill, Order, OrderSide, OrderStatus, PaperBroker, Position
-from axtrade.oms.broker import InsufficientCashError
+from axtrade.oms.broker import InsufficientCashError, VolumeCapExceededError
 
 
 class TestPaperBroker:
@@ -369,3 +369,80 @@ class TestPaperBrokerCashCheck:
 
         # Cash went up by proceeds (no cash check on sells).
         assert broker.cash > Decimal("1000")
+
+
+class TestPaperBrokerVolumeCap:
+    """Tests for the max_volume_participation cap (Audit C3)."""
+
+    async def test_cap_disabled_allows_order_far_exceeding_volume(self) -> None:
+        """Default (0.0) is disabled: behavior identical even when quantity
+        far exceeds the last known volume."""
+        broker = PaperBroker(slippage_bps=0)
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"), volume=Decimal("10"))
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("1000"),
+        )
+        await broker.submit_order(order)
+
+        assert order.status == OrderStatus.FILLED
+
+    async def test_buy_over_cap_raises_and_leaves_cash_unchanged(self) -> None:
+        broker = PaperBroker(
+            slippage_bps=0, initial_cash=Decimal("10000"), max_volume_participation=0.1
+        )
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"), volume=Decimal("1000"))
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("200"),  # cap = 1000 * 0.1 = 100
+        )
+        with pytest.raises(VolumeCapExceededError, match="AAPL"):
+            await broker.submit_order(order)
+
+        assert order.status != OrderStatus.FILLED
+        assert broker.cash == Decimal("10000")
+
+    async def test_buy_under_cap_fills_normally(self) -> None:
+        broker = PaperBroker(slippage_bps=0, max_volume_participation=0.1)
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"), volume=Decimal("1000"))
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("50"),  # under cap of 100
+        )
+        await broker.submit_order(order)
+
+        assert order.status == OrderStatus.FILLED
+
+    async def test_unknown_volume_is_permissive(self) -> None:
+        """Cap enabled but no volume ever reported for the symbol: check skipped."""
+        broker = PaperBroker(slippage_bps=0, max_volume_participation=0.1)
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"))  # no volume passed
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("100000"),
+        )
+        await broker.submit_order(order)
+
+        assert order.status == OrderStatus.FILLED
+
+    async def test_sell_over_cap_also_raises(self) -> None:
+        broker = PaperBroker(slippage_bps=0, max_volume_participation=0.1)
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"), volume=Decimal("1000"))
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.SELL,
+            quantity=Decimal("200"),  # cap = 100
+        )
+        with pytest.raises(VolumeCapExceededError, match="AAPL"):
+            await broker.submit_order(order)
+
+        assert order.status != OrderStatus.FILLED

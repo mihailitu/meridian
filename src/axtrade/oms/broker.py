@@ -42,6 +42,14 @@ class InsufficientCashError(Exception):
     """
 
 
+class VolumeCapExceededError(Exception):
+    """Raised by PaperBroker when an order exceeds the volume-participation cap.
+
+    Caught upstream by OrderManager and translated to OrderRejectedError
+    so the strategy sees a clean rejection rather than a crash.
+    """
+
+
 class BrokerProtocol(ABC):
     """Abstract base class for order execution brokers."""
 
@@ -100,12 +108,13 @@ class BrokerProtocol(ABC):
         ...
 
     @abstractmethod
-    def update_price(self, symbol: str, price: Decimal) -> None:
+    def update_price(self, symbol: str, price: Decimal, volume: Optional[Decimal] = None) -> None:
         """Update current price for a symbol.
 
         Args:
             symbol: Trading symbol
             price: Current price
+            volume: Current bar volume, if known
         """
         ...
 
@@ -118,6 +127,7 @@ class PaperBroker(BrokerProtocol):
         slippage_bps: int = 10,
         commission_config: CommissionConfig | None = None,
         initial_cash: Decimal | None = None,
+        max_volume_participation: float = 0.0,
     ):
         """Initialize paper broker.
 
@@ -127,12 +137,17 @@ class PaperBroker(BrokerProtocol):
             initial_cash: Starting cash balance. When set, buys are rejected
                 if they would overdraw. None = unlimited (legacy live-mode
                 behavior; real brokers enforce cash on their side).
+            max_volume_participation: When > 0, orders larger than this
+                fraction of the symbol's last known bar volume are rejected.
+                0 = disabled (legacy behavior). Audit C3.
         """
         self.slippage_bps = slippage_bps
         self.commission_config = commission_config or CommissionConfig()
+        self.max_volume_participation = max_volume_participation
         self.logger = get_logger("paper_broker")
 
         self._last_prices: dict[str, Decimal] = {}
+        self._last_volumes: dict[str, Decimal] = {}
         self._positions: dict[str, Position] = {}
         self._fill_callback: Optional[Callable[[Fill], Awaitable[None]]] = None
         self._connected = False
@@ -186,6 +201,21 @@ class PaperBroker(BrokerProtocol):
                 raise RuntimeError(
                     f"No price available for {order.symbol} and no limit price set"
                 )
+
+        # Volume-participation cap (paper-only, when configured). Rejects
+        # orders larger than a fraction of the symbol's last known bar
+        # volume, for both buys and sells. Unknown volume (never reported
+        # for this symbol) skips the check permissively. Audit C3.
+        if self.max_volume_participation > 0:
+            last_volume = self._last_volumes.get(order.symbol)
+            if last_volume is not None:
+                cap = last_volume * Decimal(str(self.max_volume_participation))
+                if order.quantity > cap:
+                    raise VolumeCapExceededError(
+                        f"{order.symbol} order quantity {order.quantity} exceeds "
+                        f"volume cap {cap} ({self.max_volume_participation:.2%} of "
+                        f"last bar volume {last_volume})"
+                    )
 
         # Apply slippage
         slippage_mult = Decimal(str(1 + (self.slippage_bps / 10000)))
@@ -294,14 +324,18 @@ class PaperBroker(BrokerProtocol):
         """
         self._fill_callback = callback
 
-    def update_price(self, symbol: str, price: Decimal) -> None:
+    def update_price(self, symbol: str, price: Decimal, volume: Optional[Decimal] = None) -> None:
         """Update current price for a symbol.
 
         Args:
             symbol: Trading symbol
             price: Current price
+            volume: Current bar volume, if known. Used by the volume-
+                participation cap; unknown symbols skip that check.
         """
         self._last_prices[symbol] = price
+        if volume is not None:
+            self._last_volumes[symbol] = volume
 
         # Update position mark-to-market
         if symbol in self._positions:
@@ -528,12 +562,14 @@ class IBKRBroker(BrokerProtocol):
         """
         self._fill_callback = callback
 
-    def update_price(self, symbol: str, price: Decimal) -> None:
+    def update_price(self, symbol: str, price: Decimal, volume: Optional[Decimal] = None) -> None:
         """Update current price for a symbol.
 
         Args:
             symbol: Trading symbol
             price: Current price
+            volume: Current bar volume, if known. Unused by IBKRBroker — the
+                real broker enforces its own liquidity/participation limits.
         """
         self._last_prices[symbol] = price
 
