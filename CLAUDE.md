@@ -52,6 +52,7 @@ python -m axtrade.fulltest download --start 2025-08-01 --end 2026-02-01 --symbol
 python -m axtrade.fulltest run      --start 2025-08-01 --end 2026-02-01 --symbols AAPL MSFT GOOGL --capital 100000
 
 # Fulltest extras: --universe sp500|sp1500 instead of --symbols; --download on `run` auto-fetches missing data
+# --force re-downloads even when the manifest reports the range covered (downloads are split-adjusted as of phase 5)
 # --strategies TYPE [TYPE ...] selects strategy types; default runs all EXCEPT buy_hold and
 # overnight_reversal (opt-in: calibration benchmark / not yet through the IS/OOS gate)
 # IS/OOS comparison: two back-to-back fulltests + side-by-side per-strategy report (PnL/PF/WR/Sharpe/verdict)
@@ -132,7 +133,7 @@ TimescaleDB (PostgreSQL) with schema initialized by `scripts/init-db.sql` (creat
 
 ### Configuration
 
-Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits, max_volume_participation — optional paper-fill volume cap, 0 = off), `strategies` (enabled list), `api`, `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
+Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come from `.env` file (loaded via `python-dotenv`). Key sections: `gateway` (adapter, symbols, control_channel), `redis` (host, port, db, stream_maxlen — approximate per-stream cap, 0 = unlimited; consumer_group_start — "$" live default, fulltest pins "0"), `aggregator` (intervals, streams), `database`, `indicators`, `oms` (paper_mode, max_positions, risk limits, max_volume_participation — optional paper-fill volume cap, 0 = off), `strategies` (enabled list), `api` (host binds 127.0.0.1 by default; api_key/AXTRADE_API_KEY guards mutating routes when set), `discovery` (enabled, scan_interval_seconds, bar_limit, interval, auto_subscribe, min_score, max_positions). Redis `db` field (default 0) enables database isolation for backtesting.
 
 Every strategy ships `enabled: false` in `config/default.yaml` (phase-3 verdicts — see the ROADMAP per-strategy table before enabling anything). Flip `discovery_momentum` on to exercise the discovery→trading bridge.
 

@@ -3,10 +3,25 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-07-03 (phase 4 complete)._
+_Last refreshed: 2026-07-12 (phase 5 underway)._
 
 ## Today
 
+- **Phase 5 (audit fixes) is underway** on branch `phase5-audit-fixes`. A fresh
+  whole-project audit ([`docs/AUDIT-2026-07-12.md`](docs/AUDIT-2026-07-12.md)) found that
+  the phase-3 accounting/clock fixes hold, but (a) the **data layer under the harness was
+  broken** — split-unadjusted downloads, duplicated boundary days, and a manifest bug that
+  made the discovery_momentum IS/OOS comparison structurally invalid (**that verdict row is
+  withdrawn pending re-run**); (b) the **live multi-process path could not work** — no fill
+  routing to strategies, a dead IBKR tick path, in-process-only discovery scores; (c) the
+  **API was an unauthenticated remote control on 0.0.0.0**. Five iterations have landed
+  fixing all P0s and 6/11 P1s; an adjusted full-universe re-download is in progress with an
+  IS/OOS re-certification run to follow — status, commands, and pickup notes in
+  [`docs/phase5-audit-fixes.md`](docs/phase5-audit-fixes.md).
+- **The per-strategy verdict table below is under re-certification.** The five
+  static-symbol strategy verdicts are expected to survive (their windows appear split-free);
+  the discovery_momentum row is known-invalid as evidence (audit P0-3). Do not cite the
+  table until the `post-data-fixes` re-run lands.
 - **Phase 4 (platform pivot) is complete — all six work iterations landed 2026-07-03**
   (branch `phase4-platform-pivot`, plan + findings in
   [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md)). The strategy-search
@@ -120,6 +135,7 @@ scale, and none of these change that.
 
 ## History
 
+- Phase 5 (audit fixes, in progress): [`docs/phase5-audit-fixes.md`](docs/phase5-audit-fixes.md); audit: [`docs/AUDIT-2026-07-12.md`](docs/AUDIT-2026-07-12.md).
 - Phase 4 (platform pivot: B2/A3/C2/C3, F10 fix): [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md).
 - Phase 3 (harness trust + strategy verdicts): [`docs/phase3-trustworthy-harness.md`](docs/phase3-trustworthy-harness.md).
 - Phase 2 era plans: [`docs/active-plan.md`](docs/active-plan.md) (superseded by phase 3 doc).
