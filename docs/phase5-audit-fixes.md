@@ -50,23 +50,74 @@ session — `nohup`, detached.
 - **Verified on early files**: unique timestamps (old files were ~33% duplicate rows),
   day-boundary ratios clean, ~46-55s/symbol
 
-### After the download completes
+### After the download completes — execution plan (written 2026-07-12 evening)
 
-1. Sanity pass: file count ~1,440; spot-check TSCO around 2024-12-20 (its 5:1 split must
-   show no gap in adjusted data); scan the log's suspect-gap warnings for any
-   persistent-level shift (real missed split) as opposed to same-day snap-backs.
-2. IS/OOS re-run to re-certify the per-strategy verdict table (the audit invalidated the
-   discovery_momentum row — IS and OOS were structurally different experiments under P0-3):
+Framing: this is a **re-audit of the verdict table, not a formality**. Every prior number
+was measured on data with ~33% duplicate rows and (for the discovery universe) unadjusted
+splits, and those distortions have no known direction — any verdict may flip, including
+"every strategy loses". Verdicts flip on evidence, not on re-tuning: the IS/OOS gate
+discipline holds (re-measuring existing hypotheses on corrected data does not burn the
+single OOS shot; reacting to the new OOS numbers with another tuning pass would).
 
-   ```
-   python -m axtrade.fulltest oos --is-start 2024-08-01 --is-end 2025-08-01 \
-       --oos-start 2025-08-01 --oos-end 2026-02-01 \
-       --symbols AAPL MSFT GOOGL AMZN NVDA --capital 100000
-   ```
+**Step 0 — completion check (~2 min).** Log tail reports completion;
+`ls data/historical/*.parquet | wc -l` ≈ 1,440 (1,447-symbol universe minus known skips:
+BF-B, BRK-B, ATVI, CDAY). Grep the log for symbol failures beyond those; a handful more
+delisted tickers is acceptable, a systematic failure pattern is not.
 
-   Label the result `post-data-fixes`. Expect ~4h wall clock.
-3. Update the ROADMAP per-strategy table with the new numbers and close iteration 2b in
-   this doc.
+**Step 1 — data sanity pass (~15 min).**
+1. TSCO around 2024-12-20 (5:1 split): adjusted data must show no day-boundary gap.
+2. Collect every suspect-gap warning from the log; classify each as same-day snap-back
+   (bad thin print, acceptable — AAT 2025-04-21 and BR 2024-08-05 already confirmed as
+   this) vs persistent level shift (missed split — **stop and investigate before
+   proceeding**).
+3. Sample ~20 files: timestamps unique and monotonic (old files were ~33% duplicates).
+4. Confirm files span the full 2024-08-01→2026-02-01 range (one file per symbol — the
+   two-file layout and its manifest ambiguity are gone).
+
+**Step 2 — buy_hold calibration gate (~40 min).** The phase-3 hand-computed target
+($108,595.57) is stale: deduped data changes fills and marks. Recompute by hand from the
+NEW parquet (recipe in docs/phase3-trustworthy-harness.md iterations 2-3: entry fill =
+first 1m bar close × 1.001, `final_equity = initial + Σqty×(mark − fill) − commissions`),
+then run
+
+```
+python -m axtrade.fulltest run --start 2024-08-01 --end 2025-08-01 \
+    --symbols AAPL MSFT GOOGL AMZN NVDA --capital 100000 --strategies buy_hold
+```
+
+**Gate: match to the cent, coverage through the window's last trading minute.** A mismatch
+means the phase-5 data fixes regressed the harness — stop; do not spend 4h on step 3.
+
+**Step 3 — IS/OOS re-certification (~4 h).**
+
+```
+python -m axtrade.fulltest oos --is-start 2024-08-01 --is-end 2025-08-01 \
+    --oos-start 2025-08-01 --oos-end 2026-02-01 \
+    --symbols AAPL MSFT GOOGL AMZN NVDA --capital 100000 \
+    --strategies momentum mean_reversion multi_timeframe pairs discovery_momentum overnight_reversal \
+    --label post-data-fixes
+```
+
+Notes: `overnight_reversal` is included explicitly (excluded by default) so its failed-IS
+verdict gets re-measured on clean data — with its already-tuned params, its one tuning
+pass is spent. No `--strategy-overrides`: same hypotheses, corrected data. Expected
+sensitivity: the five static-symbol strategies had no in-window splits (dedup + replay
+ordering are the only changes — verdicts expected to survive, numbers will shift);
+discovery_momentum is effectively measured for the first time (P0-3 made its old IS/OOS
+structurally incomparable, and its universe DID contain in-window splits).
+
+**Step 4 — record and close out.**
+1. Update the ROADMAP per-strategy table with the `post-data-fixes` numbers; remove the
+   "under re-certification" flag; explicitly note any verdict flip vs the
+   `post-harness-fixes` run and attribute it (duplicates / split artifacts / replay
+   ordering).
+2. Close iteration 2b in the table above (reference the comparison report filename in
+   `data/fulltest_results/`).
+3. Delete `data/historical_raw_backup/` (~6.3 GB) — only after steps 1–3 all pass.
+4. Commit the doc/ROADMAP updates as the iteration-2b close-out.
+
+Total wall clock ≈ 5 h. Steps 0–2 are cheap and gate the expensive step 3; anything
+anomalous in 0–2 stops the plan.
 
 ## Context for pickup on another machine
 
