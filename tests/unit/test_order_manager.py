@@ -769,6 +769,24 @@ class TestOrderManager:
         mock_redis.xadd.assert_called_once()
         args = mock_redis.xadd.call_args[0]
         assert args[0] == "stream:fills"
+        call_kwargs = mock_redis.xadd.call_args[1]
+        assert call_kwargs["maxlen"] == manager.config.redis.stream_maxlen
+        assert call_kwargs["approximate"] is True
+
+    async def test_publish_fill_omits_maxlen_when_unlimited(
+        self, manager: OrderManager, sample_fill: Fill
+    ) -> None:
+        """stream_maxlen=0 disables trimming: xadd is called without maxlen
+        (audit P1-8a)."""
+        manager.config.redis.stream_maxlen = 0
+        mock_redis = AsyncMock()
+        manager._redis = mock_redis
+
+        await manager._publish_fill(sample_fill)
+
+        call_kwargs = mock_redis.xadd.call_args[1]
+        assert "maxlen" not in call_kwargs
+        assert "approximate" not in call_kwargs
 
     async def test_publish_fill_no_redis(
         self, manager: OrderManager, sample_fill: Fill

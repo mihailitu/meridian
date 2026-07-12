@@ -70,6 +70,12 @@ class RedisConfig:
     port: int = 6379
     db: int = 0
     stream_prefix: str = "stream:ticks"
+    # Approximate cap per stream (XADD MAXLEN ~), 0 = unlimited.
+    stream_maxlen: int = 100_000
+    # Consumer group creation start id. "$" = new messages only (default,
+    # avoids replaying a long-lived stream's full retained history on group
+    # re-creation). Fulltest pins "0" so replay never misses early ticks.
+    consumer_group_start: str = "$"
 
 
 @dataclass
@@ -295,6 +301,8 @@ def load_config(path: Optional[Path] = None) -> Config:
             port=redis_data.get("port", 6379),
             db=redis_data.get("db", 0),
             stream_prefix=redis_data.get("stream_prefix", "stream:ticks"),
+            stream_maxlen=redis_data.get("stream_maxlen", 100_000),
+            consumer_group_start=redis_data.get("consumer_group_start", "$"),
         ),
         aggregator=AggregatorConfig(
             intervals=aggregator_data.get("intervals", ["1m", "5m"]),

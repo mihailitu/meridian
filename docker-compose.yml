@@ -22,6 +22,12 @@ services:
     volumes:
       - timescale_data:/var/lib/postgresql/data
       - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql
+      # NOTE: docker-entrypoint-initdb.d scripts only run on FIRST
+      # initialization of an empty data volume. Existing dev volumes are
+      # unaffected by adding this — they were already migrated via
+      # scripts/setup.sh's run_migrations step.
+      - ./scripts/init-migrations.sh:/docker-entrypoint-initdb.d/02-migrations.sh
+      - ./scripts/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U axtrade -d axtrade"]
       interval: 5s

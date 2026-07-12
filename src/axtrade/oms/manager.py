@@ -516,7 +516,13 @@ class OrderManager:
             return
 
         stream_key = "stream:fills"
-        await self._redis.xadd(stream_key, fill.to_dict())
+        stream_maxlen = self.config.redis.stream_maxlen
+        if stream_maxlen:
+            await self._redis.xadd(
+                stream_key, fill.to_dict(), maxlen=stream_maxlen, approximate=True
+            )
+        else:
+            await self._redis.xadd(stream_key, fill.to_dict())
 
     async def get_position(self, strategy_id: str, symbol: str) -> Optional[Position]:
         """Get a position.

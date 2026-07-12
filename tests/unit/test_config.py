@@ -88,6 +88,8 @@ class TestRedisConfig:
         assert config.host == "localhost"
         assert config.port == 6379
         assert config.stream_prefix == "stream:ticks"
+        assert config.stream_maxlen == 100_000
+        assert config.consumer_group_start == "$"
 
 
 class TestAggregatorConfig:
@@ -238,6 +240,8 @@ redis:
   host: redis.example.com
   port: 6380
   stream_prefix: stream:test
+  stream_maxlen: 50000
+  consumer_group_start: "0"
 
 aggregator:
   intervals:
@@ -309,6 +313,8 @@ api:
             assert config.redis.host == "redis.example.com"
             assert config.redis.port == 6380
             assert config.redis.stream_prefix == "stream:test"
+            assert config.redis.stream_maxlen == 50_000
+            assert config.redis.consumer_group_start == "0"
 
             # Aggregator
             assert config.aggregator.intervals == ["1m", "5m", "15m"]
@@ -372,6 +378,8 @@ gateway:
             assert config.gateway.adapter == "mock"
             assert config.gateway.mock.tick_interval_ms == 500
             assert config.redis.host == "localhost"
+            assert config.redis.stream_maxlen == 100_000
+            assert config.redis.consumer_group_start == "$"
             assert config.database.database == "axtrade"
             assert config.indicators.sma_period == 20
             assert config.oms.paper_mode is True

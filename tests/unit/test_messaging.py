@@ -79,6 +79,39 @@ class TestRedisPublisher:
         call_args = mock_redis.xadd.call_args
         assert call_args[0][0] == "stream:ticks:us"
 
+    async def test_publish_tick_uses_stream_maxlen_by_default(
+        self, publisher: RedisPublisher
+    ) -> None:
+        """xadd is called with maxlen=100000, approximate=True by default
+        (audit P1-8a)."""
+        mock_redis = AsyncMock()
+        mock_redis.xadd.return_value = "1234567890-0"
+        publisher._client = mock_redis
+
+        tick = Tick(symbol="AAPL", price=185.50, timestamp=datetime.now(timezone.utc))
+
+        await publisher.publish_tick(tick, market="us")
+
+        call_kwargs = mock_redis.xadd.call_args[1]
+        assert call_kwargs["maxlen"] == 100_000
+        assert call_kwargs["approximate"] is True
+
+    async def test_publish_tick_omits_maxlen_when_unlimited(self) -> None:
+        """stream_maxlen=0 disables trimming: xadd is called without maxlen."""
+        config = RedisConfig(host="localhost", port=6379, stream_maxlen=0)
+        publisher = RedisPublisher(config)
+        mock_redis = AsyncMock()
+        mock_redis.xadd.return_value = "1234567890-0"
+        publisher._client = mock_redis
+
+        tick = Tick(symbol="AAPL", price=185.50, timestamp=datetime.now(timezone.utc))
+
+        await publisher.publish_tick(tick, market="us")
+
+        call_kwargs = mock_redis.xadd.call_args[1]
+        assert "maxlen" not in call_kwargs
+        assert "approximate" not in call_kwargs
+
     async def test_publish_tick_not_connected_raises(
         self, publisher: RedisPublisher
     ) -> None:
@@ -130,6 +163,27 @@ class TestRedisConsumer:
             await consumer.connect()
 
         mock_redis.ping.assert_called_once()
+        mock_redis.xgroup_create.assert_called_once_with(
+            aggregator_config.source_stream,
+            aggregator_config.consumer_group,
+            id="$",
+            mkstream=True,
+        )
+
+    async def test_connect_creates_group_with_configured_start_id(
+        self, aggregator_config: AggregatorConfig
+    ) -> None:
+        """consumer_group_start="0" (fulltest's replay setting) is passed
+        through to xgroup_create (audit P1-8b)."""
+        redis_config = RedisConfig(host="localhost", port=6379, consumer_group_start="0")
+        consumer = RedisConsumer(redis_config, aggregator_config)
+        mock_redis = AsyncMock()
+
+        with patch(
+            "axtrade.common.messaging.redis.Redis", return_value=mock_redis
+        ):
+            await consumer.connect()
+
         mock_redis.xgroup_create.assert_called_once_with(
             aggregator_config.source_stream,
             aggregator_config.consumer_group,
@@ -524,6 +578,54 @@ class TestBarPublisher:
         assert data["bb_lower"] == "180.0"
         assert data["atr"] == "1.25"
 
+    async def test_publish_bar_uses_stream_maxlen_by_default(
+        self, publisher: BarPublisher
+    ) -> None:
+        """xadd is called with maxlen=100000, approximate=True by default."""
+        mock_redis = AsyncMock()
+        mock_redis.xadd.return_value = "1234567890-0"
+        publisher._client = mock_redis
+
+        bar = Bar(
+            symbol="AAPL",
+            open=185.0,
+            high=186.0,
+            low=184.0,
+            close=185.50,
+            volume=10000,
+            timestamp=datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+        )
+
+        await publisher.publish_bar(bar, interval="1m")
+
+        call_kwargs = mock_redis.xadd.call_args[1]
+        assert call_kwargs["maxlen"] == 100_000
+        assert call_kwargs["approximate"] is True
+
+    async def test_publish_bar_omits_maxlen_when_unlimited(self) -> None:
+        """stream_maxlen=0 disables trimming: xadd is called without maxlen."""
+        config = RedisConfig(host="localhost", port=6379, stream_maxlen=0)
+        publisher = BarPublisher(config, bar_stream_prefix="stream:bars")
+        mock_redis = AsyncMock()
+        mock_redis.xadd.return_value = "1234567890-0"
+        publisher._client = mock_redis
+
+        bar = Bar(
+            symbol="AAPL",
+            open=185.0,
+            high=186.0,
+            low=184.0,
+            close=185.50,
+            volume=10000,
+            timestamp=datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+        )
+
+        await publisher.publish_bar(bar, interval="1m")
+
+        call_kwargs = mock_redis.xadd.call_args[1]
+        assert "maxlen" not in call_kwargs
+        assert "approximate" not in call_kwargs
+
     async def test_publish_bar_not_connected_raises(
         self, publisher: BarPublisher
     ) -> None:
@@ -577,6 +679,27 @@ class TestBarConsumer:
             await consumer.connect()
 
         mock_redis.ping.assert_called_once()
+        mock_redis.xgroup_create.assert_called_once_with(
+            strategies_config.bar_stream,
+            strategies_config.consumer_group,
+            id="$",
+            mkstream=True,
+        )
+
+    async def test_connect_creates_group_with_configured_start_id(
+        self, strategies_config: StrategiesConfig
+    ) -> None:
+        """consumer_group_start="0" (fulltest's replay setting) is passed
+        through to xgroup_create (audit P1-8b)."""
+        redis_config = RedisConfig(host="localhost", port=6379, consumer_group_start="0")
+        consumer = BarConsumer(redis_config, strategies_config)
+        mock_redis = AsyncMock()
+
+        with patch(
+            "axtrade.common.messaging.redis.Redis", return_value=mock_redis
+        ):
+            await consumer.connect()
+
         mock_redis.xgroup_create.assert_called_once_with(
             strategies_config.bar_stream,
             strategies_config.consumer_group,

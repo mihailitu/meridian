@@ -55,7 +55,15 @@ class RedisPublisher:
             raise RuntimeError("Not connected to Redis")
 
         stream_key = f"{self.config.stream_prefix}:{market}"
-        message_id = await self._client.xadd(stream_key, tick.to_dict())
+        if self.config.stream_maxlen:
+            message_id = await self._client.xadd(
+                stream_key,
+                tick.to_dict(),
+                maxlen=self.config.stream_maxlen,
+                approximate=True,
+            )
+        else:
+            message_id = await self._client.xadd(stream_key, tick.to_dict())
         return message_id
 
     @property
@@ -93,7 +101,7 @@ class RedisConsumer:
         group = self.aggregator_config.consumer_group
         try:
             await self._client.xgroup_create(
-                stream_key, group, id="0", mkstream=True
+                stream_key, group, id=self.config.consumer_group_start, mkstream=True
             )
         except redis.ResponseError as e:
             if "BUSYGROUP" not in str(e):
@@ -274,7 +282,12 @@ class BarPublisher:
         data["volatility"] = volatility if volatility else ""
         data["trend_strength"] = str(trend_strength) if trend_strength is not None else ""
         data["volatility_percentile"] = str(volatility_percentile) if volatility_percentile is not None else ""
-        message_id = await self._client.xadd(stream_key, data)
+        if self.config.stream_maxlen:
+            message_id = await self._client.xadd(
+                stream_key, data, maxlen=self.config.stream_maxlen, approximate=True
+            )
+        else:
+            message_id = await self._client.xadd(stream_key, data)
         return message_id
 
     @property
@@ -312,7 +325,7 @@ class BarConsumer:
         group = self.strategies_config.consumer_group
         try:
             await self._client.xgroup_create(
-                stream_key, group, id="0", mkstream=True
+                stream_key, group, id=self.config.consumer_group_start, mkstream=True
             )
         except redis.ResponseError as e:
             if "BUSYGROUP" not in str(e):

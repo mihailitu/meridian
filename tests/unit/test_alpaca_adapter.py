@@ -159,6 +159,44 @@ class TestAlpacaAdapter:
         assert tick.bid == 185.49
         assert tick.ask == 185.51
 
+    async def test_handle_quote_zero_bid_emits_no_tick(self, adapter):
+        """A one-sided quote (bid=0) must not fabricate a mid-price tick
+        (audit P1-5): the code already treats bid/ask=0 as 'no quote' for
+        the `bid`/`ask` fields, but was still computing price=(ask+bid)/2."""
+        mock_quote = MagicMock()
+        mock_quote.symbol = "AAPL"
+        mock_quote.bid_price = 0
+        mock_quote.ask_price = 200.0
+        mock_quote.timestamp = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+
+        await adapter._handle_quote(mock_quote)
+
+        assert adapter._tick_queue.empty()
+
+    async def test_handle_quote_zero_ask_emits_no_tick(self, adapter):
+        """A one-sided quote (ask=0) must not fabricate a mid-price tick."""
+        mock_quote = MagicMock()
+        mock_quote.symbol = "AAPL"
+        mock_quote.bid_price = 185.49
+        mock_quote.ask_price = 0
+        mock_quote.timestamp = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+
+        await adapter._handle_quote(mock_quote)
+
+        assert adapter._tick_queue.empty()
+
+    async def test_handle_quote_none_bid_emits_no_tick(self, adapter):
+        """A quote with bid=None must not fabricate a mid-price tick."""
+        mock_quote = MagicMock()
+        mock_quote.symbol = "AAPL"
+        mock_quote.bid_price = None
+        mock_quote.ask_price = 185.51
+        mock_quote.timestamp = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+
+        await adapter._handle_quote(mock_quote)
+
+        assert adapter._tick_queue.empty()
+
     async def test_handle_trade_naive_timestamp(self, adapter):
         """Test trade handler handles naive timestamps."""
         mock_trade = MagicMock()

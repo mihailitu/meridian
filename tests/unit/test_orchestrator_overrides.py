@@ -105,6 +105,18 @@ class TestStrategyOverrides:
             assert "max_positions" in entry.config
 
 
+class TestRedisIsolation:
+    def test_consumer_group_start_pinned_to_zero(self) -> None:
+        """Fulltest replays a bounded historical window into fresh
+        per-run consumer groups, so group creation must replay from the
+        start of the stream ("0"), not the live-mode default ("$") which
+        would skip ticks published before the group is created (audit
+        P1-8b)."""
+        orch = _make_orchestrator()
+        cfg = orch._build_isolated_config()
+        assert cfg.redis.consumer_group_start == "0"
+
+
 class TestEnabledStrategiesSelection:
     def test_default_excludes_buy_hold_and_overnight_reversal(self) -> None:
         orch = _make_orchestrator()

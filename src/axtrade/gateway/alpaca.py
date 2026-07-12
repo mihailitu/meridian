@@ -128,14 +128,23 @@ class AlpacaAdapter(DataAdapter):
             quote: Quote object from Alpaca
         """
         try:
+            # IEX quotes are frequently one-sided pre/post-market (bid or ask
+            # reported as 0/None). Fabricating a mid from a one-sided quote
+            # (e.g. bid=0, ask=200 -> 100.00) poisons bar OHLC, so skip the
+            # quote entirely rather than emit a bogus tick.
+            if not quote.bid_price or not quote.ask_price:
+                return
+            if float(quote.bid_price) <= 0 or float(quote.ask_price) <= 0:
+                return
+
             tick = Tick(
                 symbol=quote.symbol,
                 price=float(quote.ask_price + quote.bid_price) / 2,
                 timestamp=quote.timestamp.replace(tzinfo=UTC)
                 if quote.timestamp.tzinfo is None
                 else quote.timestamp,
-                bid=float(quote.bid_price) if quote.bid_price else None,
-                ask=float(quote.ask_price) if quote.ask_price else None,
+                bid=float(quote.bid_price),
+                ask=float(quote.ask_price),
             )
             try:
                 self._tick_queue.put_nowait(tick)

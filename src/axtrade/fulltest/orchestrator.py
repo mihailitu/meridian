@@ -286,6 +286,11 @@ class FullBacktestOrchestrator:
         # Redis isolation
         config.redis.db = self._bt_config.redis_db
         config.redis.stream_prefix = f"{self._bt_config.stream_prefix}:ticks"
+        # Fulltest replays a bounded historical window through fresh,
+        # per-run consumer groups, so pin group creation to replay from the
+        # start of the stream ("0") rather than the live-mode default ("$"),
+        # which would skip ticks published before the group is created.
+        config.redis.consumer_group_start = "0"
 
         # Database isolation
         config.database.database = self._bt_config.backtest_db_name
@@ -538,6 +543,10 @@ class FullBacktestOrchestrator:
         )
         tick_stream = config.aggregator.source_stream
         agg_group = config.aggregator.consumer_group
+        # Also keeps the tick stream's undelivered backlog well under
+        # RedisConfig.stream_maxlen (default 100k, approximate XADD trim):
+        # a 100k cap can never trim messages the aggregator hasn't consumed
+        # yet when the producer is paced to <=20k undelivered ticks.
         max_lag = 20_000
 
         async def _pace_producer() -> None:

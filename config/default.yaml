@@ -35,6 +35,11 @@ redis:
   host: "localhost"
   port: 6380
   stream_prefix: "stream:ticks"
+  # Approximate cap per stream (XADD MAXLEN ~), 0 = unlimited.
+  stream_maxlen: 100000
+  # Consumer group creation start id. "$" = new messages only on group
+  # creation; fulltest pins "0" so replay never misses early ticks.
+  consumer_group_start: "$"
 
 aggregator:
   intervals:
