@@ -195,9 +195,10 @@ class TestAPIConfig:
     def test_defaults(self) -> None:
         """Test default values."""
         config = APIConfig()
-        assert config.host == "0.0.0.0"
+        assert config.host == "127.0.0.1"
         assert config.port == 8000
         assert config.cors_origins == ["*"]
+        assert config.api_key == ""
 
 
 class TestConfig:

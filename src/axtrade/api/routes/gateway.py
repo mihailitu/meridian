@@ -1,13 +1,12 @@
 """Gateway API endpoints for provider status and preferences."""
 
-from pathlib import Path
 from typing import Optional
 
-import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from axtrade.common import load_config
 
+from ..auth import require_api_key
 from ..schemas import GatewayPreferenceRequest, GatewayStatusResponse
 
 router = APIRouter()
@@ -16,11 +15,6 @@ AVAILABLE_ADAPTERS = ["mock", "ibkr", "alpaca", "yahoo"]
 
 # Store preferred adapter in memory (persists for server lifetime)
 _preferred_adapter: Optional[str] = None
-
-
-def _get_config_path() -> Path:
-    """Get the config file path."""
-    return Path(__file__).parent.parent.parent.parent.parent.parent / "config" / "default.yaml"
 
 
 @router.get("/gateway/status", response_model=GatewayStatusResponse)
@@ -43,14 +37,20 @@ async def get_gateway_status(request: Request) -> GatewayStatusResponse:
     )
 
 
-@router.post("/gateway/preference", response_model=GatewayStatusResponse)
+@router.post(
+    "/gateway/preference",
+    response_model=GatewayStatusResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def set_gateway_preference(
     request: GatewayPreferenceRequest,
 ) -> GatewayStatusResponse:
     """Set preferred gateway adapter.
 
-    This updates the config file. A gateway restart is required for the change
-    to take effect.
+    This only records the preference in memory for the lifetime of the API
+    server (audit P1-7: it no longer rewrites config/default.yaml). The
+    operator restarts the gateway with the desired adapter
+    (`make run-<adapter>`) to actually apply it.
     """
     global _preferred_adapter
 
@@ -60,17 +60,6 @@ async def set_gateway_preference(
             status_code=400,
             detail=f"Invalid adapter: {adapter}. Available: {AVAILABLE_ADAPTERS}",
         )
-
-    # Update the config file
-    config_path = _get_config_path()
-    if config_path.exists():
-        with open(config_path) as f:
-            config_data = yaml.safe_load(f)
-
-        config_data["gateway"]["adapter"] = adapter
-
-        with open(config_path, "w") as f:
-            yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
 
     _preferred_adapter = adapter
 

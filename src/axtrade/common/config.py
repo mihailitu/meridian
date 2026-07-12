@@ -1,5 +1,6 @@
 """Configuration loading and management."""
 
+import os
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -179,9 +180,12 @@ class StrategiesConfig:
 class APIConfig:
     """API server configuration."""
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    # Empty disables auth on mutating endpoints. AXTRADE_API_KEY env var
+    # (see .env, same mechanism as Alpaca creds) takes precedence over this.
+    api_key: str = ""
 
 
 @dataclass
@@ -353,9 +357,12 @@ def load_config(path: Optional[Path] = None) -> Config:
             ],
         ),
         api=APIConfig(
-            host=api_data.get("host", "0.0.0.0"),
+            host=api_data.get("host", "127.0.0.1"),
             port=api_data.get("port", 8000),
             cors_origins=api_data.get("cors_origins", ["*"]),
+            # AXTRADE_API_KEY env var (loaded via python-dotenv, same as
+            # ALPACA_API_KEY) takes precedence over the yaml value.
+            api_key=os.environ.get("AXTRADE_API_KEY", api_data.get("api_key", "")),
         ),
         discovery=DiscoveryConfig(
             enabled=discovery_data.get("enabled", True),

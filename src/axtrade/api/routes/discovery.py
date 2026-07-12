@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from axtrade.common import load_config
 from axtrade.discovery import DiscoveryService
 
+from ..auth import require_api_key
 from ..dependencies import state
 from ..schemas import (
     AddSymbolRequest,
@@ -72,7 +73,11 @@ async def get_discovered_symbols(
     ]
 
 
-@router.post("/discovery/scan", response_model=list[ScreenerResultResponse])
+@router.post(
+    "/discovery/scan",
+    response_model=list[ScreenerResultResponse],
+    dependencies=[Depends(require_api_key)],
+)
 async def run_scan(
     screeners: Optional[str] = Query(None, description="Comma-separated screener names"),
     interval: str = Query("1m", description="Bar interval to use"),
@@ -149,7 +154,11 @@ async def get_screeners(
     return results
 
 
-@router.post("/discovery/symbols", response_model=DiscoveredSymbolResponse)
+@router.post(
+    "/discovery/symbols",
+    response_model=DiscoveredSymbolResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def add_symbol(
     request: AddSymbolRequest,
     discovery_service: DiscoveryService = Depends(get_discovery_service),
@@ -172,7 +181,7 @@ async def add_symbol(
     )
 
 
-@router.delete("/discovery/symbols")
+@router.delete("/discovery/symbols", dependencies=[Depends(require_api_key)])
 async def clear_discovered(
     discovery_service: DiscoveryService = Depends(get_discovery_service),
 ) -> dict:

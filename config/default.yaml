@@ -148,8 +148,9 @@ strategies:
         max_positions: 10
 
 api:
-  host: "0.0.0.0"
+  host: "127.0.0.1"  # loopback only — put auth in front (api_key) before binding wider
   port: 8000
+  api_key: ""  # empty disables auth; prefer setting AXTRADE_API_KEY in .env over committing a key here
   cors_origins:
     - "http://localhost:3000"
     - "http://localhost:8000"

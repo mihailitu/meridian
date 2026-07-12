@@ -27,6 +27,18 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     config = app.state.config
 
+    # Expose the configured API key to route dependencies (api/auth.py).
+    # Empty means auth is disabled on mutating endpoints.
+    state.api_key = config.api.api_key
+
+    loopback_hosts = {"127.0.0.1", "localhost", "::1"}
+    if config.api.host not in loopback_hosts and not config.api.api_key:
+        logger.warning(
+            "API bound to non-loopback address without api_key: "
+            "mutating endpoints are unauthenticated",
+            host=config.api.host,
+        )
+
     # Initialize alert system first (no external dependencies)
     state.alert_repo = AlertRepository(max_alerts=1000)
     state.alert_service = AlertService(default_dedupe_seconds=60)

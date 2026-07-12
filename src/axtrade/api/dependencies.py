@@ -22,6 +22,8 @@ class APIState:
     strategy_control: Optional[StrategyControlPublisher] = None
     strategies_config: Optional[StrategiesConfig] = None
     discovery_service: Optional[DiscoveryService] = None
+    # Expected X-API-Key value. Empty string = auth disabled. See api/auth.py.
+    api_key: str = ""
 
 
 state = APIState()

@@ -1,5 +1,6 @@
 """Unit tests for gateway and discovery API endpoints."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -77,18 +78,15 @@ class TestGatewayStatusEndpoint:
             mock_cfg.gateway.adapter = "mock"
             mock_config.return_value = mock_cfg
 
-            with patch("axtrade.api.routes.gateway._get_config_path") as mock_path:
-                mock_path.return_value = MagicMock(exists=lambda: False)
+            response = client.post(
+                "/api/gateway/preference",
+                json={"adapter": "alpaca"},
+            )
+            assert response.status_code == 200
 
-                response = client.post(
-                    "/api/gateway/preference",
-                    json={"adapter": "alpaca"},
-                )
-                assert response.status_code == 200
-
-                data = response.json()
-                assert data["preferred_adapter"] == "alpaca"
-                assert data["requires_restart"] is True
+            data = response.json()
+            assert data["preferred_adapter"] == "alpaca"
+            assert data["requires_restart"] is True
 
     def test_set_gateway_preference_same_as_current(self, client: TestClient) -> None:
         """Test setting preference to current adapter."""
@@ -97,18 +95,45 @@ class TestGatewayStatusEndpoint:
             mock_cfg.gateway.adapter = "mock"
             mock_config.return_value = mock_cfg
 
-            with patch("axtrade.api.routes.gateway._get_config_path") as mock_path:
-                mock_path.return_value = MagicMock(exists=lambda: False)
+            response = client.post(
+                "/api/gateway/preference",
+                json={"adapter": "mock"},
+            )
+            assert response.status_code == 200
 
-                response = client.post(
-                    "/api/gateway/preference",
-                    json={"adapter": "mock"},
-                )
-                assert response.status_code == 200
+            data = response.json()
+            assert data["preferred_adapter"] == "mock"
+            assert data["requires_restart"] is False
 
-                data = response.json()
-                assert data["preferred_adapter"] == "mock"
-                assert data["requires_restart"] is False
+    def test_set_gateway_preference_does_not_write_config_file(
+        self, client: TestClient
+    ) -> None:
+        """Setting a preference must not touch config/default.yaml (audit P1-7).
+
+        The preference is in-memory for the server lifetime; the gateway
+        module no longer has a config-path helper or opens the file at all.
+        """
+        assert not hasattr(gateway, "_get_config_path")
+
+        config_path = (
+            Path(__file__).resolve().parents[2] / "config" / "default.yaml"
+        )
+        before_mtime = config_path.stat().st_mtime
+        before_content = config_path.read_bytes()
+
+        with patch("axtrade.api.routes.gateway.load_config") as mock_config:
+            mock_cfg = MagicMock()
+            mock_cfg.gateway.adapter = "mock"
+            mock_config.return_value = mock_cfg
+
+            response = client.post(
+                "/api/gateway/preference",
+                json={"adapter": "alpaca"},
+            )
+            assert response.status_code == 200
+
+        assert config_path.stat().st_mtime == before_mtime
+        assert config_path.read_bytes() == before_content
 
     def test_set_gateway_preference_invalid(self, client: TestClient) -> None:
         """Test setting an invalid gateway preference."""

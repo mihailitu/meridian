@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from axtrade.alerts import AlertCategory, AlertRepository, AlertSeverity
 
+from ..auth import require_api_key
 from ..dependencies import get_alert_repo
 
 router = APIRouter()
@@ -77,7 +78,7 @@ async def get_alert_counts(
     }
 
 
-@router.post("/alerts/{alert_id}/acknowledge")
+@router.post("/alerts/{alert_id}/acknowledge", dependencies=[Depends(require_api_key)])
 async def acknowledge_alert(
     alert_id: str,
     alert_repo: AlertRepository = Depends(get_alert_repo),

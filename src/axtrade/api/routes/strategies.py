@@ -10,6 +10,7 @@ from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies import STRATEGY_TYPES
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
+from ..auth import require_api_key
 from ..dependencies import (
     get_order_repo,
     get_position_repo,
@@ -186,7 +187,11 @@ async def get_strategy_detail(
     )
 
 
-@router.post("/strategies/{strategy_id}/enable", response_model=StrategyStatusResponse)
+@router.post(
+    "/strategies/{strategy_id}/enable",
+    response_model=StrategyStatusResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def enable_strategy(
     strategy_id: str,
     strategies_config: StrategiesConfig = Depends(get_strategies_config),
@@ -233,7 +238,11 @@ async def enable_strategy(
     )
 
 
-@router.post("/strategies/{strategy_id}/disable", response_model=StrategyStatusResponse)
+@router.post(
+    "/strategies/{strategy_id}/disable",
+    response_model=StrategyStatusResponse,
+    dependencies=[Depends(require_api_key)],
+)
 async def disable_strategy(
     strategy_id: str,
     strategies_config: StrategiesConfig = Depends(get_strategies_config),
