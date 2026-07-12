@@ -11,8 +11,7 @@ from starlette.responses import FileResponse
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor, LogChannel
 from axtrade.common import Config, DatabasePool, get_logger, load_config, setup_logging
-from axtrade.discovery import ConfigSymbolProvider, DiscoveryRunner, DiscoveryService
-from axtrade.gateway.control import GatewayControlPublisher
+from axtrade.discovery import DiscoveryControlPublisher, DiscoveryRepository
 from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
@@ -72,40 +71,20 @@ async def lifespan(app: FastAPI):
     await state.strategy_control.connect()
     logger.info("Strategy control initialized")
 
-    # Initialize discovery service and background scanner
-    state.discovery_service = DiscoveryService(db_pool=state.db_pool)
-    await state.discovery_service.connect()
-
-    # Set up gateway control publisher if auto_subscribe is enabled
-    gateway_control: GatewayControlPublisher | None = None
-    if config.discovery.auto_subscribe:
-        gateway_control = GatewayControlPublisher(config.redis, config.gateway)
-        await gateway_control.connect()
-        logger.info("Gateway control publisher initialized for auto-subscribe")
-
-    discovery_runner = DiscoveryRunner(
-        config=config,
-        discovery_service=state.discovery_service,
-        symbol_provider=ConfigSymbolProvider(config),
-        alert_service=state.alert_service,
-        gateway_control=gateway_control,
-    )
-    discovery_task = asyncio.create_task(discovery_runner.start())
-    logger.info("Discovery scanner initialized")
+    # Discovery: the API process is a reader (DB) + command publisher now
+    # (audit P1-3). Scanning moved to the strategy-runner process so trading
+    # doesn't depend on the API being up; see discovery/runner.py and
+    # strategies/runner.py.
+    state.discovery_repo = DiscoveryRepository(state.db_pool)
+    state.discovery_control = DiscoveryControlPublisher(config.redis, config.discovery)
+    await state.discovery_control.connect()
+    logger.info("Discovery repository and control publisher initialized")
 
     yield
 
     # Cleanup
-    discovery_runner_stop = discovery_runner.stop()
-    await discovery_runner_stop
-    discovery_task.cancel()
-    try:
-        await discovery_task
-    except asyncio.CancelledError:
-        pass
-
-    if gateway_control:
-        await gateway_control.disconnect()
+    if state.discovery_control:
+        await state.discovery_control.disconnect()
 
     if state.strategy_control:
         await state.strategy_control.disconnect()

@@ -215,6 +215,7 @@ class DiscoveryConfig:
     auto_subscribe: bool = False
     min_score: float = 60.0
     max_positions: int = 10
+    control_channel: str = "axtrade:discovery:control"
     screeners: list[ScreenerInstanceConfig] = field(default_factory=list)
 
 
@@ -380,6 +381,7 @@ def load_config(path: Optional[Path] = None) -> Config:
             auto_subscribe=discovery_data.get("auto_subscribe", False),
             min_score=discovery_data.get("min_score", 60.0),
             max_positions=discovery_data.get("max_positions", 10),
+            control_channel=discovery_data.get("control_channel", "axtrade:discovery:control"),
             screeners=[
                 ScreenerInstanceConfig(
                     type=s["type"],

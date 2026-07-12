@@ -232,3 +232,65 @@ class TestDiscoveryFeeder:
         await runner._feed_gateway()
 
         gateway_control.add_symbols.assert_not_called()
+
+
+class TestEvictionHeldPositionGuard:
+    """Stale-symbol eviction must not orphan open positions (audit P1-9):
+    discovery_momentum's exits only run inside on_bar, so unsubscribing a
+    held symbol would leave its position stuck open forever."""
+
+    def _runner(self, position_repo, subscribed):
+        gateway_control = AsyncMock()
+        gateway_control.add_symbols = AsyncMock(return_value=1)
+        gateway_control.remove_symbols = AsyncMock(return_value=1)
+        runner = DiscoveryRunner(
+            config=make_config(auto_subscribe=True, min_score=60.0),
+            discovery_service=make_discovery_service([]),
+            symbol_provider=make_symbol_provider(),
+            gateway_control=gateway_control,
+            position_repo=position_repo,
+        )
+        runner._subscribed_symbols = set(subscribed)
+        return runner, gateway_control
+
+    @staticmethod
+    def _position(symbol, strategy_id="discovery_momentum"):
+        pos = MagicMock()
+        pos.symbol = symbol
+        pos.strategy_id = strategy_id
+        return pos
+
+    async def test_stale_but_held_symbol_keeps_subscription(self):
+        repo = MagicMock()
+        repo.get_open_positions = AsyncMock(return_value=[self._position("TSLA")])
+        runner, gateway_control = self._runner(repo, subscribed={"TSLA", "GOOG"})
+
+        await runner._feed_gateway()
+
+        removed = set(gateway_control.remove_symbols.call_args[0][0])
+        assert removed == {"GOOG"}
+        # TSLA stays tracked so a later scan (once the position closes)
+        # can still evict it.
+        assert "TSLA" in runner._subscribed_symbols
+        assert "GOOG" not in runner._subscribed_symbols
+
+    async def test_stale_unheld_symbols_still_removed(self):
+        repo = MagicMock()
+        repo.get_open_positions = AsyncMock(return_value=[])
+        runner, gateway_control = self._runner(repo, subscribed={"TSLA"})
+
+        await runner._feed_gateway()
+
+        removed = set(gateway_control.remove_symbols.call_args[0][0])
+        assert removed == {"TSLA"}
+
+    async def test_position_check_failure_skips_all_removals(self):
+        """Fail safe: if we can't tell what's held, evict nothing this cycle."""
+        repo = MagicMock()
+        repo.get_open_positions = AsyncMock(side_effect=RuntimeError("db down"))
+        runner, gateway_control = self._runner(repo, subscribed={"TSLA", "GOOG"})
+
+        await runner._feed_gateway()
+
+        gateway_control.remove_symbols.assert_not_called()
+        assert runner._subscribed_symbols == {"TSLA", "GOOG"}

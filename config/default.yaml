@@ -170,6 +170,7 @@ discovery:
   auto_subscribe: false
   min_score: 60
   max_positions: 10
+  control_channel: "axtrade:discovery:control"
   screeners:
     - type: momentum
       name: momentum_screener

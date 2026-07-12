@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import type {
     AddSymbolRequest,
     DiscoveredSymbol,
+    DiscoveryCommandAccepted,
     DiscoveryState,
-    ScreenerResult,
     ScreenerSummary,
 } from '../types/discovery';
 
@@ -124,33 +124,19 @@ export function useScreeners() {
 }
 
 export function useScan() {
-    const [results, setResults] = useState<ScreenerResult[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
-    const runScan = useCallback(async (options?: {
-        screeners?: string[];
-        interval?: string;
-        barLimit?: number;
-    }) => {
+    // Discovery scanning runs in the strategy-runner process (audit P1-3):
+    // this just publishes a "scan" command and returns the ack. The scan's
+    // results show up asynchronously via useDiscoveryState / useDiscoveredSymbols.
+    const runScan = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            const searchParams = new URLSearchParams();
-            if (options?.screeners?.length) {
-                searchParams.set('screeners', options.screeners.join(','));
-            }
-            if (options?.interval) {
-                searchParams.set('interval', options.interval);
-            }
-            if (options?.barLimit !== undefined) {
-                searchParams.set('bar_limit', options.barLimit.toString());
-            }
-
-            const queryString = searchParams.toString();
-            const endpoint = `/discovery/scan${queryString ? `?${queryString}` : ''}`;
-            const data = await fetchApi<ScreenerResult[]>(endpoint, { method: 'POST' });
-            setResults(data);
+            const data = await fetchApi<DiscoveryCommandAccepted>('/discovery/scan', {
+                method: 'POST',
+            });
             return data;
         } catch (err) {
             const message = err instanceof Error ? err.message : 'Failed to run scan';
@@ -161,12 +147,7 @@ export function useScan() {
         }
     }, []);
 
-    const clearResults = useCallback(() => {
-        setResults([]);
-        setError(null);
-    }, []);
-
-    return { results, loading, error, runScan, clearResults };
+    return { loading, error, runScan };
 }
 
 export function useClearDiscovered() {
@@ -177,7 +158,7 @@ export function useClearDiscovered() {
         setLoading(true);
         setError(null);
         try {
-            await fetchApi<{ status: string; message: string }>('/discovery/symbols', {
+            await fetchApi<DiscoveryCommandAccepted>('/discovery/symbols', {
                 method: 'DELETE',
             });
         } catch (err) {
@@ -200,7 +181,7 @@ export function useAddSymbol() {
         setLoading(true);
         setError(null);
         try {
-            const data = await fetchApi<DiscoveredSymbol>('/discovery/symbols', {
+            const data = await fetchApi<DiscoveryCommandAccepted>('/discovery/symbols', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(request),

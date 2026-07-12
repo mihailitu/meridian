@@ -145,7 +145,7 @@ class BacktestInfrastructure:
 
     async def _truncate_data(self, conn: asyncpg.Connection) -> None:
         """Truncate data tables so each backtest starts clean."""
-        tables = ["fills", "orders", "positions", "bars"]
+        tables = ["fills", "orders", "positions", "bars", "discovered_symbols"]
         for table in tables:
             try:
                 await conn.execute(f"TRUNCATE {table} CASCADE")

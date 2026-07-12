@@ -15,9 +15,12 @@ from axtrade.common import (
     load_config,
     setup_logging,
 )
+from axtrade.discovery import ConfigSymbolProvider, DiscoveryRunner
 from axtrade.discovery.service import DiscoveryService
+from axtrade.gateway.control import GatewayControlPublisher
 from axtrade.indicators import MarketRegime, MarketTrend, VolatilityState
 from axtrade.oms import Fill, Order, OrderManager, OrderSide
+from axtrade.oms.repository import PositionRepository
 
 from . import STRATEGY_TYPES
 from .base import BarWithIndicators, BaseStrategy
@@ -43,6 +46,9 @@ class StrategyRunner:
         self._control_supervisor: Optional[LoopSupervisor] = None
         self._consume_supervisor: Optional[LoopSupervisor] = None
         self._discovery_service = discovery_service
+        self._discovery_runner: Optional[DiscoveryRunner] = None
+        self._discovery_task: Optional[asyncio.Task] = None
+        self._gateway_control: Optional[GatewayControlPublisher] = None
         self._logged_errors: set[str] = set()
         self._current_trading_date: Optional[str] = None
 
@@ -73,6 +79,45 @@ class StrategyRunner:
                         "Injected discovery service into strategy",
                         strategy_id=strategy.strategy_id,
                     )
+
+        # Start the discovery scanner in-process (audit P1-3): trading must
+        # not depend on the API process for discovery_momentum to see fresh
+        # scores, so the scanner lives here now, matching fulltest's
+        # in-process wiring. Runs regardless of whether a discovery_momentum
+        # strategy is loaded, mirroring the API's previous unconditional
+        # behavior (other consumers may still want fresh discoveries/gateway
+        # auto-subscribe).
+        if self.config.discovery.enabled:
+            if self._discovery_service is None:
+                self._discovery_service = DiscoveryService(db_pool=self._db_pool)
+                await self._discovery_service.connect()
+                for strategy in self._strategies.values():
+                    if hasattr(strategy, "set_discovery_service"):
+                        strategy.set_discovery_service(self._discovery_service)
+                        self.logger.info(
+                            "Injected discovery service into strategy",
+                            strategy_id=strategy.strategy_id,
+                        )
+
+            if self.config.discovery.auto_subscribe:
+                self._gateway_control = GatewayControlPublisher(
+                    self.config.redis, self.config.gateway
+                )
+                await self._gateway_control.connect()
+                self.logger.info("Gateway control publisher initialized for auto-subscribe")
+
+            position_repo = PositionRepository(self._db_pool)
+
+            self._discovery_runner = DiscoveryRunner(
+                config=self.config,
+                discovery_service=self._discovery_service,
+                symbol_provider=ConfigSymbolProvider(self.config),
+                alert_service=None,
+                gateway_control=self._gateway_control,
+                position_repo=position_repo,
+            )
+            self._discovery_task = asyncio.create_task(self._discovery_runner.start())
+            self.logger.info("Discovery scanner started")
 
         # Initialize state repository and apply persisted state
         self._state_repo = StrategyStateRepository(self._db_pool)
@@ -211,6 +256,19 @@ class StrategyRunner:
 
         if self._control_subscriber:
             await self._control_subscriber.disconnect()
+
+        if self._discovery_runner:
+            await self._discovery_runner.stop()
+
+        if self._discovery_task:
+            self._discovery_task.cancel()
+            try:
+                await self._discovery_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._gateway_control:
+            await self._gateway_control.disconnect()
 
         if self._bar_consumer:
             await self._bar_consumer.disconnect()

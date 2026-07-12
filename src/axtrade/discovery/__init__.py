@@ -1,6 +1,8 @@
 """Symbol discovery and screening module."""
 
+from .control import DiscoveryControlCommand, DiscoveryControlPublisher, DiscoveryControlSubscriber
 from .providers import ConfigSymbolProvider, SymbolProvider
+from .repository import DiscoveryRepository
 from .runner import DiscoveryRunner
 from .screeners import (
     BaseScreener,
@@ -22,6 +24,10 @@ __all__ = [
     "BaseScreener",
     "ConfigSymbolProvider",
     "DiscoveredSymbol",
+    "DiscoveryControlCommand",
+    "DiscoveryControlPublisher",
+    "DiscoveryControlSubscriber",
+    "DiscoveryRepository",
     "DiscoveryRunner",
     "DiscoveryService",
     "DiscoveryState",

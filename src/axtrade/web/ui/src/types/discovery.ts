@@ -45,3 +45,13 @@ export interface AddSymbolRequest {
     price?: number;
     notes?: string;
 }
+
+/** Ack shape for discovery control commands (scan / add_symbols / remove_symbols).
+ * Discovery scanning runs in the strategy-runner process (audit P1-3); these
+ * endpoints publish a command and return immediately rather than the
+ * command's eventual result -- poll /discovery/state or /discovery/symbols. */
+export interface DiscoveryCommandAccepted {
+    status: string;
+    command: string;
+    message: string;
+}

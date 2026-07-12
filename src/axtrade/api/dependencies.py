@@ -4,7 +4,7 @@ from typing import Optional
 
 from axtrade.alerts import AlertRepository, AlertService, HealthMonitor
 from axtrade.common import DatabasePool, StrategiesConfig
-from axtrade.discovery import DiscoveryService
+from axtrade.discovery import DiscoveryControlPublisher, DiscoveryRepository
 from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies.control import StrategyControlPublisher, StrategyStateRepository
 
@@ -21,7 +21,10 @@ class APIState:
     strategy_state_repo: Optional[StrategyStateRepository] = None
     strategy_control: Optional[StrategyControlPublisher] = None
     strategies_config: Optional[StrategiesConfig] = None
-    discovery_service: Optional[DiscoveryService] = None
+    # Discovery: scanning runs in the strategy-runner process (audit P1-3).
+    # The API only reads persisted results and publishes control commands.
+    discovery_repo: Optional[DiscoveryRepository] = None
+    discovery_control: Optional[DiscoveryControlPublisher] = None
     # Expected X-API-Key value. Empty string = auth disabled. See api/auth.py.
     api_key: str = ""
 
@@ -83,3 +86,17 @@ def get_strategies_config() -> StrategiesConfig:
     if state.strategies_config is None:
         raise RuntimeError("Strategies config not initialized")
     return state.strategies_config
+
+
+def get_discovery_repo() -> DiscoveryRepository:
+    """Get discovery repository dependency."""
+    if state.discovery_repo is None:
+        raise RuntimeError("Discovery repository not initialized")
+    return state.discovery_repo
+
+
+def get_discovery_control() -> DiscoveryControlPublisher:
+    """Get discovery control publisher dependency."""
+    if state.discovery_control is None:
+        raise RuntimeError("Discovery control publisher not initialized")
+    return state.discovery_control

@@ -223,6 +223,19 @@ class AddSymbolRequest(BaseModel):
     notes: str | None = None
 
 
+class DiscoveryCommandAcceptedResponse(BaseModel):
+    """Acknowledgment that a discovery control command was published.
+
+    Discovery scanning runs in the strategy-runner process (audit P1-3); the
+    API only publishes commands on axtrade:discovery:control, it can't return
+    the command's results synchronously.
+    """
+
+    status: str = "accepted"
+    command: str
+    message: str
+
+
 class GatewayStatusResponse(BaseModel):
     """Gateway status and adapter information."""
 

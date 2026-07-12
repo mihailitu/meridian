@@ -1,15 +1,20 @@
 """Unit tests for gateway and discovery API endpoints."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
+from axtrade.api import dependencies as api_dependencies
 from axtrade.api.routes import discovery, gateway
-from axtrade.discovery import DiscoveredSymbol, DiscoveryService
+from axtrade.discovery import (
+    DiscoveredSymbol,
+    DiscoveryControlPublisher,
+    DiscoveryRepository,
+)
 
 
 def create_test_app() -> FastAPI:
@@ -146,28 +151,42 @@ class TestGatewayStatusEndpoint:
 
 
 class TestDiscoverySymbolsEndpoint:
-    """Tests for discovery symbols API endpoints."""
+    """Tests for discovery symbols API endpoints.
+
+    The API process no longer holds a live DiscoveryService (audit P1-3):
+    GET reads persisted results via DiscoveryRepository, and mutating routes
+    publish commands via DiscoveryControlPublisher instead of calling a
+    scanner directly.
+    """
 
     @pytest.fixture
-    def mock_discovery_service(self) -> MagicMock:
-        """Create a mock discovery service."""
-        service = MagicMock(spec=DiscoveryService)
-        service.get_discovered.return_value = []
-        service.add_manual_symbol.return_value = DiscoveredSymbol(
-            symbol="TSLA",
-            source="manual",
-            score=0.0,
-            price=250.00,
-        )
-        return service
+    def mock_discovery_repo(self) -> MagicMock:
+        """Create a mock discovery repository."""
+        repo = MagicMock(spec=DiscoveryRepository)
+        repo.get_discovered = AsyncMock(return_value=[])
+        return repo
 
     @pytest.fixture
-    def client(self, mock_discovery_service) -> TestClient:
-        """Create test client with mocked discovery service."""
+    def mock_discovery_control(self) -> MagicMock:
+        """Create a mock discovery control publisher."""
+        publisher = MagicMock(spec=DiscoveryControlPublisher)
+        publisher.add_symbols = AsyncMock(return_value=1)
+        publisher.remove_symbols = AsyncMock(return_value=1)
+        publisher.scan = AsyncMock(return_value=1)
+        return publisher
+
+    @pytest.fixture
+    def client(self, mock_discovery_repo, mock_discovery_control) -> TestClient:
+        """Create test client with mocked discovery repo/control publisher."""
         app = create_test_app()
 
-        # Override the FastAPI dependency
-        app.dependency_overrides[discovery.get_discovery_service] = lambda: mock_discovery_service
+        # Override the FastAPI dependencies
+        app.dependency_overrides[api_dependencies.get_discovery_repo] = (
+            lambda: mock_discovery_repo
+        )
+        app.dependency_overrides[api_dependencies.get_discovery_control] = (
+            lambda: mock_discovery_control
+        )
 
         with TestClient(app) as client:
             yield client
@@ -175,68 +194,59 @@ class TestDiscoverySymbolsEndpoint:
         # Clean up
         app.dependency_overrides.clear()
 
-    def test_add_symbol(self, client: TestClient, mock_discovery_service) -> None:
+    def test_add_symbol(self, client: TestClient, mock_discovery_control) -> None:
         """Test adding a symbol manually."""
         response = client.post(
             "/api/discovery/symbols",
             json={"symbol": "TSLA", "price": 250.00},
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
 
         data = response.json()
-        assert data["symbol"] == "TSLA"
-        assert data["source"] == "manual"
-        assert data["score"] == 0.0
-        assert data["price"] == 250.00
+        assert data["status"] == "accepted"
+        assert data["command"] == "add_symbols"
+        assert "TSLA" in data["message"]
 
-        mock_discovery_service.add_manual_symbol.assert_called_once_with(
-            symbol="TSLA",
-            price=250.00,
-            notes=None,
+        mock_discovery_control.add_symbols.assert_called_once_with(
+            [{"symbol": "TSLA", "price": 250.00, "notes": None}]
         )
 
     def test_add_symbol_with_notes(
-        self, client: TestClient, mock_discovery_service
+        self, client: TestClient, mock_discovery_control
     ) -> None:
         """Test adding a symbol with notes."""
-        mock_discovery_service.add_manual_symbol.return_value = DiscoveredSymbol(
-            symbol="AAPL",
-            source="manual",
-            score=0.0,
-            metadata={"notes": "Earnings play"},
-        )
-
         response = client.post(
             "/api/discovery/symbols",
             json={"symbol": "AAPL", "notes": "Earnings play"},
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
 
-        mock_discovery_service.add_manual_symbol.assert_called_once_with(
-            symbol="AAPL",
-            price=None,
-            notes="Earnings play",
+        data = response.json()
+        assert data["status"] == "accepted"
+        assert data["command"] == "add_symbols"
+
+        mock_discovery_control.add_symbols.assert_called_once_with(
+            [{"symbol": "AAPL", "price": None, "notes": "Earnings play"}]
         )
 
     def test_add_symbol_minimal(
-        self, client: TestClient, mock_discovery_service
+        self, client: TestClient, mock_discovery_control
     ) -> None:
         """Test adding a symbol with just the symbol name."""
-        mock_discovery_service.add_manual_symbol.return_value = DiscoveredSymbol(
-            symbol="NVDA",
-            source="manual",
-            score=0.0,
-        )
-
         response = client.post(
             "/api/discovery/symbols",
             json={"symbol": "NVDA"},
         )
-        assert response.status_code == 200
+        assert response.status_code == 202
 
         data = response.json()
-        assert data["symbol"] == "NVDA"
-        assert data["source"] == "manual"
+        assert data["status"] == "accepted"
+        assert data["command"] == "add_symbols"
+        assert "NVDA" in data["message"]
+
+        mock_discovery_control.add_symbols.assert_called_once_with(
+            [{"symbol": "NVDA", "price": None, "notes": None}]
+        )
 
     def test_add_symbol_missing_symbol(self, client: TestClient) -> None:
         """Test adding a symbol without required symbol field."""
@@ -247,10 +257,10 @@ class TestDiscoverySymbolsEndpoint:
         assert response.status_code == 422  # Validation error
 
     def test_get_discovered_symbols(
-        self, client: TestClient, mock_discovery_service
+        self, client: TestClient, mock_discovery_repo
     ) -> None:
         """Test getting discovered symbols."""
-        mock_discovery_service.get_discovered.return_value = [
+        mock_discovery_repo.get_discovered.return_value = [
             DiscoveredSymbol(
                 symbol="AAPL",
                 source="manual",
@@ -273,13 +283,22 @@ class TestDiscoverySymbolsEndpoint:
         assert data[0]["symbol"] == "AAPL"
         assert data[1]["symbol"] == "TSLA"
 
+        mock_discovery_repo.get_discovered.assert_called_once_with(
+            min_score=None,
+            source=None,
+            bullish_only=False,
+            bearish_only=False,
+            limit=50,
+        )
+
     def test_clear_discovered_symbols(
-        self, client: TestClient, mock_discovery_service
+        self, client: TestClient, mock_discovery_control
     ) -> None:
         """Test clearing discovered symbols."""
         response = client.delete("/api/discovery/symbols")
         assert response.status_code == 200
 
         data = response.json()
-        assert data["status"] == "ok"
-        mock_discovery_service.clear_discovered.assert_called_once()
+        assert data["status"] == "accepted"
+        assert data["command"] == "remove_symbols"
+        mock_discovery_control.remove_symbols.assert_called_once_with()

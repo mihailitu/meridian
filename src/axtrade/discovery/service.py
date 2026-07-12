@@ -6,6 +6,7 @@ from typing import Optional
 
 from axtrade.common import BarRepository, DatabasePool, get_logger
 
+from .repository import DiscoveryRepository
 from .screeners import (
     BaseScreener,
     MomentumScreener,
@@ -37,6 +38,7 @@ class DiscoveryService:
         self.logger = get_logger("discovery")
         self._db_pool = db_pool
         self._bar_repo: Optional[BarRepository] = None
+        self._discovery_repo: Optional[DiscoveryRepository] = None
 
         # Initialize default screeners if none provided
         self._screeners: dict[str, BaseScreener] = {}
@@ -66,6 +68,7 @@ class DiscoveryService:
         """Initialize database connection."""
         if self._db_pool:
             self._bar_repo = BarRepository(self._db_pool)
+            self._discovery_repo = DiscoveryRepository(self._db_pool)
             self.logger.info("Discovery service connected to database")
 
     def add_screener(self, screener: BaseScreener) -> None:
@@ -178,10 +181,27 @@ class DiscoveryService:
                 discoveries=len(self._discovered),
             )
 
+            await self.persist_discovered()
+
             return valid_results
 
         finally:
             self._is_scanning = False
+
+    async def persist_discovered(self) -> None:
+        """Mirror the in-memory cache to the discovered_symbols table.
+
+        Makes discoveries readable by other processes (e.g. the API, audit
+        P1-3). Called after every scan and after control commands that mutate
+        the cache (manual add, clear). Best-effort: a DB hiccup here must not
+        break the pipeline that already ran.
+        """
+        if not self._discovery_repo:
+            return
+        try:
+            await self._discovery_repo.replace_scan(list(self._discovered.values()))
+        except Exception as e:
+            self.logger.warning("Failed to persist discovered symbols", error=str(e))
 
     async def _fetch_bars_data(
         self,
