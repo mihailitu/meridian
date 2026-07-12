@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import structlog
 
 from axtrade.common import (
     AggregatorConfig,
@@ -276,6 +277,124 @@ class TestRedisConsumer:
         tick = consumer._parse_tick(data)
 
         assert tick is None
+
+    async def test_parse_tick_ibkr_float_volume_string(
+        self, consumer: RedisConsumer
+    ) -> None:
+        """ib_insync's Ticker.volume is a float; Tick.to_dict serializes it
+        as e.g. "2417.0". This must parse to an int volume, not be dropped
+        (regression test for audit P0-4 kill (a))."""
+        data = {
+            "symbol": "AAPL",
+            "price": "185.50",
+            "volume": "2417.0",
+        }
+
+        tick = consumer._parse_tick(data)
+
+        assert tick is not None
+        assert tick.volume == 2417
+
+    async def test_tick_volume_round_trip_through_to_dict(
+        self, consumer: RedisConsumer
+    ) -> None:
+        """A Tick with an int volume survives a to_dict -> _parse_tick round trip."""
+        original = Tick(
+            symbol="AAPL",
+            price=185.50,
+            timestamp=datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+            volume=2417,
+        )
+
+        tick = consumer._parse_tick(original.to_dict())
+
+        assert tick is not None
+        assert tick.volume == 2417
+
+    async def test_parse_tick_zero_values_round_trip(
+        self, consumer: RedisConsumer
+    ) -> None:
+        """bid=0.0/ask=0.0/volume=0 must round-trip as 0, not None or ""."""
+        original = Tick(
+            symbol="AAPL",
+            price=185.50,
+            timestamp=datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+            bid=0.0,
+            ask=0.0,
+            volume=0,
+        )
+
+        data = original.to_dict()
+        assert data["bid"] == "0.0"
+        assert data["ask"] == "0.0"
+        assert data["volume"] == "0"
+
+        tick = consumer._parse_tick(data)
+
+        assert tick is not None
+        assert tick.bid == 0.0
+        assert tick.ask == 0.0
+        assert tick.volume == 0
+
+    async def test_consume_acks_and_logs_poison_tick_message(
+        self, consumer: RedisConsumer, aggregator_config: AggregatorConfig
+    ) -> None:
+        """An unparseable message must be acked (not left in the PEL forever)
+        and logged, and stream processing must continue past it."""
+        mock_redis = AsyncMock()
+
+        poison_message = (
+            aggregator_config.source_stream,
+            [("poison-0", {"invalid": "data"})],
+        )
+        good_message = (
+            aggregator_config.source_stream,
+            [
+                (
+                    "good-0",
+                    {
+                        "symbol": "AAPL",
+                        "price": "185.50",
+                        "timestamp": "2024-01-15T09:30:00+00:00",
+                        "volume": "1000",
+                    },
+                )
+            ],
+        )
+
+        call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [poison_message]
+            if call_count == 2:
+                return [good_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        ticks = []
+        with structlog.testing.capture_logs() as cap_logs:
+            async for tick in consumer.consume("test-consumer"):
+                ticks.append(tick)
+
+        assert len(ticks) == 1
+        assert ticks[0].symbol == "AAPL"
+
+        events = [entry["event"] for entry in cap_logs]
+        assert "unparseable_tick_message" in events
+
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "poison-0"
+        )
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "good-0"
+        )
 
     def test_connected_property(self, consumer: RedisConsumer) -> None:
         """Test connected property."""
@@ -615,6 +734,69 @@ class TestBarConsumer:
         result = consumer._parse_bar_data(data)
 
         assert result is None
+
+    async def test_consume_acks_and_logs_poison_bar_message(
+        self, consumer: BarConsumer, strategies_config: StrategiesConfig
+    ) -> None:
+        """An unparseable bar message must be acked and logged, and stream
+        processing must continue past it."""
+        mock_redis = AsyncMock()
+
+        poison_message = (
+            strategies_config.bar_stream,
+            [("poison-0", {"invalid": "data"})],
+        )
+        good_message = (
+            strategies_config.bar_stream,
+            [
+                (
+                    "good-0",
+                    {
+                        "symbol": "AAPL",
+                        "open": "185.0",
+                        "high": "186.0",
+                        "low": "184.0",
+                        "close": "185.50",
+                        "volume": "10000",
+                        "timestamp": "2024-01-15T09:30:00+00:00",
+                    },
+                )
+            ],
+        )
+
+        call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [poison_message]
+            if call_count == 2:
+                return [good_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        bars = []
+        with structlog.testing.capture_logs() as cap_logs:
+            async for bar_data in consumer.consume("test-consumer"):
+                bars.append(bar_data)
+
+        assert len(bars) == 1
+        assert bars[0]["bar"].symbol == "AAPL"
+
+        events = [entry["event"] for entry in cap_logs]
+        assert "unparseable_bar_message" in events
+
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "poison-0"
+        )
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "good-0"
+        )
 
     def test_connected_property(self, consumer: BarConsumer) -> None:
         """Test connected property."""

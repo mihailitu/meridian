@@ -7,7 +7,10 @@ from typing import Optional
 import redis.asyncio as redis
 
 from .config import AggregatorConfig, RedisConfig, StrategiesConfig
+from .logging import get_logger
 from .types import Bar, Tick
+
+logger = get_logger(__name__)
 
 
 class RedisPublisher:
@@ -145,6 +148,10 @@ class RedisConsumer:
                         yield tick
                         if self._client:
                             await self._client.xack(stream_key, group, msg_id)
+                    else:
+                        logger.warning("unparseable_tick_message", data=data)
+                        if self._client:
+                            await self._client.xack(stream_key, group, msg_id)
 
     def _parse_tick(self, data: dict) -> Optional[Tick]:
         """Parse tick data from Redis message."""
@@ -156,13 +163,15 @@ class RedisConsumer:
                 timestamp = datetime.now(timezone.utc)
 
             volume = data.get("volume", "")
-            volume_int = int(volume) if volume else None
+            # ib_insync's Ticker.volume is a float (e.g. "2417.0"); go through
+            # float() first so cumulative-day-volume style values still parse.
+            volume_int = int(float(volume)) if volume != "" else None
 
             bid = data.get("bid", "")
-            bid_float = float(bid) if bid else None
+            bid_float = float(bid) if bid != "" else None
 
             ask = data.get("ask", "")
-            ask_float = float(ask) if ask else None
+            ask_float = float(ask) if ask != "" else None
 
             return Tick(
                 symbol=data["symbol"],
@@ -356,6 +365,10 @@ class BarConsumer:
                     bar_data = self._parse_bar_data(data)
                     if bar_data:
                         yield bar_data
+                        if self._client:
+                            await self._client.xack(stream_key, group, msg_id)
+                    else:
+                        logger.warning("unparseable_bar_message", data=data)
                         if self._client:
                             await self._client.xack(stream_key, group, msg_id)
 

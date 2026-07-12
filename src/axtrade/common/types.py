@@ -27,9 +27,9 @@ class Tick:
             "symbol": self.symbol,
             "price": str(self.price),
             "timestamp": self.timestamp.isoformat(),
-            "bid": str(self.bid) if self.bid else "",
-            "ask": str(self.ask) if self.ask else "",
-            "volume": str(self.volume) if self.volume else "",
+            "bid": str(self.bid) if self.bid is not None else "",
+            "ask": str(self.ask) if self.ask is not None else "",
+            "volume": str(self.volume) if self.volume is not None else "",
             "market": self.market,
         }
 

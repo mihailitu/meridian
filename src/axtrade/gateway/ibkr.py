@@ -30,6 +30,10 @@ class IBKRAdapter(DataAdapter):
         self._contracts: dict[str, object] = {}
         self._tick_queue: asyncio.Queue[Tick] = asyncio.Queue()
         self._running = False
+        # ticker.volume is IBKR's cumulative day volume, not a per-tick delta;
+        # track the last observed cumulative value per symbol so we can emit
+        # a per-tick delta instead of summing day-volume into every bar.
+        self._last_cum_volume: dict[str, float] = {}
 
     async def connect(self) -> None:
         """Connect to TWS/IB Gateway."""
@@ -59,6 +63,7 @@ class IBKRAdapter(DataAdapter):
             self._ib.disconnect()
             self._ib = None
         self._connected = False
+        self._last_cum_volume.clear()
         logger.info("disconnected_from_ibkr")
 
     async def _subscribe_symbol(self, symbol_config: SymbolConfig) -> bool:
@@ -142,7 +147,36 @@ class IBKRAdapter(DataAdapter):
             self._ib.cancelMktData(contract)
             del self._contracts[name]
             self._symbols = [s for s in self._symbols if s.symbol != name]
+            self._last_cum_volume.pop(name, None)
             logger.info("unsubscribed", symbol=name)
+
+    def _tick_volume(self, symbol: str, cum_volume: float) -> Optional[int]:
+        """Convert IBKR's cumulative day volume into a per-tick delta.
+
+        Args:
+            symbol: Ticker symbol
+            cum_volume: Current cumulative day volume from the ticker
+
+        Returns:
+            The volume delta since the last observation, or None if unknown
+            (first observation for the symbol, or a re-baseline after a
+            day rollover / reconnect / feed reset caused volume to go down).
+        """
+        last = self._last_cum_volume.get(symbol)
+        if last is None:
+            # First observation: we can't attribute the day's prior volume
+            # to this single tick.
+            self._last_cum_volume[symbol] = cum_volume
+            return None
+
+        delta = cum_volume - last
+        if delta < 0:
+            # Day rollover / reconnect / feed reset - re-baseline.
+            self._last_cum_volume[symbol] = cum_volume
+            return None
+
+        self._last_cum_volume[symbol] = cum_volume
+        return int(delta)
 
     def _on_pending_tickers(self, tickers: list) -> None:
         """Handle incoming ticker updates.
@@ -152,13 +186,20 @@ class IBKRAdapter(DataAdapter):
         """
         for ticker in tickers:
             if ticker.last and ticker.last > 0:
+                symbol = ticker.contract.symbol
+                # NaN > 0 is False, so NaN volumes are already excluded here.
+                if ticker.volume > 0:
+                    tick_volume = self._tick_volume(symbol, ticker.volume)
+                else:
+                    tick_volume = None
+
                 tick = Tick(
-                    symbol=ticker.contract.symbol,
+                    symbol=symbol,
                     price=ticker.last,
                     timestamp=datetime.now(UTC),
                     bid=ticker.bid if ticker.bid > 0 else None,
                     ask=ticker.ask if ticker.ask > 0 else None,
-                    volume=ticker.volume if ticker.volume > 0 else None,
+                    volume=tick_volume,
                 )
                 try:
                     self._tick_queue.put_nowait(tick)
@@ -181,8 +222,10 @@ class IBKRAdapter(DataAdapter):
                 )
                 yield tick
             except asyncio.TimeoutError:
-                if self._ib:
-                    self._ib.sleep(0)
+                # ib_insync's event processing already runs on this shared
+                # asyncio loop; calling self._ib.sleep(0) here would recurse
+                # into loop.run_until_complete() from within the running
+                # loop and raise RuntimeError, killing the tick generator.
                 continue
 
     @property

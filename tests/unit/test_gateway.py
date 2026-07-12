@@ -126,6 +126,26 @@ class TestTick:
         assert data["volume"] == "1000"
         assert "2024-01-15" in data["timestamp"]
 
+    def test_to_dict_zero_values_are_not_blanked(self):
+        """bid=0.0/ask=0.0/volume=0 are legitimate values and must not be
+        serialized as empty string like an absent value would be."""
+        from datetime import datetime
+
+        tick = Tick(
+            symbol="AAPL",
+            price=185.50,
+            timestamp=datetime(2024, 1, 15, 9, 30, 0),
+            bid=0.0,
+            ask=0.0,
+            volume=0,
+        )
+
+        data = tick.to_dict()
+
+        assert data["bid"] == "0.0"
+        assert data["ask"] == "0.0"
+        assert data["volume"] == "0"
+
     def test_tick_immutable(self):
         """Test that tick is immutable."""
         tick = Tick(symbol="AAPL", price=185.50)

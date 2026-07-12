@@ -1,5 +1,6 @@
 """Tests for gateway control channel and dynamic symbol management."""
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -209,6 +210,7 @@ class _FakeIB:
         self.req_mkt_data_calls: list = []
         self.cancel_mkt_data_calls: list = []
         self.pendingTickersEvent = MagicMock()
+        self.sleep_calls = 0
 
     async def qualifyContractsAsync(self, contract):
         if self.qualify_succeeds:
@@ -220,6 +222,33 @@ class _FakeIB:
 
     def cancelMktData(self, contract):
         self.cancel_mkt_data_calls.append(contract)
+
+    def disconnect(self):
+        pass
+
+    def sleep(self, secs):
+        """ib_insync's IB.sleep(0) raises RuntimeError when called from
+        inside a running asyncio loop (audit P0-4 kill (c)); the stream loop
+        must never call it."""
+        self.sleep_calls += 1
+        raise RuntimeError("This event loop is already running")
+
+
+class _FakeContract:
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+
+
+class _FakeTicker:
+    """Minimal fake ib_insync.Ticker."""
+
+    def __init__(self, symbol: str, last: float = 100.0, bid: float = 99.9,
+                 ask: float = 100.1, volume: float = 0.0):
+        self.contract = _FakeContract(symbol)
+        self.last = last
+        self.bid = bid
+        self.ask = ask
+        self.volume = volume
 
 
 class TestIBKRAdapterDynamicSymbols:
@@ -330,3 +359,116 @@ class TestGatewayServiceControlCommandReachesIBKRAdapter:
 
         assert len(fake.req_mkt_data_calls) == 1
         assert "TSLA" in ibkr_adapter._contracts
+
+
+class TestIBKRAdapterVolumeDelta:
+    """Tests for IBKRAdapter's cumulative-day-volume-to-delta conversion
+    (audit P0-4 kill (b))."""
+
+    @pytest.fixture
+    def adapter(self):
+        return IBKRAdapter(IBKRConfig())
+
+    def test_delta_sequence(self, adapter):
+        """cumulative volumes [1000, 1500, 1500, 1200] for one symbol must
+        emit tick volumes [None, 500, 0, None] (last value re-baselines
+        after the day-rollover-style drop)."""
+        emitted = [adapter._tick_volume("AAPL", v) for v in [1000, 1500, 1500, 1200]]
+
+        assert emitted == [None, 500, 0, None]
+        # re-baselined to the post-rollover value
+        assert adapter._last_cum_volume["AAPL"] == 1200
+
+    def test_second_symbol_baseline_is_independent(self, adapter):
+        assert adapter._tick_volume("AAPL", 1000) is None
+        assert adapter._tick_volume("AAPL", 1500) == 500
+
+        # MSFT's first observation must also be None, unaffected by AAPL's
+        # already-established baseline.
+        assert adapter._tick_volume("MSFT", 5000) is None
+        assert adapter._tick_volume("MSFT", 5100) == 100
+
+    def test_on_pending_tickers_emits_delta_volume(self, adapter):
+        adapter._ib = _FakeIB()
+        adapter._connected = True
+
+        adapter._on_pending_tickers([_FakeTicker("AAPL", last=100.0, volume=1000.0)])
+        first = adapter._tick_queue.get_nowait()
+        assert first.volume is None
+
+        adapter._on_pending_tickers([_FakeTicker("AAPL", last=100.5, volume=1500.0)])
+        second = adapter._tick_queue.get_nowait()
+        assert second.volume == 500
+        assert isinstance(second.volume, int)
+
+    def test_on_pending_tickers_zero_volume_is_not_usable(self, adapter):
+        adapter._ib = _FakeIB()
+        adapter._connected = True
+
+        adapter._on_pending_tickers([_FakeTicker("AAPL", last=100.0, volume=0.0)])
+        tick = adapter._tick_queue.get_nowait()
+        assert tick.volume is None
+        assert "AAPL" not in adapter._last_cum_volume
+
+    async def test_disconnect_clears_volume_baseline(self, adapter):
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+        adapter._last_cum_volume["AAPL"] = 1000
+
+        await adapter.disconnect()
+
+        assert adapter._last_cum_volume == {}
+
+    async def test_remove_symbols_clears_volume_baseline(self, adapter):
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+        adapter._contracts["AAPL"] = object()
+        adapter._symbols = [SymbolConfig(symbol="AAPL", base_price=185.0)]
+        adapter._last_cum_volume["AAPL"] = 1000
+
+        await adapter.remove_symbols(["AAPL"])
+
+        assert "AAPL" not in adapter._last_cum_volume
+
+
+class TestIBKRAdapterStreamLoop:
+    """Tests for IBKRAdapter.stream_ticks (audit P0-4 kill (c))."""
+
+    @pytest.fixture
+    def adapter(self):
+        return IBKRAdapter(IBKRConfig())
+
+    async def test_stream_ticks_idle_timeout_does_not_call_sleep_or_raise(
+        self, adapter
+    ):
+        """With an empty tick queue, the idle-timeout branch must not call
+        ib.sleep(0) (which raises RuntimeError inside a running loop) and
+        must not propagate any exception out of the generator.
+
+        asyncio.wait_for is mocked to raise TimeoutError immediately so the
+        test doesn't burn real wall-clock time waiting out the 1s timeout.
+        """
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+
+        call_count = 0
+
+        async def fake_wait_for(coro, timeout):
+            nonlocal call_count
+            call_count += 1
+            coro.close()  # never actually awaited; avoid an "unawaited coroutine" warning
+            if call_count >= 2:
+                adapter._running = False
+            raise asyncio.TimeoutError()
+
+        with patch(
+            "axtrade.gateway.ibkr.asyncio.wait_for", side_effect=fake_wait_for
+        ):
+            ticks = [tick async for tick in adapter.stream_ticks()]
+
+        assert ticks == []
+        assert call_count == 2
+        assert fake.sleep_calls == 0
