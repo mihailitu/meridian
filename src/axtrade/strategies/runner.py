@@ -17,7 +17,7 @@ from axtrade.common import (
 )
 from axtrade.discovery.service import DiscoveryService
 from axtrade.indicators import MarketRegime, MarketTrend, VolatilityState
-from axtrade.oms import OrderManager, Order
+from axtrade.oms import Fill, Order, OrderManager, OrderSide
 
 from . import STRATEGY_TYPES
 from .base import BarWithIndicators, BaseStrategy
@@ -58,6 +58,7 @@ class StrategyRunner:
         # Initialize order manager
         self._order_manager = OrderManager(self.config, self._db_pool)
         await self._order_manager.connect()
+        self._order_manager.on_fill(self._on_order_manager_fill)
         self.logger.info("Order manager initialized (paper_mode=%s)", self.config.oms.paper_mode)
 
         # Load strategies
@@ -156,6 +157,39 @@ class StrategyRunner:
                     position.quantity,
                     position.avg_entry_price,
                 )
+
+    async def _on_order_manager_fill(self, fill: Fill) -> None:
+        """Route a fill from OrderManager to the strategy that submitted it.
+
+        Registered as an async fill callback on OrderManager (which awaits
+        it inside _on_broker_fill, itself under _fill_lock, so the position
+        row this re-reads already reflects the fill). This is what makes
+        fill routing correct for async brokers (IBKR): the post-submit poll
+        in _consume_loop only catches fills that already landed by the time
+        submit_order returns, which is only ever true for PaperBroker.
+
+        Args:
+            fill: Fill notification from the broker
+        """
+        strategy = self._strategies.get(fill.strategy_id)
+        if not strategy or not self._order_manager:
+            return
+
+        position = await self._order_manager.get_position(fill.strategy_id, fill.symbol)
+        if position:
+            strategy.update_position(position)
+        else:
+            strategy.clear_position(fill.symbol)
+
+        try:
+            strategy.on_fill(fill)
+        except Exception as e:
+            self.logger.error(
+                "Strategy on_fill error",
+                strategy_id=fill.strategy_id,
+                symbol=fill.symbol,
+                error=str(e),
+            )
 
     async def stop(self) -> None:
         """Stop the strategy runner."""
@@ -366,6 +400,19 @@ class StrategyRunner:
                         if not order:
                             continue
 
+                        # Mark the symbol in-flight before submitting so
+                        # at_capacity() sees it immediately — an async
+                        # broker (IBKR) can return from submit_order before
+                        # the fill lands, and without this a strategy could
+                        # fire several entries for the same symbol before
+                        # any of them resolve, bypassing max_positions.
+                        is_new_entry = (
+                            order.side == OrderSide.BUY
+                            and strategy.get_position(order.symbol) is None
+                        )
+                        if is_new_entry:
+                            strategy.mark_pending_open(order.symbol)
+
                         try:
                             self._log_signal(strategy, data, order)
                             await self._order_manager.submit_order(order)
@@ -376,10 +423,17 @@ class StrategyRunner:
                             )
                             if position:
                                 strategy.update_position(position)
-                            else:
+                            elif not is_new_entry:
+                                # No position and this wasn't a new entry:
+                                # the order closed it out — drop the cache.
+                                # For a new entry with no position yet (async
+                                # broker, fill not landed), clear_position
+                                # would also wipe the pending-open marker we
+                                # just set; the fill callback resolves it.
                                 strategy.clear_position(order.symbol)
 
                         except Exception as e:
+                            strategy.clear_pending_open(order.symbol)
                             err_key = re.sub(r"\$[\d,.]+", "$X", f"{strategy.name}: {e}")
                             if err_key not in self._logged_errors:
                                 self._logged_errors.add(err_key)

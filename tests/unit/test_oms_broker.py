@@ -1,14 +1,16 @@
 """Unit tests for OMS broker implementations."""
 
+import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
-from axtrade.common import Bar
+from axtrade.common import Bar, IBKRConfig
 from axtrade.oms import Fill, Order, OrderSide, OrderStatus, PaperBroker, Position
-from axtrade.oms.broker import InsufficientCashError, VolumeCapExceededError
+from axtrade.oms.broker import IBKRBroker, InsufficientCashError, VolumeCapExceededError
 
 
 class TestPaperBroker:
@@ -446,3 +448,183 @@ class TestPaperBrokerVolumeCap:
             await broker.submit_order(order)
 
         assert order.status != OrderStatus.FILLED
+
+
+class TestPaperBrokerTerminalCallback:
+    """Tests for PaperBroker.set_terminal_callback (Audit P1-4).
+
+    PaperBroker resolves every order synchronously inside submit_order and
+    never holds a resting order, so there is no broker-side terminal
+    transition to report — the callback is stored for protocol conformance
+    but never fired.
+    """
+
+    async def test_set_terminal_callback_stores_but_never_fires(self) -> None:
+        broker = PaperBroker(slippage_bps=0)
+        await broker.connect()
+        broker.update_price("AAPL", Decimal("100"))
+
+        calls = []
+
+        async def terminal_cb(order_id, status):
+            calls.append((order_id, status))
+
+        broker.set_terminal_callback(terminal_cb)
+        assert broker._terminal_callback is terminal_cb
+
+        order = Order(
+            strategy_id="test", symbol="AAPL", side=OrderSide.BUY, quantity=Decimal("10"),
+        )
+        await broker.submit_order(order)
+        await broker.cancel_order(str(order.id))
+
+        assert calls == []
+
+
+def _fake_trade(order_id: int, status: str):
+    """Minimal ib_insync-shaped stand-in for _on_order_status tests."""
+
+    class _OrderStatus:
+        def __init__(self, status: str) -> None:
+            self.status = status
+
+    class _IBOrder:
+        def __init__(self, order_id: int) -> None:
+            self.orderId = order_id
+
+    class _Trade:
+        def __init__(self, order_id: int, status: str) -> None:
+            self.order = _IBOrder(order_id)
+            self.orderStatus = _OrderStatus(status)
+
+    return _Trade(order_id, status)
+
+
+class TestIBKRBrokerTerminalCallback:
+    """Tests for IBKRBroker terminal-callback propagation (Audit P1-4).
+
+    _on_order_status is a plain sync ib_insync event handler; it can be
+    exercised directly without a live TWS/Gateway connection by seeding
+    _order_map and feeding it a fake Trade object.
+    """
+
+    @pytest.fixture
+    def broker(self) -> IBKRBroker:
+        return IBKRBroker(IBKRConfig())
+
+    async def test_cancelled_status_fires_terminal_callback(self, broker: IBKRBroker) -> None:
+        our_id = uuid4()
+        broker._order_map[7] = (our_id, "momentum_01")
+        calls = []
+
+        async def terminal_cb(order_id, status):
+            calls.append((order_id, status))
+
+        broker.set_terminal_callback(terminal_cb)
+
+        broker._on_order_status(_fake_trade(7, "Cancelled"))
+        await asyncio.gather(*broker._pending_callbacks)
+
+        assert calls == [(our_id, OrderStatus.CANCELLED)]
+
+    @pytest.mark.parametrize("status", ["ApiCancelled", "Inactive"])
+    async def test_other_terminal_statuses_also_fire(
+        self, broker: IBKRBroker, status: str
+    ) -> None:
+        our_id = uuid4()
+        broker._order_map[7] = (our_id, "momentum_01")
+        calls = []
+
+        async def terminal_cb(order_id, order_status):
+            calls.append((order_id, order_status))
+
+        broker.set_terminal_callback(terminal_cb)
+
+        broker._on_order_status(_fake_trade(7, status))
+        await asyncio.gather(*broker._pending_callbacks)
+
+        assert calls == [(our_id, OrderStatus.CANCELLED)]
+
+    async def test_unknown_order_id_ignored(self, broker: IBKRBroker) -> None:
+        calls = []
+
+        async def terminal_cb(order_id, status):
+            calls.append((order_id, status))
+
+        broker.set_terminal_callback(terminal_cb)
+
+        # Should not raise; no order_map entry for this ibkr id.
+        broker._on_order_status(_fake_trade(999, "Cancelled"))
+
+        assert calls == []
+        assert broker._pending_callbacks == []
+
+    async def test_non_terminal_status_ignored(self, broker: IBKRBroker) -> None:
+        our_id = uuid4()
+        broker._order_map[7] = (our_id, "momentum_01")
+        calls = []
+
+        async def terminal_cb(order_id, status):
+            calls.append((order_id, status))
+
+        broker.set_terminal_callback(terminal_cb)
+
+        broker._on_order_status(_fake_trade(7, "Submitted"))
+
+        assert calls == []
+        assert broker._pending_callbacks == []
+
+    async def test_no_terminal_callback_set_does_not_raise(self, broker: IBKRBroker) -> None:
+        broker._order_map[7] = (uuid4(), "momentum_01")
+
+        # No set_terminal_callback call at all — must not raise.
+        broker._on_order_status(_fake_trade(7, "Cancelled"))
+        assert broker._pending_callbacks == []
+
+
+class _FakeIB:
+    """Minimal stand-in for ib_insync.IB, enough to exercise cancel_order."""
+
+    def __init__(self, trades: list) -> None:
+        self._trades = trades
+        self.cancelled: list = []
+
+    def isConnected(self) -> bool:
+        return True
+
+    def openTrades(self) -> list:
+        return self._trades
+
+    def cancelOrder(self, order) -> None:
+        self.cancelled.append(order)
+
+
+class TestIBKRBrokerCancelOrder:
+    """Tests for IBKRBroker.cancel_order (Audit P1-4)."""
+
+    @pytest.fixture
+    def broker(self) -> IBKRBroker:
+        return IBKRBroker(IBKRConfig())
+
+    async def test_cancel_known_order_requests_cancel_and_returns_true(
+        self, broker: IBKRBroker
+    ) -> None:
+        trade = _fake_trade(7, "Submitted")
+        broker._ib = _FakeIB([trade])
+
+        result = await broker.cancel_order("7")
+
+        assert result is True
+        assert broker._ib.cancelled == [trade.order]
+
+    async def test_cancel_unknown_order_returns_false(self, broker: IBKRBroker) -> None:
+        broker._ib = _FakeIB([])
+
+        result = await broker.cancel_order("999")
+
+        assert result is False
+
+    async def test_cancel_when_not_connected_returns_false(self, broker: IBKRBroker) -> None:
+        # broker._ib is None until connect() runs.
+        result = await broker.cancel_order("7")
+        assert result is False

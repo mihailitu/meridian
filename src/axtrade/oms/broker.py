@@ -118,6 +118,23 @@ class BrokerProtocol(ABC):
         """
         ...
 
+    @abstractmethod
+    def set_terminal_callback(
+        self, callback: Callable[[UUID, OrderStatus], Awaitable[None]]
+    ) -> None:
+        """Set callback for broker-side terminal transitions without a fill.
+
+        Invoked when an order reaches a terminal state broker-side (e.g.
+        cancelled or rejected) WITHOUT ever producing a fill. Fills still
+        flow through the fill callback; this covers the "died with no
+        fill" case so OrderManager can release the open-order counter and
+        stamp CANCELLED/REJECTED instead of leaving the order stuck.
+
+        Args:
+            callback: Async function called with (our order ID, terminal status)
+        """
+        ...
+
 
 class PaperBroker(BrokerProtocol):
     """Paper trading broker with simulated fills."""
@@ -150,6 +167,7 @@ class PaperBroker(BrokerProtocol):
         self._last_volumes: dict[str, Decimal] = {}
         self._positions: dict[str, Position] = {}
         self._fill_callback: Optional[Callable[[Fill], Awaitable[None]]] = None
+        self._terminal_callback: Optional[Callable[[UUID, OrderStatus], Awaitable[None]]] = None
         self._connected = False
         # Simulated clock: when set, fills are timestamped with this rather than
         # wall-clock. Fulltest advances it per bar so analytics see sim time.
@@ -295,6 +313,23 @@ class PaperBroker(BrokerProtocol):
         self.logger.info("Cancel requested but paper orders fill immediately")
         return False
 
+    def set_terminal_callback(
+        self, callback: Callable[[UUID, OrderStatus], Awaitable[None]]
+    ) -> None:
+        """Set callback for broker-side terminal transitions without a fill.
+
+        PaperBroker resolves every order synchronously inside submit_order
+        (immediate FILLED, or an exception translated by OrderManager) and
+        never holds a resting order — cancel_order above always no-ops for
+        exactly that reason. There is no broker-side "cancelled/rejected
+        with no fill" transition for this callback to report, so it is
+        stored for protocol conformance but never invoked.
+
+        Args:
+            callback: Async function called with (order ID, terminal status)
+        """
+        self._terminal_callback = callback
+
     def get_position(self, symbol: str) -> Optional[Position]:
         """Get position for a specific symbol.
 
@@ -410,9 +445,14 @@ class IBKRBroker(BrokerProtocol):
 
         self._ib: Optional["IB"] = None
         self._fill_callback: Optional[Callable[[Fill], Awaitable[None]]] = None
+        self._terminal_callback: Optional[Callable[[UUID, OrderStatus], Awaitable[None]]] = None
         self._order_map: dict[int, tuple[UUID, str]] = {}  # IBKR orderId -> (our order ID, strategy_id)
         self._last_prices: dict[str, Decimal] = {}
         self._pending_callbacks: list[asyncio.Task] = []
+        # Terminal IBKR order states reported without a fill. Live/Inactive
+        # states we don't treat as terminal (e.g. "Submitted", "PreSubmitted")
+        # are left alone.
+        self._terminal_no_fill_statuses = frozenset({"Cancelled", "ApiCancelled", "Inactive"})
 
     async def connect(self) -> None:
         """Connect to TWS/Gateway."""
@@ -562,6 +602,16 @@ class IBKRBroker(BrokerProtocol):
         """
         self._fill_callback = callback
 
+    def set_terminal_callback(
+        self, callback: Callable[[UUID, OrderStatus], Awaitable[None]]
+    ) -> None:
+        """Set callback for broker-side terminal transitions without a fill.
+
+        Args:
+            callback: Async function called with (our order ID, terminal status)
+        """
+        self._terminal_callback = callback
+
     def update_price(self, symbol: str, price: Decimal, volume: Optional[Decimal] = None) -> None:
         """Update current price for a symbol.
 
@@ -585,6 +635,36 @@ class IBKRBroker(BrokerProtocol):
             ibkr_order_id=trade.order.orderId,
             status=status,
         )
+
+        if status not in self._terminal_no_fill_statuses:
+            return
+
+        order_info = self._order_map.get(trade.order.orderId)
+        if not order_info:
+            self.logger.warning(
+                "Received terminal status for unknown order",
+                ibkr_order_id=trade.order.orderId,
+                status=status,
+            )
+            return
+
+        order_id, _strategy_id = order_info
+
+        self.logger.info(
+            "Order reached terminal state without fill",
+            ibkr_order_id=trade.order.orderId,
+            order_id=str(order_id),
+            status=status,
+        )
+
+        # Invoke callback asynchronously, same detached-task pattern as
+        # _on_execution below (this is a sync ib_insync event handler).
+        if self._terminal_callback:
+            task = asyncio.create_task(
+                self._terminal_callback(order_id, OrderStatus.CANCELLED)
+            )
+            self._pending_callbacks.append(task)
+            task.add_done_callback(lambda t: self._pending_callbacks.remove(t))
 
     def _on_execution(self, trade: "Trade", fill: object) -> None:
         """Handle execution/fill events from IBKR.

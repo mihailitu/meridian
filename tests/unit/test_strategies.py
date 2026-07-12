@@ -126,6 +126,79 @@ class TestBaseStrategyMaxPositions:
         assert strat.at_capacity() is False
 
 
+class TestBaseStrategyPendingOpens:
+    """Tests for the in-flight entry tracking added for async brokers
+    (Audit P1-1c): an order submitted but not yet resolved must still count
+    against max_positions so a strategy can't fire several entries for the
+    same symbol before any of them settle."""
+
+    @staticmethod
+    def _make_position(symbol: str) -> Position:
+        return Position(
+            strategy_id="test",
+            symbol=symbol,
+            side="long",
+            quantity=Decimal(100),
+            avg_entry_price=Decimal("100"),
+        )
+
+    def test_pending_open_counts_toward_capacity(self) -> None:
+        strat = MomentumBreakout("test", {"max_positions": 1})
+        assert strat.at_capacity() is False
+
+        strat.mark_pending_open("AAPL")
+
+        assert strat.at_capacity() is True
+
+    def test_fill_clears_pending_and_capacity_stays_true_via_position(self) -> None:
+        """Once the fill lands, update_position both records the settled
+        position and clears the pending flag — capacity stays hit, but
+        through the position now, not a stale pending marker."""
+        strat = MomentumBreakout("test", {"max_positions": 1})
+        strat.mark_pending_open("AAPL")
+        assert strat.at_capacity() is True
+
+        strat.update_position(self._make_position("AAPL"))
+
+        assert "AAPL" not in strat._pending_opens
+        assert strat.at_capacity() is True
+
+    def test_rejection_clears_pending_and_restores_capacity(self) -> None:
+        strat = MomentumBreakout("test", {"max_positions": 1})
+        strat.mark_pending_open("AAPL")
+        assert strat.at_capacity() is True
+
+        strat.clear_pending_open("AAPL")
+
+        assert strat.at_capacity() is False
+
+    def test_pending_and_position_for_same_symbol_counts_once(self) -> None:
+        """Union semantics: a symbol that is both pending (stale marker not
+        yet cleared) and already reflected in positions must not be
+        double-counted against max_positions."""
+        strat = MomentumBreakout("test", {"max_positions": 1})
+        strat.positions["AAPL"] = self._make_position("AAPL")
+        strat._pending_opens.add("AAPL")
+
+        assert strat.at_capacity() is True
+
+        # A second, different symbol would be over capacity...
+        strat.mark_pending_open("MSFT")
+        assert strat.at_capacity() is True
+        # ...but capacity was already exhausted at 1, so this just confirms
+        # the union didn't undercount and let a second symbol slip through.
+        assert len(strat.positions.keys() | strat._pending_opens) == 2
+
+    def test_clear_position_also_clears_pending(self) -> None:
+        strat = MomentumBreakout("test", {"max_positions": 1})
+        strat.mark_pending_open("AAPL")
+
+        strat.clear_position("AAPL")
+
+        assert "AAPL" not in strat._pending_opens
+        assert strat.at_capacity() is False
+
+
 class TestMomentumBreakout:
     @pytest.fixture
     def strategy(self) -> MomentumBreakout:

@@ -3,10 +3,12 @@
 Tests for order submission, fill handling, and position management.
 """
 
+import asyncio
+import copy
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -172,9 +174,47 @@ class TestOrderManager:
         await manager.submit_order(sample_order)
 
         assert sample_order.status == OrderStatus.FILLED
-        # The only repo.update in the submit path is the SUBMITTED stamp;
-        # for an already-resolved order it must not happen at all.
+        # The submit path only ever writes the SUBMITTED stamp via the
+        # conditional update_status_if — never the unconditional update().
         mock_order_repo.update.assert_not_called()
+
+    async def test_submit_order_conditional_stamp_false_not_clobbered(
+        self, manager: OrderManager, sample_order: Order
+    ) -> None:
+        """Regression for the async-broker race the old in-memory-only check
+        left open: a detached fill task can persist FILLED between
+        submit_order's check and its SUBMITTED write. Here update_status_if
+        itself reports the row didn't match (already FILLED in the DB) even
+        though nothing in this call stack touched sample_order.status —
+        the in-memory object must stay whatever it already was and the
+        submit path must not clobber it back to SUBMITTED."""
+        mock_order_repo = AsyncMock()
+        mock_order_repo.update_status_if.return_value = False
+        mock_position_repo = AsyncMock()
+        mock_position_repo.get.return_value = None
+        mock_risk_manager = MagicMock()
+        mock_risk_manager.check_order.return_value = RiskCheckResult(approved=True)
+
+        mock_broker = AsyncMock()
+        mock_broker.submit_order.return_value = "broker-123"
+
+        manager._order_repo = mock_order_repo
+        manager._position_repo = mock_position_repo
+        manager._broker = mock_broker
+        manager._risk_manager = mock_risk_manager
+        manager._last_prices["AAPL"] = Decimal("185.00")
+
+        # Simulate the DB row already resolved to FILLED by a concurrent
+        # fill task, but nothing updated the in-memory sample_order here —
+        # exercises the "stamped is False" branch specifically.
+        await manager.submit_order(sample_order)
+
+        mock_order_repo.update_status_if.assert_called_once_with(
+            sample_order.id, OrderStatus.SUBMITTED, [OrderStatus.PENDING]
+        )
+        # stamped=False means the in-memory object must not be forced to
+        # SUBMITTED — it stays PENDING here since nothing else touched it.
+        assert sample_order.status == OrderStatus.PENDING
 
     async def test_submit_order_risk_rejected(
         self, manager: OrderManager, sample_order: Order
@@ -832,3 +872,312 @@ class TestOrderManager:
     def test_risk_manager_property_none(self, manager: OrderManager) -> None:
         """Test risk_manager property returns None before connect."""
         assert manager.risk_manager is None
+
+
+class _RacyOrderRepo:
+    """Fake order repo modeling a shared DB row for concurrency tests.
+
+    get() copies the current row state after yielding control (mimicking a
+    real async DB round-trip), and update() overwrites the row wholesale
+    from the passed-in order — exactly what the real conditional-free
+    UPDATE in OrderRepository.update() does. Without _on_broker_fill's
+    _fill_lock serializing the whole read-modify-write, two concurrent
+    fills that both read before either writes will lose one increment.
+    """
+
+    def __init__(self, order: Order) -> None:
+        self._row = order
+        self.update_calls = 0
+
+    async def get(self, order_id: UUID) -> Order:
+        await asyncio.sleep(0)
+        return copy.copy(self._row)
+
+    async def update(self, order: Order) -> None:
+        await asyncio.sleep(0)
+        self.update_calls += 1
+        self._row.filled_quantity = order.filled_quantity
+        self._row.avg_fill_price = order.avg_fill_price
+        self._row.status = order.status
+
+    async def insert_fill(self, fill: Fill) -> None:
+        await asyncio.sleep(0)
+
+
+class TestOrderManagerFillConcurrency:
+    """Tests for the _fill_lock serialization added around _on_broker_fill
+    (Audit P1-2c): two concurrent partial fills for the same order must not
+    lose an increment to filled_quantity / avg_fill_price."""
+
+    @pytest.fixture
+    def mock_config(self) -> Config:
+        config = Config()
+        config.redis = RedisConfig(host="localhost", port=6379)
+        config.database = DatabaseConfig()
+        config.oms = OMSConfig(paper_mode=True, risk=RiskConfig())
+        return config
+
+    @pytest.fixture
+    def manager(self, mock_config: Config) -> OrderManager:
+        return OrderManager(mock_config, MagicMock())
+
+    async def test_concurrent_partial_fills_do_not_lose_updates(
+        self, manager: OrderManager
+    ) -> None:
+        order = Order(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("100"),
+            status=OrderStatus.SUBMITTED,
+        )
+        racy_repo = _RacyOrderRepo(order)
+        mock_position_repo = AsyncMock()
+        mock_position_repo.get.return_value = None
+        mock_redis = AsyncMock()
+        mock_risk_manager = MagicMock()
+
+        manager._order_repo = racy_repo
+        manager._position_repo = mock_position_repo
+        manager._redis = mock_redis
+        manager._risk_manager = mock_risk_manager
+
+        fill1 = Fill(
+            order_id=order.id, strategy_id=order.strategy_id, symbol="AAPL",
+            side=OrderSide.BUY, quantity=Decimal("50"), price=Decimal("100"),
+        )
+        fill2 = Fill(
+            order_id=order.id, strategy_id=order.strategy_id, symbol="AAPL",
+            side=OrderSide.BUY, quantity=Decimal("50"), price=Decimal("110"),
+        )
+
+        await asyncio.gather(
+            manager._on_broker_fill(fill1), manager._on_broker_fill(fill2)
+        )
+
+        assert racy_repo._row.filled_quantity == Decimal("100"), (
+            "lost update: both fills must be reflected, not just one"
+        )
+        assert racy_repo._row.status == OrderStatus.FILLED
+        # Weighted avg is order-independent: (100*50 + 110*50) / 100 = 105
+        assert racy_repo._row.avg_fill_price == Decimal("105")
+        # order_completed() must fire exactly once — only the fill that
+        # completes the order should decrement the open-order counter.
+        mock_risk_manager.order_completed.assert_called_once()
+
+
+class TestOrderManagerTerminalPropagation:
+    """Tests for OrderManager._on_broker_terminal (Audit P1-4).
+
+    Fixes the open-order-counter leak where a broker-side cancel/reject
+    with no fill never called order_completed(), permanently consuming a
+    slot out of max_open_orders.
+    """
+
+    @pytest.fixture
+    def mock_config(self) -> Config:
+        config = Config()
+        config.redis = RedisConfig(host="localhost", port=6379)
+        config.database = DatabaseConfig()
+        config.oms = OMSConfig(paper_mode=True, risk=RiskConfig())
+        return config
+
+    @pytest.fixture
+    def manager(self, mock_config: Config) -> OrderManager:
+        return OrderManager(mock_config, MagicMock())
+
+    @staticmethod
+    def _order(status: OrderStatus) -> Order:
+        return Order(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("10"),
+            status=status,
+        )
+
+    async def test_cancelled_stamps_and_decrements_counter(
+        self, manager: OrderManager
+    ) -> None:
+        order = self._order(OrderStatus.SUBMITTED)
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        mock_order_repo.update_status_if.return_value = True
+        mock_risk_manager = MagicMock()
+
+        manager._order_repo = mock_order_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._on_broker_terminal(order.id, OrderStatus.CANCELLED)
+
+        mock_order_repo.update_status_if.assert_called_once_with(
+            order.id,
+            OrderStatus.CANCELLED,
+            [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL],
+        )
+        mock_risk_manager.order_completed.assert_called_once()
+        assert order.status == OrderStatus.CANCELLED
+
+    async def test_second_cancelled_event_is_noop(self, manager: OrderManager) -> None:
+        """The row is already CANCELLED (from the first event); a second
+        broker notification for the same order must not double-decrement."""
+        order = self._order(OrderStatus.CANCELLED)
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        mock_risk_manager = MagicMock()
+
+        manager._order_repo = mock_order_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._on_broker_terminal(order.id, OrderStatus.CANCELLED)
+
+        mock_order_repo.update_status_if.assert_not_called()
+        mock_risk_manager.order_completed.assert_not_called()
+
+    async def test_cancelled_after_full_fill_does_not_clobber(
+        self, manager: OrderManager
+    ) -> None:
+        order = self._order(OrderStatus.FILLED)
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        mock_risk_manager = MagicMock()
+
+        manager._order_repo = mock_order_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._on_broker_terminal(order.id, OrderStatus.CANCELLED)
+
+        mock_order_repo.update_status_if.assert_not_called()
+        mock_risk_manager.order_completed.assert_not_called()
+        assert order.status == OrderStatus.FILLED
+
+    async def test_missing_order_is_noop(self, manager: OrderManager) -> None:
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = None
+        mock_risk_manager = MagicMock()
+
+        manager._order_repo = mock_order_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._on_broker_terminal(uuid4(), OrderStatus.CANCELLED)
+
+        mock_order_repo.update_status_if.assert_not_called()
+        mock_risk_manager.order_completed.assert_not_called()
+
+    async def test_stamp_race_lost_does_not_call_order_completed(
+        self, manager: OrderManager
+    ) -> None:
+        """update_status_if returning False (row moved to a terminal state
+        between the get() and the conditional update) must not decrement
+        the counter a second time."""
+        order = self._order(OrderStatus.SUBMITTED)
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        mock_order_repo.update_status_if.return_value = False
+        mock_risk_manager = MagicMock()
+
+        manager._order_repo = mock_order_repo
+        manager._risk_manager = mock_risk_manager
+
+        await manager._on_broker_terminal(order.id, OrderStatus.CANCELLED)
+
+        mock_risk_manager.order_completed.assert_not_called()
+
+
+class TestOrderManagerCancelOrder:
+    """Tests for OrderManager.cancel_order (Audit P1-4)."""
+
+    @pytest.fixture
+    def mock_config(self) -> Config:
+        config = Config()
+        config.redis = RedisConfig(host="localhost", port=6379)
+        config.database = DatabaseConfig()
+        config.oms = OMSConfig(paper_mode=True, risk=RiskConfig())
+        return config
+
+    @pytest.fixture
+    def manager(self, mock_config: Config) -> OrderManager:
+        return OrderManager(mock_config, MagicMock())
+
+    async def test_cancel_not_connected_returns_false(
+        self, manager: OrderManager
+    ) -> None:
+        result = await manager.cancel_order(uuid4())
+        assert result is False
+
+    async def test_cancel_unknown_order_returns_false(
+        self, manager: OrderManager
+    ) -> None:
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = None
+        manager._order_repo = mock_order_repo
+        manager._broker = AsyncMock()
+
+        result = await manager.cancel_order(uuid4())
+
+        assert result is False
+        manager._broker.cancel_order.assert_not_called()
+
+    async def test_cancel_terminal_order_returns_false(
+        self, manager: OrderManager
+    ) -> None:
+        order = Order(
+            strategy_id="momentum_01", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("10"), status=OrderStatus.FILLED,
+        )
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        manager._order_repo = mock_order_repo
+        manager._broker = AsyncMock()
+
+        result = await manager.cancel_order(order.id)
+
+        assert result is False
+        manager._broker.cancel_order.assert_not_called()
+
+    async def test_cancel_uses_broker_order_id_mapping(
+        self, manager: OrderManager
+    ) -> None:
+        """Fake-IBKR path: submit_order recorded our order id -> ibkr order
+        id; cancel_order must translate through that mapping, not pass our
+        UUID straight through."""
+        order = Order(
+            strategy_id="momentum_01", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("10"), status=OrderStatus.SUBMITTED,
+        )
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        mock_broker = AsyncMock()
+        mock_broker.cancel_order.return_value = True
+        manager._order_repo = mock_order_repo
+        manager._broker = mock_broker
+        manager._broker_order_ids[order.id] = "7"
+
+        result = await manager.cancel_order(order.id)
+
+        assert result is True
+        mock_broker.cancel_order.assert_called_once_with("7")
+
+    async def test_cancel_paper_broker_path_returns_false(
+        self, manager: OrderManager
+    ) -> None:
+        """Paper path: submit_order's mapping is our own id as a string
+        (PaperBroker.submit_order returns str(order.id)); cancel_order
+        always returns False since PaperBroker never holds a resting
+        order."""
+        order = Order(
+            strategy_id="momentum_01", symbol="AAPL", side=OrderSide.BUY,
+            quantity=Decimal("10"), status=OrderStatus.SUBMITTED,
+        )
+        mock_order_repo = AsyncMock()
+        mock_order_repo.get.return_value = order
+        mock_broker = AsyncMock()
+        mock_broker.cancel_order.return_value = False
+        manager._order_repo = mock_order_repo
+        manager._broker = mock_broker
+        manager._broker_order_ids[order.id] = str(order.id)
+
+        result = await manager.cancel_order(order.id)
+
+        assert result is False
+        mock_broker.cancel_order.assert_called_once_with(str(order.id))

@@ -1,8 +1,10 @@
 """Order management and execution."""
 
+import asyncio
+import inspect
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional, Union
 from uuid import UUID
 
 import redis.asyncio as redis
@@ -53,11 +55,24 @@ class OrderManager:
         self._broker: Optional[BrokerProtocol] = None
         self._risk_manager: Optional[RiskManager] = None
 
-        # Callbacks for fill notifications
-        self._fill_callbacks: list[Callable[[Fill], None]] = []
+        # Callbacks for fill notifications. May be sync or async — invoked
+        # via _invoke_fill_callback, which awaits the result when it's an
+        # awaitable so async subscribers (StrategyRunner) can do DB reads.
+        self._fill_callbacks: list[Callable[[Fill], Union[None, Awaitable[None]]]] = []
 
         # Price cache for risk checks
         self._last_prices: dict[str, Decimal] = {}
+
+        # Serializes fill/terminal processing (_on_broker_fill and
+        # _on_broker_terminal) so concurrent broker callbacks for the same
+        # order can't race on the read-modify-write of filled_quantity /
+        # avg_fill_price or double-decrement the open-order counter.
+        self._fill_lock = asyncio.Lock()
+
+        # Our order ID -> broker-assigned order ID, so cancel_order (which
+        # callers address by our UUID) can find what the broker itself
+        # needs to cancel. Populated on successful broker submission.
+        self._broker_order_ids: dict[UUID, str] = {}
 
     async def connect(self) -> None:
         """Initialize repositories, broker, and connections."""
@@ -95,6 +110,7 @@ class OrderManager:
             self._broker = IBKRBroker(self.config.gateway.ibkr)
 
         self._broker.set_fill_callback(self._on_broker_fill)
+        self._broker.set_terminal_callback(self._on_broker_terminal)
         await self._broker.connect()
 
         self.logger.info(
@@ -114,11 +130,12 @@ class OrderManager:
             await self._redis.aclose()
             self._redis = None
 
-    def on_fill(self, callback: Callable[[Fill], None]) -> None:
+    def on_fill(self, callback: Callable[[Fill], Union[None, Awaitable[None]]]) -> None:
         """Register a callback for fill notifications.
 
         Args:
-            callback: Function to call when fills occur
+            callback: Sync or async function to call when fills occur. Async
+                callbacks are awaited inside _on_broker_fill.
         """
         self._fill_callbacks.append(callback)
 
@@ -218,14 +235,25 @@ class OrderManager:
         self._risk_manager.order_submitted()
         try:
             broker_order_id = await self._broker.submit_order(order)
+            self._broker_order_ids[order.id] = broker_order_id
+
             # PaperBroker fills synchronously: its fill callback has already
             # run inside submit_order and persisted a resolved status
-            # (FILLED/PARTIAL). Only stamp SUBMITTED while the order is still
-            # unresolved — an unconditional write here clobbered the resolved
-            # status of every immediately-filled paper order.
-            if order.status in (OrderStatus.PENDING, OrderStatus.SUBMITTED):
+            # (FILLED/PARTIAL). Stamp SUBMITTED via a conditional DB update
+            # rather than an unconditional write: an unconditional write
+            # clobbered the resolved status of every immediately-filled
+            # paper order, and even an in-memory-only check leaves a race
+            # open for async brokers (IBKR) — a detached fill or terminal
+            # callback can persist FILLED/CANCELLED between the check and
+            # this write. update_status_if only applies while the DB row is
+            # still PENDING, closing that window; the in-memory guard below
+            # additionally protects against a synchronous fill (PaperBroker)
+            # that resolved order.status in this same call stack.
+            stamped = await self._order_repo.update_status_if(
+                order.id, OrderStatus.SUBMITTED, [OrderStatus.PENDING]
+            )
+            if stamped and order.status == OrderStatus.PENDING:
                 order.status = OrderStatus.SUBMITTED
-                await self._order_repo.update(order)
 
             self.logger.debug(
                 "Order sent to broker",
@@ -248,8 +276,50 @@ class OrderManager:
 
         return order.id
 
+    async def cancel_order(self, order_id: UUID) -> bool:
+        """Request cancellation of an open order.
+
+        This only requests the cancel from the broker. The CANCELLED stamp
+        and open-order counter decrement happen via _on_broker_terminal
+        (registered as the broker's terminal callback in connect()) — for
+        IBKR the broker confirms asynchronously through order status events;
+        for PaperBroker (which resolves every order synchronously inside
+        submit_order and never holds a resting order) this always returns
+        False and nothing is stamped, matching PaperBroker.cancel_order's
+        existing no-op behavior.
+
+        Args:
+            order_id: Our order ID
+
+        Returns:
+            True if the broker accepted the cancel request, False if the
+            order is missing, already terminal, or the broker couldn't (or
+            wouldn't) cancel it.
+        """
+        if not self._order_repo or not self._broker:
+            return False
+
+        order = await self._order_repo.get(order_id)
+        if order is None:
+            return False
+        if order.status in (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED):
+            return False
+
+        # Brokers cancel by their own order ID, not ours. submit_order
+        # records the mapping on success; fall back to our own ID for a
+        # broker that doesn't need translation (PaperBroker no-ops either way).
+        broker_order_id = self._broker_order_ids.get(order_id, str(order_id))
+        return await self._broker.cancel_order(broker_order_id)
+
     async def _on_broker_fill(self, fill: Fill) -> None:
         """Handle fill callback from broker.
+
+        Holds _fill_lock for the whole body: two concurrent partial fills
+        for the same order (or overlapping fills across orders that both
+        touch order_completed()/risk-manager counters) otherwise do a
+        read-modify-write on filled_quantity/avg_fill_price and can lose an
+        increment. PaperBroker's synchronous single-fill-per-order path is
+        unaffected since there's never real contention there.
 
         Args:
             fill: Fill from broker
@@ -257,41 +327,48 @@ class OrderManager:
         if not self._order_repo or not self._position_repo or not self._risk_manager:
             return
 
-        # Get and update order
-        order = await self._order_repo.get(fill.order_id)
-        if order:
-            order.filled_quantity += fill.quantity
-            if order.filled_quantity >= order.quantity:
-                order.status = OrderStatus.FILLED
-                self._risk_manager.order_completed()
-            else:
-                order.status = OrderStatus.PARTIAL
+        async with self._fill_lock:
+            # Get and update order
+            order = await self._order_repo.get(fill.order_id)
+            if order:
+                order.filled_quantity += fill.quantity
+                if order.filled_quantity >= order.quantity:
+                    order.status = OrderStatus.FILLED
+                    self._risk_manager.order_completed()
+                else:
+                    order.status = OrderStatus.PARTIAL
 
-            # Update average fill price (weighted average for partial fills)
-            if order.avg_fill_price:
-                prev_value = order.avg_fill_price * (order.filled_quantity - fill.quantity)
-                new_value = fill.price * fill.quantity
-                order.avg_fill_price = (prev_value + new_value) / order.filled_quantity
-            else:
-                order.avg_fill_price = fill.price
+                # Update average fill price (weighted average for partial fills)
+                if order.avg_fill_price:
+                    prev_value = order.avg_fill_price * (order.filled_quantity - fill.quantity)
+                    new_value = fill.price * fill.quantity
+                    order.avg_fill_price = (prev_value + new_value) / order.filled_quantity
+                else:
+                    order.avg_fill_price = fill.price
 
-            await self._order_repo.update(order)
+                await self._order_repo.update(order)
 
-        # Record fill
-        await self._order_repo.insert_fill(fill)
+            # Record fill
+            await self._order_repo.insert_fill(fill)
 
-        # Update position
-        await self._update_position(fill)
+            # Update position
+            await self._update_position(fill)
 
-        # Publish fill to Redis
-        await self._publish_fill(fill)
+            # Publish fill to Redis
+            await self._publish_fill(fill)
 
-        # Notify callbacks
-        for callback in self._fill_callbacks:
-            try:
-                callback(fill)
-            except Exception as e:
-                self.logger.error("Fill callback error", error=str(e))
+            # Notify callbacks. Sync or async — await the result when the
+            # callback itself is async (e.g. StrategyRunner's fill router,
+            # which re-reads the position from the DB before routing to the
+            # strategy). Position update above has already landed, so an
+            # async callback that reads it back sees post-fill state.
+            for callback in self._fill_callbacks:
+                try:
+                    result = callback(fill)
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception as e:
+                    self.logger.error("Fill callback error", error=str(e))
 
         self.logger.info(
             "Fill processed",
@@ -300,6 +377,46 @@ class OrderManager:
             side=fill.side.value,
             quantity=str(fill.quantity),
             price=str(fill.price),
+        )
+
+    async def _on_broker_terminal(self, order_id: UUID, status: OrderStatus) -> None:
+        """Handle a broker-side terminal transition that produced no fill.
+
+        Registered as the broker's terminal callback in connect(). Fixes
+        the open-order-counter leak where a broker-side cancel/reject never
+        called order_completed(), permanently consuming one of
+        max_open_orders. Shares _fill_lock with _on_broker_fill so a
+        terminal event racing a fill for the same order can't double-count
+        or clobber a resolved status — update_status_if is the final guard:
+        a CANCELLED arriving after a FILLED never overwrites it.
+
+        Args:
+            order_id: Our order ID
+            status: Terminal status reported by the broker (e.g. CANCELLED)
+        """
+        if not self._order_repo or not self._risk_manager:
+            return
+
+        terminal_statuses = (OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED)
+
+        async with self._fill_lock:
+            order = await self._order_repo.get(order_id)
+            if order is None or order.status in terminal_statuses:
+                return
+
+            stamped = await self._order_repo.update_status_if(
+                order_id,
+                status,
+                [OrderStatus.PENDING, OrderStatus.SUBMITTED, OrderStatus.PARTIAL],
+            )
+            if stamped:
+                order.status = status
+                self._risk_manager.order_completed()
+
+        self.logger.info(
+            "Order reached terminal state without fill",
+            order_id=str(order_id),
+            status=status.value,
         )
 
     async def _update_position(self, fill: Fill) -> None:

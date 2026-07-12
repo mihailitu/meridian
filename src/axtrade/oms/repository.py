@@ -65,6 +65,41 @@ class OrderRepository:
                 datetime.now(UTC),
             )
 
+    async def update_status_if(
+        self, order_id: UUID, new_status: OrderStatus, expected: list[OrderStatus]
+    ) -> bool:
+        """Conditionally update an order's status in a single atomic UPDATE.
+
+        Only applies when the row's current status is one of `expected`,
+        closing the race where two writers (e.g. the submit-path SUBMITTED
+        stamp and a detached async-broker fill/cancel callback) each do a
+        read-then-write and clobber each other. Returns True iff a row was
+        actually updated.
+
+        Args:
+            order_id: Order to update
+            new_status: Status to set
+            expected: Statuses the row must currently have for the update
+                to apply
+
+        Returns:
+            True if the row matched and was updated, False otherwise
+        """
+        query = """
+            UPDATE orders SET status = $1, updated_at = $4
+            WHERE id = $2 AND status = ANY($3::text[])
+            RETURNING id
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                query,
+                new_status.value,
+                order_id,
+                [status.value for status in expected],
+                datetime.now(UTC),
+            )
+        return row is not None
+
     async def get(self, order_id: UUID) -> Optional[Order]:
         """Get an order by ID."""
         query = """

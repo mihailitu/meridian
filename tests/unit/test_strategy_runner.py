@@ -21,7 +21,7 @@ from axtrade.common import (
     StrategiesConfig,
     StrategyInstanceConfig,
 )
-from axtrade.oms.types import Order, OrderSide, Position
+from axtrade.oms.types import Fill, Order, OrderSide, Position
 from axtrade.strategies import BarWithIndicators, ControlCommand, StrategyState
 from axtrade.strategies.runner import StrategyRunner
 
@@ -305,6 +305,8 @@ class TestStrategyRunner:
         mock_pool.connect.assert_called_once()
         mock_order_manager.connect.assert_called_once()
         mock_bar_consumer.connect.assert_called_once()
+        # Async fill routing (Audit P1-1b) is wired up right after connect.
+        mock_order_manager.on_fill.assert_called_once_with(runner._on_order_manager_fill)
 
     async def test_stop_disconnects_components(
         self, runner: StrategyRunner
@@ -641,6 +643,318 @@ class TestStrategyRunnerBarProcessing:
 
         # Should not raise
         runner._log_signal(strategy, data, order)
+
+
+class TestStrategyRunnerFillRouting:
+    """Tests for the async fill-routing callback registered with
+    OrderManager (Audit P1-1). This is what makes fill handling correct for
+    async brokers (IBKR): unlike the post-submit poll in _consume_loop,
+    which only catches fills that already landed by the time submit_order
+    returns, this callback fires whenever OrderManager resolves a fill,
+    however late."""
+
+    @pytest.fixture
+    def mock_config(self) -> Config:
+        config = Config()
+        config.redis = RedisConfig()
+        config.database = DatabaseConfig()
+        config.oms = OMSConfig(paper_mode=True)
+        config.strategies = StrategiesConfig(
+            enabled=[
+                StrategyInstanceConfig(
+                    type="momentum",
+                    id="momentum_01",
+                    enabled=True,
+                    config={
+                        "rsi_oversold": 40,
+                        "rsi_overbought": 70,
+                        "position_size": 100,
+                    },
+                ),
+            ],
+        )
+        return config
+
+    @pytest.fixture
+    def runner(self, mock_config: Config) -> StrategyRunner:
+        runner = StrategyRunner(mock_config)
+        runner._load_strategies()
+        return runner
+
+    async def test_fill_routes_to_matching_strategy(self, runner: StrategyRunner) -> None:
+        position = Position(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal("100"),
+            avg_entry_price=Decimal("185.00"),
+        )
+        mock_order_manager = AsyncMock()
+        mock_order_manager.get_position.return_value = position
+        runner._order_manager = mock_order_manager
+
+        strategy = runner._strategies["momentum_01"]
+        fill_calls = []
+        strategy.on_fill = lambda f: fill_calls.append(f)
+
+        fill = Fill(
+            order_id=uuid4(),
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("100"),
+            price=Decimal("185.00"),
+        )
+
+        await runner._on_order_manager_fill(fill)
+
+        mock_order_manager.get_position.assert_called_once_with("momentum_01", "AAPL")
+        assert strategy.get_position("AAPL") is position
+        assert fill_calls == [fill]
+
+    async def test_fill_clears_position_when_none(self, runner: StrategyRunner) -> None:
+        """A closing fill: get_position comes back None (position fully
+        closed), so the strategy's cached position must be cleared."""
+        strategy = runner._strategies["momentum_01"]
+        strategy.update_position(
+            Position(
+                strategy_id="momentum_01",
+                symbol="AAPL",
+                side="long",
+                quantity=Decimal("100"),
+                avg_entry_price=Decimal("180.00"),
+            )
+        )
+
+        mock_order_manager = AsyncMock()
+        mock_order_manager.get_position.return_value = None
+        runner._order_manager = mock_order_manager
+
+        fill = Fill(
+            order_id=uuid4(),
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("100"),
+            price=Decimal("190.00"),
+        )
+
+        await runner._on_order_manager_fill(fill)
+
+        assert strategy.get_position("AAPL") is None
+
+    async def test_unknown_strategy_id_ignored(self, runner: StrategyRunner) -> None:
+        """A fill for a strategy_id this runner doesn't know about (e.g.
+        from a stale/previous config) must be dropped, not raise."""
+        mock_order_manager = AsyncMock()
+        runner._order_manager = mock_order_manager
+
+        fill = Fill(
+            order_id=uuid4(),
+            strategy_id="unknown_strategy",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("100"),
+            price=Decimal("185.00"),
+        )
+
+        # Should not raise
+        await runner._on_order_manager_fill(fill)
+
+        mock_order_manager.get_position.assert_not_called()
+
+    async def test_on_fill_error_is_caught(self, runner: StrategyRunner) -> None:
+        mock_order_manager = AsyncMock()
+        mock_order_manager.get_position.return_value = None
+        runner._order_manager = mock_order_manager
+
+        strategy = runner._strategies["momentum_01"]
+
+        def bad_on_fill(f):
+            raise ValueError("boom")
+
+        strategy.on_fill = bad_on_fill
+
+        fill = Fill(
+            order_id=uuid4(),
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("100"),
+            price=Decimal("185.00"),
+        )
+
+        # Should not raise
+        await runner._on_order_manager_fill(fill)
+
+
+class TestStrategyRunnerPendingOpens:
+    """Integration tests for in-flight entry tracking around order
+    submission in _consume_loop (Audit P1-1c): the per-strategy
+    max_positions cap can't be bypassed by orders whose fills haven't
+    landed yet."""
+
+    @pytest.fixture
+    def mock_config(self) -> Config:
+        config = Config()
+        config.redis = RedisConfig()
+        config.database = DatabaseConfig()
+        config.oms = OMSConfig(paper_mode=True)
+        config.strategies = StrategiesConfig(
+            enabled=[
+                StrategyInstanceConfig(
+                    type="momentum",
+                    id="momentum_01",
+                    enabled=True,
+                    config={
+                        "rsi_oversold": 40,
+                        "rsi_overbought": 70,
+                        "position_size": 100,
+                        "max_positions": 1,
+                    },
+                ),
+            ],
+        )
+        return config
+
+    @pytest.fixture
+    def runner(self, mock_config: Config) -> StrategyRunner:
+        runner = StrategyRunner(mock_config)
+        runner._load_strategies()
+        return runner
+
+    @pytest.fixture
+    def sample_bar(self) -> Bar:
+        return Bar(
+            symbol="AAPL",
+            open=185.0,
+            high=186.0,
+            low=184.0,
+            close=185.50,
+            volume=10000,
+            timestamp=datetime(2024, 1, 15, 9, 30, tzinfo=timezone.utc),
+        )
+
+    @staticmethod
+    def _buy_bar_data(sample_bar: Bar) -> dict:
+        return {
+            "bar": sample_bar,
+            "sma_20": 184.0,
+            "rsi_14": 55.0,
+            "regime": "trending_up",
+            "trend_strength": 60.0,
+        }
+
+    async def test_symbol_marked_pending_before_submit_and_cleared_by_fill(
+        self, runner: StrategyRunner, sample_bar: Bar
+    ) -> None:
+        strategy = runner._strategies["momentum_01"]
+        strategy._prev_rsi["AAPL"] = 45.0  # seed cross-up condition
+
+        observed_at_capacity_during_submit = []
+
+        async def submit_and_observe(order):
+            # By the time submit_order is awaited, the symbol must already
+            # be marked pending and counted by at_capacity() — this is what
+            # closes the async-broker window where an IBKR submit_order
+            # returns before any fill lands.
+            observed_at_capacity_during_submit.append(strategy.at_capacity())
+            return uuid4()
+
+        position = Position(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal("100"),
+            avg_entry_price=Decimal("185.50"),
+        )
+
+        mock_order_manager = MagicMock()
+        mock_order_manager.submit_order = AsyncMock(side_effect=submit_and_observe)
+        mock_order_manager.get_position = AsyncMock(return_value=position)
+
+        runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
+        runner._running = True
+
+        async def consume_one(consumer_name):
+            yield self._buy_bar_data(sample_bar)
+            runner._running = False
+
+        mock_bar_consumer = MagicMock()
+        mock_bar_consumer.consume.return_value = consume_one("test")
+        runner._bar_consumer = mock_bar_consumer
+
+        await runner._consume_loop()
+
+        assert observed_at_capacity_during_submit == [True]
+        # Fill landed synchronously (paper-mode fast path): the pending
+        # marker must be cleared, with the settled position now carrying
+        # capacity instead.
+        assert "AAPL" not in strategy._pending_opens
+        assert strategy.at_capacity() is True
+
+    async def test_rejection_clears_pending_and_restores_capacity(
+        self, runner: StrategyRunner, sample_bar: Bar
+    ) -> None:
+        strategy = runner._strategies["momentum_01"]
+        strategy._prev_rsi["AAPL"] = 45.0
+
+        mock_order_manager = MagicMock()
+        mock_order_manager.submit_order = AsyncMock(side_effect=Exception("rejected"))
+        mock_order_manager.get_position = AsyncMock(return_value=None)
+
+        runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
+        runner._running = True
+
+        async def consume_one(consumer_name):
+            yield self._buy_bar_data(sample_bar)
+            runner._running = False
+
+        mock_bar_consumer = MagicMock()
+        mock_bar_consumer.consume.return_value = consume_one("test")
+        runner._bar_consumer = mock_bar_consumer
+
+        # Should not raise (existing error-handling path)
+        await runner._consume_loop()
+
+        assert "AAPL" not in strategy._pending_opens
+        assert strategy.at_capacity() is False
+
+    async def test_async_broker_pending_survives_post_submit_poll(
+        self, runner: StrategyRunner, sample_bar: Bar
+    ) -> None:
+        """Async-broker case: submit_order returns before the fill lands, so
+        the post-submit poll sees no position. The poll must NOT clear the
+        pending-open marker (clear_position would discard it) — the fill
+        callback is what resolves it later. Regression for the review find
+        on audit P1-1c."""
+        strategy = runner._strategies["momentum_01"]
+        strategy._prev_rsi["AAPL"] = 45.0
+
+        mock_order_manager = MagicMock()
+        mock_order_manager.submit_order = AsyncMock(return_value=uuid4())
+        # Fill has not landed: position is not visible yet.
+        mock_order_manager.get_position = AsyncMock(return_value=None)
+
+        runner._order_manager = mock_order_manager
+        runner._consume_supervisor = LoopSupervisor(name="test", base_delay=0.001)
+        runner._running = True
+
+        async def consume_one(consumer_name):
+            yield self._buy_bar_data(sample_bar)
+            runner._running = False
+
+        mock_bar_consumer = MagicMock()
+        mock_bar_consumer.consume.return_value = consume_one("test")
+        runner._bar_consumer = mock_bar_consumer
+
+        await runner._consume_loop()
+
+        # The entry is still in flight: pending marker intact, capacity held.
+        assert "AAPL" in strategy._pending_opens
+        assert strategy.at_capacity() is True
 
 
 class TestStrategyStateRepository:
