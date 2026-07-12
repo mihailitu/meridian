@@ -19,6 +19,39 @@ from axtrade.gateway.base import DataAdapter
 logger = get_logger("fulltest.replay")
 
 
+def _manifest_entry_overlaps(
+    file_info: dict,
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> bool:
+    """Whether a manifest entry's date range overlaps the run window.
+
+    Missing start_date/end_date on either the entry or the run window means
+    "keep" -- there's nothing to filter on.
+
+    A manifest entry's start_date/end_date are both *inclusive* calendar
+    days (the file has data through the end of end_date -- see
+    download_historical_alpaca, which downloads through
+    23:59:59 UTC of the end date). The run window's end_date is
+    *exclusive* -- stream_ticks() filters out any bar with
+    timestamp >= midnight of end_date, matching the fulltest convention of
+    adjacent [is_start, is_end) / [oos_start, oos_end) windows that reuse
+    the same boundary date (e.g. IS end == OOS start). Comparing file_start
+    with strict "<" against the window's end_date is what keeps a
+    boundary-touching *next* file out of a window that ends exactly on
+    that date, while still keeping it for any window that extends past it.
+    """
+    if start_date is None or end_date is None:
+        return True
+    entry_start = file_info.get("start_date")
+    entry_end = file_info.get("end_date")
+    if not entry_start or not entry_end:
+        return True
+    file_start = date.fromisoformat(entry_start)
+    file_end = date.fromisoformat(entry_end)
+    return file_start < end_date and file_end >= start_date
+
+
 def _iter_file_bars(symbol: str, path: Path):
     """Yield (timestamp, symbol, open, high, low, close, volume) tuples from a parquet file.
 
@@ -118,6 +151,10 @@ class ReplayAdapter(DataAdapter):
         self._next_idx = 0
         self._dynamic_symbols_added: list[str] = []
 
+        # Per-symbol monotonic guard: dedupes bars when a symbol's data
+        # spans multiple manifest files with an overlapping boundary day.
+        self._last_bar_ts: dict[str, datetime] = {}
+
     async def connect(self) -> None:
         """Load manifest and prepare data."""
         manifest_path = self._data_dir / "manifest.json"
@@ -152,6 +189,15 @@ class ReplayAdapter(DataAdapter):
         for file_info in self._manifest.get("files", []):
             symbol = file_info["symbol"]
             if symbol not in self._symbols:
+                continue
+
+            # Skip manifest entries that don't overlap the run window (e.g.
+            # a symbol with separate IS and OOS files -- pulling in the
+            # file for the other window silently double counts bars via
+            # date-filtering downstream, and wastes memory/IO regardless).
+            # Interval filtering is intentionally not applied here: the
+            # adapter has no notion of its own interval today.
+            if not _manifest_entry_overlaps(file_info, self._start_date, self._end_date):
                 continue
 
             file_path = self._data_dir / file_info["filename"]
@@ -189,27 +235,51 @@ class ReplayAdapter(DataAdapter):
         if not self._manifest:
             return
 
-        # Build a quick lookup: symbol -> file_info
-        manifest_lookup = {
-            fi["symbol"]: fi for fi in self._manifest.get("files", [])
-        }
+        # Group all manifest entries by symbol -- a symbol can legitimately
+        # have more than one file (e.g. separate IS/OOS collections), and a
+        # last-wins lookup silently dropped every file but one.
+        entries_by_symbol: dict[str, list[dict]] = {}
+        for fi in self._manifest.get("files", []):
+            entries_by_symbol.setdefault(fi["symbol"], []).append(fi)
 
         added = []
         for sym_config in symbols:
             sym = sym_config.symbol
-            file_info = manifest_lookup.get(sym)
-            if not file_info:
+            entries = entries_by_symbol.get(sym)
+            if not entries:
                 logger.debug("No parquet file for dynamic symbol", symbol=sym)
                 continue
 
-            file_path = self._data_dir / file_info["filename"]
-            if not file_path.exists():
-                logger.debug("Missing parquet file for dynamic symbol", symbol=sym, path=str(file_path))
+            overlapping = [
+                fi for fi in entries
+                if _manifest_entry_overlaps(fi, self._start_date, self._end_date)
+            ]
+            if not overlapping:
+                logger.warning(
+                    "No data file covers run window",
+                    symbol=sym,
+                    window=f"{self._start_date} to {self._end_date}",
+                )
                 continue
 
-            with self._pending_lock:
-                self._pending_symbols.append((sym, file_path))
-            added.append(sym)
+            overlapping.sort(key=lambda fi: fi.get("start_date") or "")
+
+            queued = False
+            for fi in overlapping:
+                file_path = self._data_dir / fi["filename"]
+                if not file_path.exists():
+                    logger.debug(
+                        "Missing parquet file for dynamic symbol",
+                        symbol=sym, path=str(file_path),
+                    )
+                    continue
+
+                with self._pending_lock:
+                    self._pending_symbols.append((sym, file_path))
+                queued = True
+
+            if queued:
+                added.append(sym)
 
         if added:
             logger.info("Queued dynamic symbols for replay", symbols=added)
@@ -324,6 +394,22 @@ class ReplayAdapter(DataAdapter):
 
         # Initialize heap from initial file entries
         heap: list[_HeapEntry] = []
+
+        def _requeue_next(entry: "_HeapEntry") -> None:
+            """Advance entry's iterator and push the next bar back onto heap."""
+            next_bar = self._advance_iterator(entry.iterator)
+            if next_bar is not None:
+                ts_next = next_bar[0]
+                if not (end_dt and ts_next >= end_dt):
+                    new_entry = _HeapEntry(
+                        timestamp=ts_next,
+                        idx=self._next_idx,
+                        bar_tuple=next_bar,
+                        iterator=entry.iterator,
+                    )
+                    self._next_idx += 1
+                    heapq.heappush(heap, new_entry)
+
         for symbol, path in self._file_entries:
             it = _iter_file_bars(symbol, path)
             if start_dt:
@@ -390,7 +476,18 @@ class ReplayAdapter(DataAdapter):
                 # But keep draining the heap
                 continue
 
+            # Per-symbol monotonic guard: a symbol's data can span two
+            # manifest files with an overlapping boundary day (or a
+            # residual duplicate timestamp inside one file). Skip emitting
+            # -- but still advance the iterator -- so the same bar never
+            # replays twice, for both initial and dynamically-added files.
+            last_ts = self._last_bar_ts.get(symbol)
+            if last_ts is not None and ts <= last_ts:
+                _requeue_next(entry)
+                continue
+
             self._current_ts = ts
+            self._last_bar_ts[symbol] = ts
 
             ticks = self._make_ticks(symbol, ts, o, h, l, c, vol)
             bar_count += 1
@@ -413,18 +510,7 @@ class ReplayAdapter(DataAdapter):
                     await asyncio.sleep(0)
 
             # Advance the iterator and push back onto heap
-            next_bar = self._advance_iterator(entry.iterator)
-            if next_bar is not None:
-                ts_next = next_bar[0]
-                if not (end_dt and ts_next >= end_dt):
-                    new_entry = _HeapEntry(
-                        timestamp=ts_next,
-                        idx=self._next_idx,
-                        bar_tuple=next_bar,
-                        iterator=entry.iterator,
-                    )
-                    self._next_idx += 1
-                    heapq.heappush(heap, new_entry)
+            _requeue_next(entry)
 
         if self.estimated_bars > 0:
             print(f"\rProgress: 100% ({bar_count} bars) -- replay complete.                    ", file=sys.stderr)

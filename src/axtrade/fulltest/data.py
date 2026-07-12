@@ -42,6 +42,81 @@ def calculate_indicators(df):
     return df
 
 
+def _chunk_ranges(
+    start: date, end: date, chunk_days: int = 7
+) -> list[tuple[datetime, datetime]]:
+    """Split [start, end] into non-overlapping UTC datetime chunks.
+
+    Each chunk is an inclusive (00:00:00, 23:59:59) UTC range. The next
+    chunk starts the day after the previous chunk's end, so day boundaries
+    are covered exactly once (the old `chunk_start = chunk_end` logic
+    re-downloaded every boundary day, doubling those bars).
+
+    Args:
+        start: Start date (inclusive)
+        end: End date (inclusive)
+        chunk_days: Number of days per chunk
+
+    Returns:
+        List of (start_dt, end_dt) UTC datetime tuples covering [start, end]
+    """
+    ranges: list[tuple[datetime, datetime]] = []
+    chunk_start = start
+    step = timedelta(days=chunk_days)
+
+    while chunk_start <= end:
+        chunk_end = min(chunk_start + step - timedelta(days=1), end)
+        start_dt = datetime.combine(chunk_start, datetime.min.time()).replace(
+            tzinfo=timezone.utc
+        )
+        end_dt = datetime.combine(chunk_end, datetime.max.time()).replace(
+            tzinfo=timezone.utc
+        )
+        ranges.append((start_dt, end_dt))
+        chunk_start = chunk_end + timedelta(days=1)
+
+    return ranges
+
+
+def _warn_suspect_gaps(df, symbol: str) -> None:
+    """Log a warning for day-boundary price jumps outside [0.5, 2.0].
+
+    Compares each day's first bar open to the previous day's last bar
+    close. A ratio outside that band usually indicates an unadjusted stock
+    split slipping through (SPLIT adjustment should prevent this -- this is
+    a belt-and-braces sanity check on top of it).
+    """
+    if df.empty:
+        return
+
+    work = df.copy()
+    work["day"] = work["timestamp"].dt.date
+    daily = (
+        work.groupby("day")
+        .agg(first_open=("open", "first"), last_close=("close", "last"))
+        .reset_index()
+        .sort_values("day")
+    )
+
+    prev_close = None
+    prev_day = None
+    for row in daily.itertuples(index=False):
+        if prev_close is not None and prev_close > 0:
+            ratio = row.first_open / prev_close
+            if ratio < 0.5 or ratio > 2.0:
+                logger.warning(
+                    "Suspect day-boundary price gap (possible unadjusted split)",
+                    symbol=symbol,
+                    date=str(row.day),
+                    prev_date=str(prev_day),
+                    ratio=round(ratio, 4),
+                    prev_close=prev_close,
+                    open=row.first_open,
+                )
+        prev_close = row.last_close
+        prev_day = row.day
+
+
 def save_to_parquet(df, output_path: Path):
     """Save dataframe to parquet file."""
     import pyarrow as pa
@@ -109,6 +184,7 @@ async def download_historical_alpaca(
     end: date,
     interval: str = "1m",
     data_dir: str = "data/historical",
+    force: bool = False,
 ) -> dict[str, str]:
     """Download historical data via Alpaca API.
 
@@ -120,6 +196,8 @@ async def download_historical_alpaca(
         end: End date
         interval: Bar interval
         data_dir: Directory to save parquet files
+        force: If True, re-download even when the manifest already reports
+            the range as covered
 
     Returns:
         Dict mapping symbol -> parquet filename
@@ -127,6 +205,7 @@ async def download_historical_alpaca(
     import asyncio
 
     import pandas as pd
+    from alpaca.data.enums import Adjustment
     from alpaca.data.historical import StockHistoricalDataClient
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
@@ -160,12 +239,13 @@ async def download_historical_alpaca(
     result_files = {}
 
     for symbol in symbols:
-        # Check if data already exists
-        existing = _check_manifest_for_symbol(output_dir, symbol, interval, start, end)
-        if existing:
-            logger.info("Data already exists", symbol=symbol, file=existing)
-            result_files[symbol] = existing
-            continue
+        # Check if data already exists (skipped when force=True)
+        if not force:
+            existing = _check_manifest_for_symbol(output_dir, symbol, interval, start, end)
+            if existing:
+                logger.info("Data already exists", symbol=symbol, file=existing)
+                result_files[symbol] = existing
+                continue
 
         logger.info(
             "Downloading",
@@ -175,63 +255,85 @@ async def download_historical_alpaca(
             interval=interval,
         )
 
-        # Download in weekly chunks
+        # Download in non-overlapping weekly chunks
         all_bars = []
-        chunk_start = start
-        chunk_size = timedelta(days=7)
+        chunk_failed = False
 
-        while chunk_start < end:
-            chunk_end = min(chunk_start + chunk_size, end)
-            start_dt = datetime.combine(chunk_start, datetime.min.time()).replace(
-                tzinfo=timezone.utc
-            )
-            end_dt = datetime.combine(chunk_end, datetime.max.time()).replace(
-                tzinfo=timezone.utc
-            )
+        for start_dt, end_dt in _chunk_ranges(start, end, chunk_days=7):
+            bars = None
+            last_error: Optional[Exception] = None
 
-            try:
-                request = StockBarsRequest(
-                    symbol_or_symbols=symbol,
-                    timeframe=timeframe,
-                    start=start_dt,
-                    end=end_dt,
-                )
-                bars = client.get_stock_bars(request)
+            for attempt in range(2):
+                try:
+                    request = StockBarsRequest(
+                        symbol_or_symbols=symbol,
+                        timeframe=timeframe,
+                        start=start_dt,
+                        end=end_dt,
+                        # SPLIT adjustment removes fake price gaps caused by
+                        # stock splits while preserving real traded price
+                        # levels. Dividends are deliberately left
+                        # unadjusted (no cash-credit modeling) -- a
+                        # documented drag on long holders in backtest P&L.
+                        adjustment=Adjustment.SPLIT,
+                    )
+                    bars = client.get_stock_bars(request)
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+                    if attempt == 0:
+                        logger.warning(
+                            "Chunk download failed, retrying",
+                            symbol=symbol,
+                            chunk=f"{start_dt.date()} to {end_dt.date()}",
+                            error=str(e),
+                        )
+                        await asyncio.sleep(2)
 
-                if bars and symbol in bars.data:
-                    for bar in bars.data[symbol]:
-                        all_bars.append({
-                            "timestamp": bar.timestamp,
-                            "open": float(bar.open),
-                            "high": float(bar.high),
-                            "low": float(bar.low),
-                            "close": float(bar.close),
-                            "volume": int(bar.volume),
-                        })
-
-                logger.debug(
-                    "Chunk downloaded",
+            if last_error is not None:
+                logger.error(
+                    "Chunk download failed after retry, skipping symbol",
                     symbol=symbol,
-                    chunk=f"{chunk_start} to {chunk_end}",
-                    bars=len(all_bars),
+                    chunk=f"{start_dt.date()} to {end_dt.date()}",
+                    error=str(last_error),
                 )
-            except Exception as e:
-                logger.warning(
-                    "Chunk download failed",
-                    symbol=symbol,
-                    chunk=f"{chunk_start} to {chunk_end}",
-                    error=str(e),
-                )
+                chunk_failed = True
+                break
 
-            chunk_start = chunk_end
+            if bars and symbol in bars.data:
+                for bar in bars.data[symbol]:
+                    all_bars.append({
+                        "timestamp": bar.timestamp,
+                        "open": float(bar.open),
+                        "high": float(bar.high),
+                        "low": float(bar.low),
+                        "close": float(bar.close),
+                        "volume": int(bar.volume),
+                    })
+
+            logger.debug(
+                "Chunk downloaded",
+                symbol=symbol,
+                chunk=f"{start_dt.date()} to {end_dt.date()}",
+                bars=len(all_bars),
+            )
+
             # Brief pause for rate limiting
             await asyncio.sleep(0.25)
+
+        if chunk_failed:
+            # No parquet write, no manifest entry -- a re-run will retry
+            # this symbol instead of silently treating the range as covered.
+            logger.error("Skipping symbol due to chunk download failure", symbol=symbol)
+            continue
 
         if not all_bars:
             logger.warning("No data downloaded", symbol=symbol)
             continue
 
         df = pd.DataFrame(all_bars)
+        df = df.drop_duplicates(subset="timestamp", keep="first")
         df = df.sort_values("timestamp").reset_index(drop=True)
 
         # Remove timezone info for parquet compatibility
@@ -240,6 +342,8 @@ async def download_historical_alpaca(
 
         logger.info("Calculating indicators", symbol=symbol, bars=len(df))
         df = calculate_indicators(df)
+
+        _warn_suspect_gaps(df, symbol)
 
         filename = f"{symbol}_{interval}_{start}_{end}.parquet"
         output_path = output_dir / filename

@@ -3,7 +3,7 @@
 import asyncio
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -258,6 +258,157 @@ async def test_disconnect_clears_state(data_dir):
 async def test_adapter_name(data_dir):
     adapter = ReplayAdapter(str(data_dir))
     assert adapter.name == "replay"
+
+
+def _write_manifest(data_dir: Path, entries: list[dict]) -> None:
+    with open(data_dir / "manifest.json", "w") as f:
+        json.dump({"files": entries}, f)
+
+
+def _write_parquet(data_dir: Path, filename: str, bars: list[dict]) -> None:
+    df = pd.DataFrame(bars)
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    pq.write_table(table, data_dir / filename, compression="snappy")
+
+
+@pytest.fixture
+def two_window_manifest(tmp_path):
+    """Two files per symbol: 2024-08->2025-08 (IS) and 2025-08->2026-02 (OOS)."""
+    bars_is = [
+        {"timestamp": pd.Timestamp("2025-01-01 09:30:00", tz="UTC"), "open": 100.0,
+         "high": 101.0, "low": 99.0, "close": 100.5, "volume": 500},
+    ]
+    bars_oos = [
+        {"timestamp": pd.Timestamp("2025-09-01 09:30:00", tz="UTC"), "open": 200.0,
+         "high": 201.0, "low": 199.0, "close": 200.5, "volume": 500},
+    ]
+    for symbol in ("AAPL", "MSFT"):
+        _write_parquet(tmp_path, f"{symbol}_1m_is.parquet", bars_is)
+        _write_parquet(tmp_path, f"{symbol}_1m_oos.parquet", bars_oos)
+
+    entries = []
+    for symbol in ("AAPL", "MSFT"):
+        entries.append({
+            "filename": f"{symbol}_1m_is.parquet", "symbol": symbol, "interval": "1m",
+            "start_date": "2024-08-01", "end_date": "2025-08-01", "bar_count": 1,
+        })
+        entries.append({
+            "filename": f"{symbol}_1m_oos.parquet", "symbol": symbol, "interval": "1m",
+            "start_date": "2025-08-01", "end_date": "2026-02-01", "bar_count": 1,
+        })
+    _write_manifest(tmp_path, entries)
+    return tmp_path
+
+
+async def test_subscribe_selects_only_overlapping_window(two_window_manifest):
+    adapter = ReplayAdapter(
+        str(two_window_manifest),
+        start_date=date(2024, 8, 1), end_date=date(2025, 8, 1),
+    )
+    await adapter.connect()
+    await adapter.subscribe([
+        SymbolConfig(symbol="AAPL", base_price=100.0),
+        SymbolConfig(symbol="MSFT", base_price=200.0),
+    ])
+
+    filenames = {path.name for _, path in adapter._file_entries}
+    assert filenames == {"AAPL_1m_is.parquet", "MSFT_1m_is.parquet"}
+
+
+async def test_subscribe_selects_both_files_when_window_spans_both(two_window_manifest):
+    adapter = ReplayAdapter(
+        str(two_window_manifest),
+        start_date=date(2024, 8, 1), end_date=date(2026, 2, 1),
+    )
+    await adapter.connect()
+    await adapter.subscribe([SymbolConfig(symbol="AAPL", base_price=100.0)])
+
+    filenames = {path.name for _, path in adapter._file_entries}
+    assert filenames == {"AAPL_1m_is.parquet", "AAPL_1m_oos.parquet"}
+
+
+async def test_add_symbols_selects_only_overlapping_window(two_window_manifest):
+    adapter = ReplayAdapter(
+        str(two_window_manifest),
+        start_date=date(2024, 8, 1), end_date=date(2025, 8, 1),
+    )
+    await adapter.connect()
+    await adapter.add_symbols([SymbolConfig(symbol="AAPL", base_price=100.0)])
+
+    pending = adapter._drain_pending()
+    assert [p.name for _, p in pending] == ["AAPL_1m_is.parquet"]
+
+
+async def test_add_symbols_no_overlap_logs_warning_and_skips(two_window_manifest, monkeypatch):
+    # Window entirely before both files' coverage.
+    adapter = ReplayAdapter(
+        str(two_window_manifest),
+        start_date=date(2020, 1, 1), end_date=date(2020, 6, 1),
+    )
+    await adapter.connect()
+
+    # structlog isn't routed through stdlib logging (no setup_logging() call
+    # in tests), so caplog can't see it -- assert on the logger call directly.
+    from axtrade.fulltest import replay_adapter as replay_module
+    warnings = []
+    monkeypatch.setattr(
+        replay_module.logger, "warning",
+        lambda event, **kw: warnings.append((event, kw)),
+    )
+
+    await adapter.add_symbols([SymbolConfig(symbol="AAPL", base_price=100.0)])
+
+    assert adapter._drain_pending() == []
+    assert any("no data file covers run window" in event.lower() for event, _ in warnings)
+
+
+async def test_stream_ticks_monotonic_guard_dedupes_overlap_day(tmp_path):
+    """Two files for one symbol overlap on 2025-06-02; the guard should emit
+    each (symbol, timestamp) bar exactly once."""
+    ts_file1 = [
+        pd.Timestamp("2025-06-01 09:30:00", tz="UTC"),
+        pd.Timestamp("2025-06-02 09:30:00", tz="UTC"),  # overlap day
+    ]
+    ts_file2 = [
+        pd.Timestamp("2025-06-02 09:30:00", tz="UTC"),  # overlap day (duplicate)
+        pd.Timestamp("2025-06-03 09:30:00", tz="UTC"),
+    ]
+
+    def _mk(ts_list, base):
+        return [
+            {"timestamp": ts, "open": base, "high": base + 1, "low": base - 1,
+             "close": base + 0.5, "volume": 100}
+            for ts in ts_list
+        ]
+
+    _write_parquet(tmp_path, "AAPL_1m_a.parquet", _mk(ts_file1, 100.0))
+    _write_parquet(tmp_path, "AAPL_1m_b.parquet", _mk(ts_file2, 200.0))
+
+    _write_manifest(tmp_path, [
+        {"filename": "AAPL_1m_a.parquet", "symbol": "AAPL", "interval": "1m",
+         "start_date": "2025-06-01", "end_date": "2025-06-02", "bar_count": 2},
+        {"filename": "AAPL_1m_b.parquet", "symbol": "AAPL", "interval": "1m",
+         "start_date": "2025-06-02", "end_date": "2025-06-03", "bar_count": 2},
+    ])
+
+    adapter = ReplayAdapter(str(tmp_path), ticks_per_bar=4)
+    await adapter.connect()
+    await adapter.subscribe([SymbolConfig(symbol="AAPL", base_price=100.0)])
+    assert len(adapter._file_entries) == 2
+
+    ticks = []
+    async for tick in adapter.stream_ticks():
+        ticks.append(tick)
+
+    seen = [(t.symbol, t.timestamp) for t in ticks]
+    unique_bar_timestamps = {t.timestamp for t in ticks}
+    # 3 distinct bar timestamps (06-01, 06-02, 06-03), each appears exactly once.
+    assert len(unique_bar_timestamps) == 3
+    assert adapter.total_bars == 3
+    # No duplicate (symbol, timestamp) pairs among emitted ticks' bar groups.
+    for ts in unique_bar_timestamps:
+        count = sum(1 for s, t in seen if t == ts)
+        assert count == 4  # ticks_per_bar, i.e. exactly one bar emitted for this ts
 
 
 async def test_more_ticks_per_bar(data_dir):

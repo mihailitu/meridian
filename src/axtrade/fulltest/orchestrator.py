@@ -276,6 +276,7 @@ class FullBacktestOrchestrator:
             end=self._bt_config.end,
             interval=self._bt_config.interval,
             data_dir=self._bt_config.data_dir,
+            force=self._bt_config.force,
         )
 
     def _build_isolated_config(self) -> Config:

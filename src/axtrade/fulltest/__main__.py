@@ -102,6 +102,10 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--end", required=True, type=parse_date, help="End date (YYYY-MM-DD)"
     )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-download even if the manifest already reports the range as covered"
+    )
     _add_universe_args(parser)
 
 
@@ -190,6 +194,7 @@ def download_command(args) -> None:
         end=args.end,
         interval=args.interval,
         data_dir=args.data_dir,
+        force=args.force,
     ))
 
     downloaded = len(result)
@@ -217,6 +222,8 @@ def _build_run_config(args, start: date, end: date, symbols: list[str],
         report_format=args.format,
         skip_download=not args.download,
         strategy_overrides=overrides,
+        # oos doesn't expose --force (it isn't built via _add_common_args)
+        force=getattr(args, "force", False),
     )
 
 

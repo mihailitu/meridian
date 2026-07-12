@@ -29,6 +29,8 @@ class FullBacktestConfig:
     report_format: str = "text"
     skip_download: bool = True
     strategy_overrides: dict[str, dict] = field(default_factory=dict)
+    # Re-download even when the manifest already reports the range covered.
+    force: bool = False
 
 
 @dataclass
