@@ -3,7 +3,7 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-07-12 (phase 5 underway)._
+_Last refreshed: 2026-07-15 (phase 5 underway; data layer re-certified)._
 
 ## Today
 
@@ -14,14 +14,20 @@ _Last refreshed: 2026-07-12 (phase 5 underway)._
   made the discovery_momentum IS/OOS comparison structurally invalid (**that verdict row is
   withdrawn pending re-run**); (b) the **live multi-process path could not work** — no fill
   routing to strategies, a dead IBKR tick path, in-process-only discovery scores; (c) the
-  **API was an unauthenticated remote control on 0.0.0.0**. Five iterations have landed
-  fixing all P0s and 6/11 P1s; an adjusted full-universe re-download is in progress with an
-  IS/OOS re-certification run to follow — status, commands, and pickup notes in
-  [`docs/phase5-audit-fixes.md`](docs/phase5-audit-fixes.md).
-- **The per-strategy verdict table below is under re-certification.** The five
-  static-symbol strategy verdicts are expected to survive (their windows appear split-free);
-  the discovery_momentum row is known-invalid as evidence (audit P0-3). Do not cite the
-  table until the `post-data-fixes` re-run lands.
+  **API was an unauthenticated remote control on 0.0.0.0**. Six iterations have landed
+  fixing all P0s and 9/11 P1s (P1-10 pairs wedge and P1-11 dashboard numbers remain);
+  status and details in [`docs/phase5-audit-fixes.md`](docs/phase5-audit-fixes.md).
+- **The data layer is re-certified (2026-07-14).** The full S&P 1500 universe was
+  re-downloaded split-adjusted and deduplicated (single 18-month file per symbol), sanity
+  checks passed (TSCO 5:1 split gapless, all suspect gaps are same-day bad prints, zero
+  duplicate timestamps), and the buy_hold calibration gate reproduced the hand-computed
+  final equity **to the cent** ($108,595.57) with full window coverage. The `post-data-fixes`
+  IS/OOS re-run (`data/fulltest_results/oos_comparison_20260714_162449.txt`) re-certified
+  the per-strategy verdict table below — **it may be cited again**. Two operational notes:
+  clean data produces far more discoveries, so discovery-enabled fulltests now run at
+  ~1 sim-month/hour (the IS/OOS pair took ~18h); and reported fulltest Sharpes subtract a
+  hardcoded 5% risk-free rate (`backtest/analytics.py::calculate_sharpe`) — a labeling
+  footgun folded into P1-11.
 - **Phase 4 (platform pivot) is complete — all six work iterations landed 2026-07-03**
   (branch `phase4-platform-pivot`, plan + findings in
   [`docs/phase4-platform-pivot.md`](docs/phase4-platform-pivot.md)). The strategy-search
@@ -96,18 +102,21 @@ iteration in the phase-4 plan — it is a harness-quality feature, not a bot rev
    it upgrades the harness from "falsification-capable on gateway symbols" to
    "falsification-capable on universes".
 
-**Per-strategy state (post-harness-fixes, IS year vs OOS half-year, discovery on, narrowed universe)**:
+**Per-strategy state (post-data-fixes, re-certified 2026-07-14 on split-adjusted deduplicated
+data; IS year vs OOS half-year, discovery on, narrowed universe)**:
 
 | Strategy | IS Trades | IS PF | IS P&L | OOS Trades | OOS PF | OOS P&L | Verdict |
 |----------|----------:|------:|-------:|-----------:|-------:|--------:|---------|
-| `discovery_momentum` | 1,506 | 0.42 | -$13,530 | 6,659 | 0.45 | -$21,938 | DEAD — consistent, large-sample, unprofitable |
-| `mean_reversion` | 319 | 0.40 | -$4,061 | 164 | 0.36 | -$2,368 | DEAD — old IS PF 1.29 was a harness artifact |
-| `multi_timeframe` | 3,810 | 0.21 | -$64,634 | 1,933 | 0.21 | -$38,481 | DEAD — no edge at the signal level |
-| `pairs` | 12 | 0.06 | -$824 | 3 | 0.01 | -$235 | DEAD — too low-frequency to evaluate, loses anyway |
-| `momentum` | 0 | — | — | 0 | — | — | DEAD — gates never co-fire even with fixed config |
-| `overnight_reversal` (new) | 127 | 0.63 | -$2,479 | — | — | — | DEAD — failed IS after one tuning pass; OOS never earned |
+| `discovery_momentum` | 9,478 | 0.40 | -$29,743 | 5,399 | 0.44 | -$23,289 | DEAD — first structurally valid IS/OOS (P0-3 fixed: trade rate now ~26/day IS vs ~29/day OOS, comparable legs); consistent, large-sample, unprofitable |
+| `mean_reversion` | 167 | 0.28 | -$2,784 | 184 | 0.35 | -$2,586 | DEAD — dedup halved its trades (dup bars double-triggered signals), PF dropped further |
+| `multi_timeframe` | 2,267 | 0.18 | -$40,025 | 2,267 | 0.22 | -$44,418 | DEAD — no edge at the signal level |
+| `pairs` | 12 | 0.06 | -$824 | 3 | 0.01 | -$235 | DEAD — identical to the penny pre/post data fixes; barely trades at all (see P1-10 wedge) |
+| `momentum` | 0 | — | — | 1 | ∞ | +$65 | DEAD — gates effectively never co-fire |
+| `overnight_reversal` | 27 | 0.24 | -$1,751 | 25 | 2.85 | +$1,432 | DEAD — fails IS decisively (worse than its tuned 0.63 on old data); OOS PF 2.85 is a 25-trade curiosity, unearned per gate discipline |
 
-All six should ship `enabled: false` for any non-research run.
+All six should ship `enabled: false` for any non-research run. Versus the withdrawn
+`post-harness-fixes` table: no verdict flipped — the "no edge exists here" conclusion now
+stands on clean data through a to-the-cent-calibrated harness.
 
 **Findings parked in audit**: C2b (batched INSERTs) tried + reverted — only 1.6% speedup.
 `run_in_executor` removal saved 6%. C5 (cash check) fixed in 2.6. Note: wall-clock per run

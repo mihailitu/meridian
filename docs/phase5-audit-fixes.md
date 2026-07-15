@@ -12,12 +12,12 @@
 |---|-----------|-------------|--------|
 | 1 | API lockdown | P0-5, P1-7 | **DONE** (39589be — 127.0.0.1 bind, X-API-Key dep on 7 mutating routes, AXTRADE_API_KEY env override, gateway preference in-memory) |
 | 2a | Data-layer code fixes | P0-1, P0-2, P0-3 | **DONE** (9593fae — Adjustment.SPLIT, non-overlapping chunks, dedup, gap sanity warning, skip-symbol-on-chunk-failure, --force flag; window-aware manifest selection + per-symbol monotonic replay guard) |
-| 2b | Adjusted re-download + IS/OOS re-run | P0-1/2/3 validation | **IN PROGRESS** — see "Ongoing download" below |
+| 2b | Adjusted re-download + IS/OOS re-run | P0-1/2/3 validation | **DONE** (2026-07-14 — re-download complete: 1,445 files, all 16 skips explained; sanity pass clean: TSCO split gapless, 3 suspect gaps all same-day bad prints, zero dup timestamps; buy_hold calibration gate **exact to the cent** ($108,595.57, full coverage); `post-data-fixes` IS/OOS re-run (`oos_comparison_20260714_162449.txt`) re-certified the verdict table — no verdict flipped, discovery_momentum's legs now structurally comparable (P0-3 confirmed fixed). Raw backup deleted after validation. Findings: discovery-enabled fulltests now ~1 sim-month/hour on clean data (IS/OOS pair ~18h); reported Sharpe embeds a hardcoded 5% risk-free rate (`backtest/analytics.py`) — labeling folded into P1-11) |
 | 3 | Live-path OMS | P1-1, P1-2, P1-4 | **DONE** (d5084e7 — fill routing to strategies, pending-open caps, conditional SUBMITTED stamp, fill lock, cancel propagation + cancel_order; review caught a pending-marker wipe in the post-submit poll, regression-tested) |
 | 4 | IBKR tick path | P0-4 | **DONE** (99c7d4d — int(float(volume)) + poison-message acks, cumulative→delta bar volume, ib.sleep(0) removed; live-TWS validation still owed) |
 | 5 | Live-paper pre-flight | P1-5, P1-6, P1-8 | **DONE** (c1353cc — one-sided quote skip, initdb migrations hook, stream maxlen + consumer-group start knob; integration test re-verified) |
 | 6 | Cross-process discovery bridge + eviction orphans | P1-3, P1-9 | **DONE** — discovery scanning moved from the API process to the strategy runner (matching fulltest wiring); API is now a DB reader (`DiscoveryRepository` / `discovered_symbols`) + command publisher (`axtrade:discovery:control`, 202-ack endpoints); manual add/clear persist immediately via `persist_discovered()`. Eviction guard: stale-but-held symbols keep their subscription; on position-check failure evict nothing (fail safe). Review caught a control-loop busy-spin on subscription close that OOM-froze the workstation mid-iteration (20+ GB via mock call-history growth) — fixed with a resubscribe backoff |
-| 7+ | Next: P1-10 (pairs wedge), P1-11 (dashboard money numbers), then P2 tier | | not started |
+| 7+ | Next: P1-10 (pairs wedge — note it traded identically to the penny pre/post data fixes), P1-11 (dashboard money numbers + Sharpe-definition labeling: `backtest/analytics.py::calculate_sharpe` silently subtracts a 5% risk-free rate while `analytics/metrics.py` defaults to 0 — unify or label), then P2 tier | | not started |
 
 Suite: 1094 unit tests green as of iteration 6 (987 at branch start); `make test-integration`
 passes (re-verified after iteration 6 — the paper pipeline now hosts the discovery scanner
@@ -51,6 +51,12 @@ session — `nohup`, detached.
   day-boundary ratios clean, ~46-55s/symbol
 
 ### After the download completes — execution plan (written 2026-07-12 evening)
+
+> **Executed 2026-07-13/14 — all gates passed.** Download finished 07-13 07:40 (13.5h
+> across two sessions bridging a machine crash). Steps 0–2 ran automatically off a
+> scheduled check; step 3 launched on go-ahead 07-13 22:28 and finished 07-14 16:24
+> (~18h — see the wall-clock note in iteration 2b). Results recorded in the iteration
+> table above and the ROADMAP verdict table.
 
 Framing: this is a **re-audit of the verdict table, not a formality**. Every prior number
 was measured on data with ~33% duplicate rows and (for the discovery universe) unadjusted
