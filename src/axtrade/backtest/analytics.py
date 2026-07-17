@@ -143,14 +143,15 @@ class PerformanceAnalyzer:
     @staticmethod
     def calculate_sharpe(
         equity_curve: list[EquityPoint],
-        risk_free_rate: float = 0.05,
+        risk_free_rate: float = 0.0,
         periods_per_year: int = 252 * 390,  # Minutes in trading year
     ) -> float:
         """Calculate annualized Sharpe ratio.
 
         Args:
             equity_curve: Equity curve data points
-            risk_free_rate: Annual risk-free rate (default 5%)
+            risk_free_rate: Annual risk-free rate (default 0, matching
+                `axtrade.analytics.metrics.calculate_sharpe_ratio`)
             periods_per_year: Number of periods per year for annualization
 
         Returns:

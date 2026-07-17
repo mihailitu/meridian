@@ -329,6 +329,7 @@ class TestStrategiesEndpoint:
         repo.get_daily_realized_pnl.return_value = Decimal("0")
         repo.get_by_strategy.return_value = []
         repo.get_recent_fills.return_value = []
+        repo.get_fills_chronological.return_value = []
         return repo
 
     @pytest.fixture
@@ -446,7 +447,7 @@ class TestStrategiesEndpoint:
         self, client: TestClient, mock_order_repo
     ) -> None:
         """Test get strategy performance with no trades."""
-        mock_order_repo.get_recent_fills.return_value = []
+        mock_order_repo.get_fills_chronological.return_value = []
 
         response = client.get("/api/strategies/momentum_01/performance")
         assert response.status_code == 200

@@ -263,7 +263,7 @@ def format_comparison_text(c: OOSComparison) -> str:
         f"{_fmt_pf(_delta(oos_pf, is_pf)):>20}"
     )
     lines.append(
-        f"{'Sharpe':<20}"
+        f"{'Sharpe(rf=0)':<20}"
         f"{_fmt_pf(is_sh):>20}"
         f"{_fmt_pf(oos_sh):>20}"
         f"{_fmt_pf(_delta(oos_sh, is_sh)):>20}"

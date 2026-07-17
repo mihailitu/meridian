@@ -147,41 +147,16 @@ export function useHealth(pollInterval: number = 10000) {
     return { health, loading, error, refetch: fetchHealth };
 }
 
-export function usePnLHistory(hours: number = 24, pollInterval: number = 30000) {
-    const [history, setHistory] = useState<PnLHistoryPoint[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+export function usePnLHistory(_hours: number = 24, _pollInterval: number = 30000) {
+    // The /api/pnl/history endpoint does not exist yet, so there is no real
+    // data to fetch or poll for. Report an empty series rather than
+    // fabricating a flat $0 chart - PnLChart already renders a "No P&L data
+    // available" empty state for this case.
+    const [history] = useState<PnLHistoryPoint[]>([]);
+    const [loading] = useState(false);
+    const [error] = useState<string | null>(null);
 
-    const fetchHistory = useCallback(async () => {
-        try {
-            // Generate flat $0 history - will be replaced with real API data
-            // when /api/pnl/history endpoint is implemented
-            const now = new Date();
-            const points: PnLHistoryPoint[] = [];
+    const refetch = useCallback(async () => {}, []);
 
-            // Create points at start and end showing $0
-            for (let i = hours; i >= 0; i -= Math.max(1, Math.floor(hours / 12))) {
-                const timestamp = new Date(now.getTime() - i * 60 * 60 * 1000);
-                points.push({
-                    timestamp: timestamp.toISOString(),
-                    cumulative_pnl: 0,
-                });
-            }
-
-            setHistory(points);
-            setError(null);
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to fetch P&L history');
-        } finally {
-            setLoading(false);
-        }
-    }, [hours]);
-
-    useEffect(() => {
-        fetchHistory();
-        const interval = setInterval(fetchHistory, pollInterval);
-        return () => clearInterval(interval);
-    }, [fetchHistory, pollInterval]);
-
-    return { history, loading, error, refetch: fetchHistory };
+    return { history, loading, error, refetch };
 }

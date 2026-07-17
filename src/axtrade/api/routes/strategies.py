@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from axtrade.analytics import TradeRecord, calculate_strategy_performance
+from axtrade.analytics import TradeRecord, calculate_strategy_performance, pair_fills_fifo
 from axtrade.common import StrategiesConfig
 from axtrade.oms.repository import OrderRepository, PositionRepository
 from axtrade.strategies import STRATEGY_TYPES
@@ -43,27 +43,14 @@ async def _get_trades_for_strategy(
     order_repo: OrderRepository,
     strategy_id: str,
 ) -> list[TradeRecord]:
-    """Get trade records for a specific strategy."""
-    fills = await order_repo.get_recent_fills(strategy_id=strategy_id, limit=1000)
+    """Get round-trip trade records for a specific strategy via FIFO pairing.
 
-    trades = []
-    for fill in fills:
-        trade = TradeRecord(
-            trade_id=fill.id,
-            symbol=fill.symbol,
-            strategy_id=fill.strategy_id,
-            side=fill.side,
-            entry_time=fill.filled_at,
-            exit_time=fill.filled_at,
-            entry_price=fill.price,
-            exit_price=fill.price,
-            quantity=fill.quantity,
-            pnl=Decimal("0"),
-            commission=fill.commission,
-        )
-        trades.append(trade)
-
-    return trades
+    Uses FIFO round-trip pairing shared with fulltest-style analytics (see
+    `axtrade.analytics.pair_fills_fifo`), so P&L reflects matched buy/sell
+    pairs rather than raw individual fills.
+    """
+    fills = await order_repo.get_fills_chronological(strategy_id=strategy_id)
+    return pair_fills_fifo(fills)
 
 
 @router.get("/strategies", response_model=list[StrategyStatusResponse])

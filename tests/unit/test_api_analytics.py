@@ -36,7 +36,7 @@ def create_analytics_test_app() -> FastAPI:
 def mock_order_repo() -> MagicMock:
     """Create a mock order repository."""
     repo = MagicMock()
-    repo.get_recent_fills = AsyncMock(return_value=[])
+    repo.get_fills_chronological = AsyncMock(return_value=[])
     repo.get_daily_pnl_series = AsyncMock(return_value=[])
     return repo
 
@@ -122,7 +122,7 @@ class TestGetAnalyticsSummary:
         self, client: TestClient, mock_order_repo, sample_fills
     ) -> None:
         """Test analytics summary with trade data."""
-        mock_order_repo.get_recent_fills.return_value = sample_fills
+        mock_order_repo.get_fills_chronological.return_value = sample_fills
 
         response = client.get("/api/analytics/summary")
         assert response.status_code == 200
@@ -133,6 +133,14 @@ class TestGetAnalyticsSummary:
         assert "win_rate" in data
         assert "profit_factor" in data
         assert "sharpe_ratio" in data
+
+        # sample_fills FIFO-pairs to exactly one round trip: momentum_01 AAPL
+        # buy 100 @ 185.50 (comm 1.00) -> sell 100 @ 186.50 (comm 1.00).
+        # The mean_rev_01 MSFT buy has no matching sell, so it contributes no
+        # trade record. pnl = (186.50 - 185.50) * 100 - 1.00 - 1.00 = 98.00
+        assert data["total_trades"] == 1
+        assert data["total_pnl"] == "98.00"
+        assert data["win_rate"] == 100.0
 
     def test_get_analytics_summary_fields(self, client: TestClient) -> None:
         """Test analytics summary includes all expected fields."""
@@ -273,7 +281,7 @@ class TestGetTradeStatistics:
         self, client: TestClient, mock_order_repo, sample_fills
     ) -> None:
         """Test trade statistics with trade data."""
-        mock_order_repo.get_recent_fills.return_value = sample_fills
+        mock_order_repo.get_fills_chronological.return_value = sample_fills
 
         response = client.get("/api/analytics/trades")
         assert response.status_code == 200
@@ -285,6 +293,14 @@ class TestGetTradeStatistics:
         assert "win_rate" in data
         assert "profit_factor" in data
         assert "expectancy" in data
+
+        # See test_get_analytics_summary_with_trades for the FIFO pairing math:
+        # one round trip, pnl = 98.00, fully winning.
+        assert data["total_trades"] == 1
+        assert data["winning_trades"] == 1
+        assert data["losing_trades"] == 0
+        assert data["win_rate"] == 100.0
+        assert data["total_pnl"] == "98.00"
 
     def test_get_trade_statistics_all_fields(self, client: TestClient) -> None:
         """Test trade statistics includes all expected fields."""
@@ -332,7 +348,7 @@ class TestGetTimeAnalysis:
         self, client: TestClient, mock_order_repo, sample_fills
     ) -> None:
         """Test time analysis with trade data."""
-        mock_order_repo.get_recent_fills.return_value = sample_fills
+        mock_order_repo.get_fills_chronological.return_value = sample_fills
 
         response = client.get("/api/analytics/trades/time")
         assert response.status_code == 200
@@ -379,7 +395,7 @@ class TestGetStrategyPerformance:
         self, client: TestClient, mock_order_repo, sample_fills
     ) -> None:
         """Test strategy performance with trade data."""
-        mock_order_repo.get_recent_fills.return_value = sample_fills
+        mock_order_repo.get_fills_chronological.return_value = sample_fills
 
         response = client.get("/api/analytics/strategies")
         assert response.status_code == 200
@@ -387,15 +403,20 @@ class TestGetStrategyPerformance:
         data = response.json()
         assert isinstance(data, list)
 
-        # Should have strategies from the fills
+        # Only momentum_01's AAPL buy/sell pairs into a trade; mean_rev_01's
+        # lone buy has no matching sell and produces no strategy entry.
         strategy_ids = [s["strategy_id"] for s in data]
-        assert "momentum_01" in strategy_ids or len(data) == 0
+        assert strategy_ids == ["momentum_01"]
+        momentum = data[0]
+        assert momentum["trade_count"] == 1
+        assert momentum["total_pnl"] == "98.00"
+        assert momentum["win_rate"] == 100.0
 
     def test_get_strategy_performance_fields(
         self, client: TestClient, mock_order_repo, sample_fills
     ) -> None:
         """Test strategy performance includes all expected fields."""
-        mock_order_repo.get_recent_fills.return_value = sample_fills
+        mock_order_repo.get_fills_chronological.return_value = sample_fills
 
         response = client.get("/api/analytics/strategies")
         assert response.status_code == 200

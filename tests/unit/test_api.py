@@ -43,6 +43,7 @@ def mock_order_repo() -> MagicMock:
     repo.get_fills_for_order = AsyncMock(return_value=[])
     repo.get_recent_fills = AsyncMock(return_value=[])
     repo.get_daily_realized_pnl = AsyncMock(return_value=Decimal("0"))
+    repo.get_total_realized_pnl = AsyncMock(return_value=Decimal("0"))
     return repo
 
 
@@ -266,6 +267,7 @@ class TestPnLEndpoint:
         self, client: TestClient, mock_order_repo, mock_position_repo
     ) -> None:
         mock_order_repo.get_daily_realized_pnl.return_value = Decimal("100.00")
+        mock_order_repo.get_total_realized_pnl.return_value = Decimal("300.00")
         mock_position_repo.get_open_positions.return_value = [
             Position(
                 strategy_id="test",
@@ -285,4 +287,6 @@ class TestPnLEndpoint:
         assert data["daily_realized"] == "100.00"
         assert data["daily_unrealized"] == "50.00"
         assert data["daily_total"] == "150.00"
-        assert data["cumulative_realized"] == "300.00"  # 200 + 100
+        # Cumulative comes straight from FIFO over all fills, not from
+        # open-position realized_pnl plus daily (the old double count)
+        assert data["cumulative_realized"] == "300.00"

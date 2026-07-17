@@ -32,6 +32,7 @@ from .trades import (
     analyze_time_performance,
     calculate_per_symbol_stats,
     calculate_trade_stats,
+    pair_fills_fifo,
 )
 
 __all__ = [
@@ -59,5 +60,6 @@ __all__ = [
     "calculate_strategy_returns",
     "calculate_trade_stats",
     "calculate_volatility",
+    "pair_fills_fifo",
     "returns_from_equity",
 ]

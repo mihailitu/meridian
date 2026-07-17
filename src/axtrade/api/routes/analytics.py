@@ -14,6 +14,7 @@ from axtrade.analytics import (
     calculate_strategy_performance,
     calculate_trade_stats,
     analyze_time_performance,
+    pair_fills_fifo,
     returns_from_equity,
 )
 
@@ -24,34 +25,14 @@ router = APIRouter()
 
 
 async def _get_trades_from_fills(order_repo: OrderRepository) -> list[TradeRecord]:
-    """Convert fills to trade records for analytics.
+    """Convert fills to round-trip trade records for analytics.
 
-    This is a simplified version - in production you'd want
-    proper trade tracking with entry/exit pairing.
+    Uses FIFO round-trip pairing shared with fulltest-style analytics (see
+    `axtrade.analytics.pair_fills_fifo`), so P&L reflects matched buy/sell
+    pairs rather than raw individual fills.
     """
-    # Get recent fills
-    fills = await order_repo.get_recent_fills(limit=1000)
-
-    # Group fills by order to create trade records
-    # Simplified: treat each fill as a completed trade
-    trades = []
-    for fill in fills:
-        trade = TradeRecord(
-            trade_id=fill.id,
-            symbol=fill.symbol,
-            strategy_id=fill.strategy_id,
-            side=fill.side,
-            entry_time=fill.filled_at,
-            exit_time=fill.filled_at,  # Same for single-fill trades
-            entry_price=fill.price,
-            exit_price=fill.price,
-            quantity=fill.quantity,
-            pnl=Decimal("0"),  # Would need P&L tracking
-            commission=fill.commission,
-        )
-        trades.append(trade)
-
-    return trades
+    fills = await order_repo.get_fills_chronological()
+    return pair_fills_fifo(fills)
 
 
 @router.get("/analytics/summary")

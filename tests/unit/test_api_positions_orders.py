@@ -51,6 +51,7 @@ def mock_order_repo() -> MagicMock:
     repo.get_fills_for_order = AsyncMock(return_value=[])
     repo.get_recent_fills = AsyncMock(return_value=[])
     repo.get_daily_realized_pnl = AsyncMock(return_value=Decimal("0"))
+    repo.get_total_realized_pnl = AsyncMock(return_value=Decimal("0"))
     return repo
 
 
@@ -375,6 +376,7 @@ class TestGetPnLSummary:
     ) -> None:
         """Test get P&L summary with open positions."""
         mock_order_repo.get_daily_realized_pnl.return_value = Decimal("100.00")
+        mock_order_repo.get_total_realized_pnl.return_value = Decimal("400.00")
         mock_position_repo.get_open_positions.return_value = [
             Position(
                 strategy_id="momentum_01",
@@ -403,7 +405,9 @@ class TestGetPnLSummary:
         assert data["daily_realized"] == "100.00"
         assert data["daily_unrealized"] == "20.00"  # 50 - 30
         assert data["daily_total"] == "120.00"  # 100 + 20
-        assert data["cumulative_realized"] == "400.00"  # 200 + 100 + 100
+        # Cumulative comes straight from FIFO over all fills, not from
+        # open-position realized_pnl plus daily (the old double count)
+        assert data["cumulative_realized"] == "400.00"
 
     def test_get_pnl_summary_with_strategy_filter(
         self, client: TestClient, mock_order_repo, mock_position_repo
@@ -412,4 +416,5 @@ class TestGetPnLSummary:
         response = client.get("/api/pnl/summary?strategy_id=momentum_01")
         assert response.status_code == 200
         mock_order_repo.get_daily_realized_pnl.assert_called_with("momentum_01")
+        mock_order_repo.get_total_realized_pnl.assert_called_with("momentum_01")
         mock_position_repo.get_open_positions.assert_called_with("momentum_01")

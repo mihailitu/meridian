@@ -348,7 +348,7 @@ def format_text_report(result: FullBacktestResult) -> str:
     lines.append("-" * 70)
     lines.append("PORTFOLIO ANALYTICS")
     lines.append("-" * 70)
-    lines.append(f"  Sharpe Ratio:      {_fmt_ratio(result.overall_sharpe)}")
+    lines.append(f"  Sharpe (rf=0):     {_fmt_ratio(result.overall_sharpe)}")
     lines.append(f"  Max Drawdown:      {_fmt_pct(result.overall_max_drawdown)}")
     lines.append(f"  Annualized Return: {_fmt_pct(result.overall_annualized_return)}")
     lines.append(f"  Total Return:      {_fmt_pct(result.overall_total_return)}")
@@ -375,7 +375,7 @@ def format_text_report(result: FullBacktestResult) -> str:
             lines.append(f"    Realized P&L:    {_fmt_dollar(sr.total_pnl)}")
             if sr.unrealized_pnl:
                 lines.append(f"    Unrealized P&L:  {_fmt_dollar(sr.unrealized_pnl)} (open positions)")
-            lines.append(f"    Sharpe Ratio:    {_fmt_ratio(sr.sharpe_ratio)}")
+            lines.append(f"    Sharpe (rf=0):   {_fmt_ratio(sr.sharpe_ratio)}")
             lines.append(f"    Max Drawdown:    {_fmt_pct(sr.max_drawdown)}")
             lines.append(f"    Annualized Ret:  {_fmt_pct(sr.annualized_return)}")
             lines.append(f"    Profit Factor:   {_fmt_ratio(sr.profit_factor)}")

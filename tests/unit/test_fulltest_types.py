@@ -126,7 +126,7 @@ def test_text_report_contains_key_sections(result):
     assert "mean_reversion-bt" in report
     assert "$105,000.00" in report
     assert "AAPL" in report
-    assert "Sharpe Ratio:" in report
+    assert "Sharpe (rf=0):" in report
     assert "Max Drawdown:" in report
 
 

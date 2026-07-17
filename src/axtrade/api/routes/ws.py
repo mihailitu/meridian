@@ -101,15 +101,13 @@ async def get_dashboard_data() -> DashboardData:
     daily_unrealized = sum(
         (pos.unrealized_pnl or Decimal("0")) for pos in positions
     )
-    cumulative_realized = sum(
-        (pos.realized_pnl or Decimal("0")) for pos in positions
-    )
+    cumulative_realized = await state.order_repo.get_total_realized_pnl()
 
     pnl = PnLSummary(
         daily_realized=daily_realized,
         daily_unrealized=daily_unrealized,
         daily_total=daily_realized + daily_unrealized,
-        cumulative_realized=cumulative_realized + daily_realized,
+        cumulative_realized=cumulative_realized,
     )
 
     return DashboardData(

@@ -1,9 +1,11 @@
 """Trade statistics and analysis."""
 
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 
 @dataclass
@@ -13,7 +15,7 @@ class TradeRecord:
     trade_id: str
     symbol: str
     strategy_id: str
-    side: str  # "buy" or "sell"
+    side: str  # position direction, e.g. "long"
     entry_time: datetime
     exit_time: datetime
     entry_price: Decimal
@@ -39,6 +41,105 @@ class TradeRecord:
         if cost == 0:
             return 0.0
         return float(self.pnl / cost) * 100
+
+
+def pair_fills_fifo(fills: Iterable[Any]) -> list[TradeRecord]:
+    """Pair buy/sell fills into round-trip trades via FIFO matching.
+
+    This is the single source of truth for turning a raw fill stream into
+    `TradeRecord`s with real P&L, shared by the live API (`analytics.py`,
+    `strategies.py`) and anything else that needs trade-level analytics from
+    fills rather than from a backtest's own trade log. Deliberately decoupled
+    from `axtrade.oms` (no imports from it) — callers pass fill-like objects
+    with the attributes below rather than the concrete `Fill` dataclass, so
+    this module stays usable outside the OMS.
+
+    Args:
+        fills: Iterable of fill-like objects with attributes `id`,
+            `strategy_id`, `symbol`, `side`, `quantity`, `price`,
+            `commission`, `filled_at`. `side` may be an enum with a `.value`
+            of "buy"/"sell" or a plain string.
+
+    Returns:
+        One TradeRecord per completed round trip (each sell fill that
+        matches at least one buy lot), in the order the sells were
+        processed. Sells with no matching buy lot (unmatched short sells)
+        produce no record.
+    """
+    sorted_fills = sorted(fills, key=lambda f: f.filled_at)
+
+    # FIFO buy lots per (strategy_id, symbol): list of [qty, price, commission, filled_at]
+    buy_lots: dict[tuple[str, str], list[list]] = defaultdict(list)
+    trades: list[TradeRecord] = []
+
+    for fill in sorted_fills:
+        side = getattr(fill.side, "value", fill.side)
+        key = (fill.strategy_id, fill.symbol)
+        qty = Decimal(str(fill.quantity))
+        price = Decimal(str(fill.price))
+        commission = Decimal(str(fill.commission))
+
+        if side == "buy":
+            buy_lots[key].append([qty, price, commission, fill.filled_at])
+            continue
+
+        # Sell - match against buy lots in FIFO order
+        lots = buy_lots.get(key)
+        if not lots:
+            continue  # Unmatched short sell - nothing to pair against
+
+        remaining_sell_qty = qty
+        matched_qty = Decimal("0")
+        cost_basis = Decimal("0")
+        buy_commission_total = Decimal("0")
+        entry_time = None
+
+        while remaining_sell_qty > 0 and lots:
+            lot = lots[0]
+            lot_qty, lot_price, lot_commission, lot_filled_at = lot
+            match_qty = min(remaining_sell_qty, lot_qty)
+
+            if entry_time is None:
+                entry_time = lot_filled_at
+
+            cost_basis += lot_price * match_qty
+            buy_commission_total += lot_commission * (match_qty / lot_qty)
+            matched_qty += match_qty
+            remaining_sell_qty -= match_qty
+
+            if match_qty >= lot_qty:
+                lots.pop(0)
+            else:
+                # Partial match - shrink the remaining lot's qty and
+                # proportionally reduce its unconsumed commission
+                new_lot_qty = lot_qty - match_qty
+                lot[0] = new_lot_qty
+                lot[2] = lot_commission * (new_lot_qty / lot_qty)
+
+        if matched_qty == 0:
+            continue
+
+        sell_commission_portion = commission * (matched_qty / qty)
+        entry_price = cost_basis / matched_qty
+        pnl = (price * matched_qty - cost_basis) - buy_commission_total - sell_commission_portion
+
+        trades.append(
+            TradeRecord(
+                trade_id=str(fill.id),
+                symbol=fill.symbol,
+                strategy_id=fill.strategy_id,
+                side="long",
+                entry_time=entry_time,
+                exit_time=fill.filled_at,
+                entry_price=entry_price,
+                exit_price=price,
+                quantity=matched_qty,
+                pnl=pnl,
+                commission=buy_commission_total + sell_commission_portion,
+            )
+        )
+
+    return trades
 
 
 @dataclass
