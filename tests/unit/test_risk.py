@@ -212,6 +212,107 @@ class TestRiskManager:
 
         assert result.approved is True
 
+    @staticmethod
+    def _long_position(quantity: str) -> Position:
+        return Position(
+            strategy_id="test",
+            symbol="AAPL",
+            side="long",
+            quantity=Decimal(quantity),
+            avg_entry_price=Decimal("80.00"),
+        )
+
+    def test_reduce_only_sell_bypasses_daily_loss_halt(
+        self, manager: RiskManager
+    ) -> None:
+        """P1-12 regression: a tripped daily-loss limit must not block exits.
+
+        In the recorded post-data-fixes run, the shared daily-loss halt
+        rejected a pairs close and the position stayed frozen for six
+        months. Closes reduce exposure and must always go through.
+        """
+        manager.record_pnl(Decimal("-1100"))
+
+        order = Order(
+            strategy_id="test",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("100"),
+        )
+
+        result = manager.check_order(order, self._long_position("100"), Decimal("185.00"))
+
+        assert result.approved is True
+
+    def test_reduce_only_sell_bypasses_open_order_cap(
+        self, manager: RiskManager
+    ) -> None:
+        for _ in range(5):
+            manager.order_submitted()
+
+        order = Order(
+            strategy_id="test",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("100"),
+        )
+
+        result = manager.check_order(order, self._long_position("100"), Decimal("185.00"))
+
+        assert result.approved is True
+
+    def test_reduce_only_sell_bypasses_order_size_cap(
+        self, manager: RiskManager
+    ) -> None:
+        """A full close of a position accumulated over several buys can
+        legitimately exceed max_order_size — it must not be forced into a
+        piecemeal exit."""
+        order = Order(
+            strategy_id="test",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("800"),  # > max_order_size 500, <= position
+        )
+
+        result = manager.check_order(order, self._long_position("800"), Decimal("185.00"))
+
+        assert result.approved is True
+
+    def test_sell_flipping_short_is_not_reduce_only(
+        self, manager: RiskManager
+    ) -> None:
+        """A sell larger than the held position opens a short — the excess is
+        new exposure, so the caps still apply."""
+        manager.record_pnl(Decimal("-1100"))
+
+        order = Order(
+            strategy_id="test",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("150"),
+        )
+
+        result = manager.check_order(order, self._long_position("100"), Decimal("185.00"))
+
+        assert result.approved is False
+        assert "loss limit" in result.reason.lower()
+
+    def test_sell_without_position_is_not_reduce_only(
+        self, manager: RiskManager
+    ) -> None:
+        manager.record_pnl(Decimal("-1100"))
+
+        order = Order(
+            strategy_id="test",
+            symbol="AAPL",
+            side=OrderSide.SELL,
+            quantity=Decimal("100"),
+        )
+
+        result = manager.check_order(order, None, Decimal("185.00"))
+
+        assert result.approved is False
+
     def test_approve_order_when_price_zero(self, manager: RiskManager) -> None:
         """Skip value check when price is zero (no price available)."""
         order = Order(

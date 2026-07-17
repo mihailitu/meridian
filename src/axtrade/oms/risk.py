@@ -55,6 +55,21 @@ class RiskManager:
         Returns:
             RiskCheckResult with approval status and reason if rejected
         """
+        # Reduce-only orders (sells that shrink or close an existing long
+        # without flipping short) bypass every pre-trade cap: the caps exist
+        # to limit NEW exposure, and rejecting an exit increases risk instead
+        # of capping it. Before this, a tripped shared daily-loss limit
+        # blocked position closes for the rest of the day — in the recorded
+        # post-data-fixes run one such rejection froze a pairs position for
+        # six months (audit P1-12).
+        if (
+            order.side == OrderSide.SELL
+            and current_position is not None
+            and current_position.quantity > 0
+            and order.quantity <= current_position.quantity
+        ):
+            return RiskCheckResult(approved=True)
+
         # Check order size
         if order.quantity > self.limits.max_order_size:
             return RiskCheckResult(
