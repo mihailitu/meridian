@@ -14,9 +14,10 @@ _Last refreshed: 2026-07-15 (phase 5 underway; data layer re-certified)._
   made the discovery_momentum IS/OOS comparison structurally invalid (**that verdict row is
   withdrawn pending re-run**); (b) the **live multi-process path could not work** — no fill
   routing to strategies, a dead IBKR tick path, in-process-only discovery scores; (c) the
-  **API was an unauthenticated remote control on 0.0.0.0**. Six iterations have landed
-  fixing all P0s and 9/11 P1s (P1-10 pairs wedge and P1-11 dashboard numbers remain);
-  status and details in [`docs/phase5-audit-fixes.md`](docs/phase5-audit-fixes.md).
+  **API was an unauthenticated remote control on 0.0.0.0**. Ten iterations have landed
+  fixing all P0s and the full P1 tier — including P1-12 (reduce-only orders bypass risk
+  caps), found post-audit while verifying the P1-10 pairs-wedge fix; the P2 tier remains.
+  Status and details in [`docs/phase5-audit-fixes.md`](docs/phase5-audit-fixes.md).
 - **The data layer is re-certified (2026-07-14).** The full S&P 1500 universe was
   re-downloaded split-adjusted and deduplicated (single 18-month file per symbol), sanity
   checks passed (TSCO 5:1 split gapless, all suspect gaps are same-day bad prints, zero
@@ -110,7 +111,7 @@ data; IS year vs OOS half-year, discovery on, narrowed universe)**:
 | `discovery_momentum` | 9,478 | 0.40 | -$29,743 | 5,399 | 0.44 | -$23,289 | DEAD — first structurally valid IS/OOS (P0-3 fixed: trade rate now ~26/day IS vs ~29/day OOS, comparable legs); consistent, large-sample, unprofitable |
 | `mean_reversion` | 167 | 0.28 | -$2,784 | 184 | 0.35 | -$2,586 | DEAD — dedup halved its trades (dup bars double-triggered signals), PF dropped further |
 | `multi_timeframe` | 2,267 | 0.18 | -$40,025 | 2,267 | 0.22 | -$44,418 | DEAD — no edge at the signal level |
-| `pairs` | 12 | 0.06 | -$824 | 3 | 0.01 | -$235 | DEAD — identical to the penny pre/post data fixes; barely trades at all (see P1-10 wedge) |
+| `pairs` | 2,156 | 0.16 | -$36,899 | 1,167 | 0.14 | -$20,569 | DEAD — re-measured 2026-07-17 on wedge-fixed execution (P1-10/P1-12; pairs-only run, discovery off, no cross-strategy cash competition — see phase-5 iteration 10). The old 12-trade numbers measured one day of trading + a six-month frozen position; un-wedged, it trades constantly and loses consistently at scale |
 | `momentum` | 0 | — | — | 1 | ∞ | +$65 | DEAD — gates effectively never co-fire |
 | `overnight_reversal` | 27 | 0.24 | -$1,751 | 25 | 2.85 | +$1,432 | DEAD — fails IS decisively (worse than its tuned 0.63 on old data); OOS PF 2.85 is a 25-trade curiosity, unearned per gate discipline |
 
