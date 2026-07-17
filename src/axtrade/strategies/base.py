@@ -119,6 +119,14 @@ class BaseStrategy(ABC):
         """
         self._pending_opens.discard(symbol)
 
+    def has_pending_open(self, symbol: str) -> bool:
+        """True while a BUY for `symbol` is in flight (submitted, unresolved).
+
+        Args:
+            symbol: Symbol to check
+        """
+        return symbol in self._pending_opens
+
     @abstractmethod
     def on_bar(self, data: BarWithIndicators) -> Optional[Order]:
         """Process a new bar and optionally generate an order.

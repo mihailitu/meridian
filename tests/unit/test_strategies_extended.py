@@ -451,7 +451,6 @@ class TestPairsStrategy:
         assert order is not None
         assert order.side == OrderSide.BUY
         assert order.symbol == "AAPL"
-        assert strategy._spread_direction == "long"
 
     def test_exit_on_zscore_normalization(
         self, strategy: PairsStrategy
@@ -465,7 +464,6 @@ class TestPairsStrategy:
             strategy.on_bar(data_b)
 
         # Simulate being in long spread position
-        strategy._spread_direction = "long"
         strategy.update_position(
             Position(
                 strategy_id="pairs_test",
@@ -484,7 +482,6 @@ class TestPairsStrategy:
 
         assert order is not None
         assert order.side == OrderSide.SELL
-        assert strategy._spread_direction is None
 
     def test_ignores_non_pair_symbols(self, strategy: PairsStrategy) -> None:
         # Build some history
@@ -508,7 +505,6 @@ class TestPairsStrategy:
             strategy.on_bar(data_b)
 
         # Enter position
-        strategy._spread_direction = "long"
         strategy.update_position(
             Position(
                 strategy_id="pairs_test",
@@ -527,3 +523,107 @@ class TestPairsStrategy:
 
         assert order is not None
         assert order.side == OrderSide.SELL
+
+    def _feed_stable_history(self, strategy: PairsStrategy) -> None:
+        """Feed enough constant-ratio bars to enable z-score calculation."""
+        for _ in range(15):
+            strategy.on_bar(make_bar_with_indicators(symbol="AAPL", close=100.0))
+            strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+
+    def _trigger_entry(self, strategy: PairsStrategy, close: float = 80.0):
+        """Push AAPL down so the entry z-score fires; return the order."""
+        strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+        return strategy.on_bar(make_bar_with_indicators(symbol="AAPL", close=close))
+
+    def test_entry_refires_after_rejection(self, strategy: PairsStrategy) -> None:
+        """P1-10 regression: a rejected entry must not wedge the strategy.
+
+        Mirrors the runner's rejection path: mark_pending_open before
+        submit, clear_pending_open on rejection, no fill ever delivered.
+        """
+        self._feed_stable_history(strategy)
+
+        order = self._trigger_entry(strategy)
+        assert order is not None
+
+        strategy.mark_pending_open(order.symbol)
+        strategy.clear_pending_open(order.symbol)  # runner does this on rejection
+
+        # Ratio dislocates further (the first 80 print is now inside the
+        # lookback window, so a repeat at 80 would sit at the threshold)
+        # -> the entry must fire again
+        order = self._trigger_entry(strategy, close=70.0)
+        assert order is not None
+        assert order.side == OrderSide.BUY
+
+    def test_no_duplicate_entry_while_order_in_flight(
+        self, strategy: PairsStrategy
+    ) -> None:
+        """An unresolved in-flight entry must suppress a second entry."""
+        self._feed_stable_history(strategy)
+
+        order = self._trigger_entry(strategy)
+        assert order is not None
+        strategy.mark_pending_open(order.symbol)
+
+        # close=70 would re-fire the entry if not suppressed (see
+        # test_entry_refires_after_rejection, which asserts exactly that)
+        assert self._trigger_entry(strategy, close=70.0) is None
+
+    def test_zscore_exit_after_restart(self, strategy: PairsStrategy) -> None:
+        """P1-10 regression: restored position must reach the z-score exit.
+
+        Simulates runner restart: fresh strategy instance, position loaded
+        via update_position (as _load_positions does), no entry ever seen.
+        """
+        strategy.update_position(
+            Position(
+                strategy_id="pairs_test",
+                symbol="AAPL",
+                side="long",
+                quantity=Decimal("50"),
+                avg_entry_price=Decimal("100.0"),
+            )
+        )
+        # Constant history has zero ratio variance (z-score undefined), so
+        # feed lightly noisy history then a normal-ratio bar.
+        for i in range(15):
+            noise = (i % 3) - 1
+            strategy.on_bar(
+                make_bar_with_indicators(symbol="AAPL", close=100.0 + noise * 2)
+            )
+            strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+        strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+        order = strategy.on_bar(make_bar_with_indicators(symbol="AAPL", close=100.0))
+
+        assert order is not None
+        assert order.side == OrderSide.SELL
+
+    def test_exit_refires_after_rejected_close(
+        self, strategy: PairsStrategy
+    ) -> None:
+        """P1-10 regression: a rejected close must re-fire on the next bar."""
+        for i in range(15):
+            noise = (i % 3) - 1
+            strategy.on_bar(
+                make_bar_with_indicators(symbol="AAPL", close=100.0 + noise * 2)
+            )
+            strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+        strategy.update_position(
+            Position(
+                strategy_id="pairs_test",
+                symbol="AAPL",
+                side="long",
+                quantity=Decimal("50"),
+                avg_entry_price=Decimal("80.0"),
+            )
+        )
+
+        strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+        first = strategy.on_bar(make_bar_with_indicators(symbol="AAPL", close=100.0))
+        assert first is not None and first.side == OrderSide.SELL
+
+        # Rejection: position unchanged, no state committed by the strategy.
+        strategy.on_bar(make_bar_with_indicators(symbol="MSFT", close=300.0))
+        second = strategy.on_bar(make_bar_with_indicators(symbol="AAPL", close=100.0))
+        assert second is not None and second.side == OrderSide.SELL

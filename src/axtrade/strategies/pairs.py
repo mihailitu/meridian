@@ -50,9 +50,6 @@ class PairsStrategy(BaseStrategy):
         self._prices_a: list[float] = []
         self._prices_b: list[float] = []
 
-        # Track spread position direction
-        self._spread_direction: str | None = None  # "long" or "short"
-
     @property
     def name(self) -> str:
         return f"Pairs({self.symbol_a}/{self.symbol_b})"
@@ -131,15 +128,17 @@ class PairsStrategy(BaseStrategy):
     def _check_entry(
         self, data: BarWithIndicators, zscore: float
     ) -> Optional[Order]:
-        """Check for entry conditions based on z-score."""
-        # No position and no spread direction means we can enter
+        """Check for entry conditions based on z-score.
 
-        if self._spread_direction is not None:
+        Spread state is derived from the actual position (on_bar routes here
+        only when flat), never from a flag set before submission — a flag
+        would survive an order rejection and block entries forever (P1-10).
+        """
+        if self.has_pending_open(self.symbol_a):
             return None
 
         # Long entry: z-score very negative (ratio too low, expect it to rise)
         if zscore < -self.entry_zscore:
-            self._spread_direction = "long"
             return Order(
                 strategy_id=self.strategy_id,
                 symbol=self.symbol_a,
@@ -151,7 +150,6 @@ class PairsStrategy(BaseStrategy):
         # Short entry: z-score very positive (ratio too high, expect it to fall)
         # Note: Simplified - not implementing short selling for now
         # if zscore > self.entry_zscore:
-        #     self._spread_direction = "short"
         #     return Order(...)
 
         return None
@@ -159,12 +157,18 @@ class PairsStrategy(BaseStrategy):
     def _check_exit(
         self, data: BarWithIndicators, position, zscore: float
     ) -> Optional[Order]:
-        """Check for exit conditions."""
+        """Check for exit conditions.
+
+        A held position is always a long spread (short entries are not
+        implemented), so no direction flag is needed. If a close order is
+        rejected, the position survives and the exit re-fires on the next
+        bar — the flag-based version left the z-score exit unreachable
+        after a rejection or a runner restart (P1-10).
+        """
         price = float(data.close)
 
         # Exit when z-score returns to normal range
-        if self._spread_direction == "long" and abs(zscore) < self.exit_zscore:
-            self._spread_direction = None
+        if abs(zscore) < self.exit_zscore:
             return self._create_close_order(position.quantity)
 
         # Stop loss check
@@ -173,7 +177,6 @@ class PairsStrategy(BaseStrategy):
             pnl_pct = (price - entry_price) / entry_price
 
             if pnl_pct <= -self.stop_loss_pct:
-                self._spread_direction = None
                 return self._create_close_order(position.quantity)
 
         return None

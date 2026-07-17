@@ -17,9 +17,10 @@
 | 4 | IBKR tick path | P0-4 | **DONE** (99c7d4d — int(float(volume)) + poison-message acks, cumulative→delta bar volume, ib.sleep(0) removed; live-TWS validation still owed) |
 | 5 | Live-paper pre-flight | P1-5, P1-6, P1-8 | **DONE** (c1353cc — one-sided quote skip, initdb migrations hook, stream maxlen + consumer-group start knob; integration test re-verified) |
 | 6 | Cross-process discovery bridge + eviction orphans | P1-3, P1-9 | **DONE** — discovery scanning moved from the API process to the strategy runner (matching fulltest wiring); API is now a DB reader (`DiscoveryRepository` / `discovered_symbols`) + command publisher (`axtrade:discovery:control`, 202-ack endpoints); manual add/clear persist immediately via `persist_discovered()`. Eviction guard: stale-but-held symbols keep their subscription; on position-check failure evict nothing (fail safe). Review caught a control-loop busy-spin on subscription close that OOM-froze the workstation mid-iteration (20+ GB via mock call-history growth) — fixed with a resubscribe backoff |
-| 7+ | Next: P1-10 (pairs wedge — note it traded identically to the penny pre/post data fixes), P1-11 (dashboard money numbers + Sharpe-definition labeling: `backtest/analytics.py::calculate_sharpe` silently subtracts a 5% risk-free rate while `analytics/metrics.py` defaults to 0 — unify or label), then P2 tier | | not started |
+| 7 | pairs wedge | P1-10 | **DONE** — `_spread_direction` deleted; spread state now derived from the actual position (only long-symbol_a spreads exist, so a held position fully determines direction). Rejected entries re-fire, rejected closes retry next bar, restart-restore reaches the z-score exit; duplicate in-flight entries suppressed via new `BaseStrategy.has_pending_open()`. 4 regression tests. No re-run: verdict stays DEAD (it traded identically to the penny pre/post data fixes; the wedge explains the tiny trade count, not the losses) |
+| 8+ | Next: P1-11 (dashboard money numbers + Sharpe-definition labeling: `backtest/analytics.py::calculate_sharpe` silently subtracts a 5% risk-free rate while `analytics/metrics.py` defaults to 0 — unify or label), then P2 tier | | not started |
 
-Suite: 1094 unit tests green as of iteration 6 (987 at branch start); `make test-integration`
+Suite: 1098 unit tests green as of iteration 7 (987 at branch start); `make test-integration`
 passes (re-verified after iteration 6 — the paper pipeline now hosts the discovery scanner
 in the strategy-runner process).
 
