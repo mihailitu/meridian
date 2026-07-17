@@ -88,17 +88,27 @@ momentum) would at best replicate an ETF factor exposure; the demonstrated value
 platform + calibrated harness. Option A's *data work* survives as an optional, unapproved
 iteration in the phase-4 plan — it is a harness-quality feature, not a bot revival.
 
-**Phase 4 is done.** What remains open, in rough priority order:
+**Phase 4 is done; phase 5 P0+P1 tiers are done** (10 iterations on `phase5-audit-fixes`,
+through 2026-07-17). What remains open, in priority order (sequencing agreed 2026-07-17):
 
-1. **Live paper validation run** — the stack is integration-tested in-process; the next
+1. **Live-robustness P2s** (phase-5 iterations 11+): P2-7 PEL recovery, P2-8 shutdown
+   partial-bar flush, P2-9 gateway Redis-down no-op, P2-10 silent Alpaca stream death.
+   Start with P2-7. These de-risk item 3 directly.
+2. **Merge `phase5-audit-fixes` → main** — the branch is self-contained; later P2 work
+   lands on a fresh branch.
+3. **Live paper validation run** — the stack is integration-tested in-process; the next
    confidence step is running the real services (`scripts/start-all.sh`, mock or Alpaca
    adapter, paper mode) for a market day and checking the dashboard/DB against expectations.
-   Cheap, and exercises the exact `make run*` path.
-2. **Live-IBKR validation of dynamic subscribe** — needs a TWS/IB Gateway account wired up;
+   Cheap, and exercises the exact `make run*` path. The dashboard numbers being checked are
+   real as of P1-11, and a tripped daily-loss halt can no longer trap open positions (P1-12).
+4. **Decide the fate of the harness-realism P2s (P2-1..P2-6)** — they only improve future
+   strategy evaluations, which the Option B pivot concluded. Park with a written note or do
+   them; explicit decision after the live-paper run, not default work.
+5. **Live-IBKR validation of dynamic subscribe** — needs a TWS/IB Gateway account wired up;
    until then A3 is fake-verified only.
-3. **External alert channels (audit C1)** — the platform's first genuinely new feature
+6. **External alert channels (audit C1)** — the platform's first genuinely new feature
    since the pivot; email first.
-4. **Optional iteration A (point-in-time universe data)** — documented in the phase-4 plan,
+7. **Optional iteration A (point-in-time universe data)** — documented in the phase-4 plan,
    still not approved. Only worth it if a cross-sectional strategy trial is ever wanted;
    it upgrades the harness from "falsification-capable on gateway symbols" to
    "falsification-capable on universes".
