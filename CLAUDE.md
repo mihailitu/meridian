@@ -139,7 +139,7 @@ Every strategy ships `enabled: false` in `config/default.yaml` (phase-3 verdicts
 
 ### Project Docs
 
-`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log, `phase4-platform-pivot.md` for the platform pivot).
+`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log, `phase4-platform-pivot.md` for the platform pivot, `data-backup.md` for replicating the untracked `data/` to the secondary workstation).
 
 ### Helper Scripts
 
