@@ -12,6 +12,108 @@ from .types import Bar, Tick
 
 logger = get_logger(__name__)
 
+# Orphaned-message claim threshold: how long a message must sit unacked in
+# another consumer's PEL before we steal it via XAUTOCLAIM. Protects a live
+# sibling consumer (still working the message) from having it stolen out
+# from under it.
+CLAIM_MIN_IDLE_MS = 60_000
+
+
+async def _recover_pending(
+    client: redis.Redis,
+    stream_key: str,
+    group: str,
+    consumer_name: str,
+    min_idle_ms: int = CLAIM_MIN_IDLE_MS,
+) -> AsyncIterator[tuple[str, Optional[dict]]]:
+    """Replay entries left pending by a crashed/restarted consumer.
+
+    Two phases, run once at the start of consume():
+
+    1. Drain this consumer's own PEL - messages that were delivered to this
+       stable consumer name before a crash, regardless of idle time.
+    2. Claim orphaned entries idle longer than `min_idle_ms` from other
+       (e.g. dead random-uuid) consumers in the group.
+
+    Yields (msg_id, data) pairs. `data` is None or empty (varies by server
+    version) when the stream entry was trimmed/deleted while still pending -
+    callers should just ack and skip it.
+    """
+    own_pending = 0
+    claimed_total = 0
+    trimmed = 0
+
+    # Phase 1: drain this consumer's own PEL. Reading with an explicit id
+    # (not ">") returns only already-delivered entries and never blocks.
+    cursor = "0"
+    while True:
+        try:
+            messages = await client.xreadgroup(
+                groupname=group,
+                consumername=consumer_name,
+                streams={stream_key: cursor},
+                count=100,
+            )
+        except (AttributeError, ConnectionError):
+            return
+
+        if not messages:
+            break
+
+        stream_messages = messages[0][1]
+        if not stream_messages:
+            break
+
+        for msg_id, data in stream_messages:
+            own_pending += 1
+            if not data:
+                trimmed += 1
+            yield msg_id, data
+            # Advance the cursor (not the caller's acks) so this loop
+            # terminates even if the caller never acks.
+            cursor = msg_id
+
+    # Phase 2: claim orphans from dead consumers (e.g. old random-uuid names).
+    cursor = "0-0"
+    while True:
+        try:
+            result = await client.xautoclaim(
+                stream_key,
+                group,
+                consumer_name,
+                min_idle_time=min_idle_ms,
+                start_id=cursor,
+                count=100,
+            )
+        except (AttributeError, ConnectionError):
+            return
+
+        # Redis >=7.0 returns a third element (deleted ids); Redis 6.2
+        # returns two. Only the first two are ever needed here.
+        next_cursor, claimed = result[0], result[1]
+        for msg_id, data in claimed:
+            claimed_total += 1
+            if not data:
+                trimmed += 1
+            yield msg_id, data
+
+        if next_cursor == "0-0":
+            break
+        if not claimed and next_cursor == cursor:
+            # Belt-and-braces guard against a non-advancing server/mock.
+            break
+        cursor = next_cursor
+
+    log = logger.info if (own_pending or claimed_total or trimmed) else logger.debug
+    log(
+        "pel_recovery_complete",
+        stream=stream_key,
+        consumer=consumer_name,
+        own_pending=own_pending,
+        claimed=claimed_total,
+        trimmed=trimmed,
+    )
+
 
 class RedisPublisher:
     """Publishes messages to Redis Streams."""
@@ -85,6 +187,7 @@ class RedisConsumer:
         self.config = config
         self.aggregator_config = aggregator_config
         self._client: Optional[redis.Redis] = None
+        self._parse_failures = 0
 
     async def connect(self) -> None:
         """Connect to Redis and create consumer group if needed."""
@@ -131,6 +234,28 @@ class RedisConsumer:
         stream_key = self.aggregator_config.source_stream
         group = self.aggregator_config.consumer_group
 
+        async for msg_id, data in _recover_pending(
+            self._client, stream_key, group, consumer_name
+        ):
+            if not data:
+                if self._client:
+                    await self._client.xack(stream_key, group, msg_id)
+                continue
+            tick = self._parse_tick(data)
+            if tick:
+                yield tick
+                if self._client:
+                    await self._client.xack(stream_key, group, msg_id)
+            else:
+                self._parse_failures += 1
+                logger.warning(
+                    "unparseable_tick_message",
+                    data=data,
+                    parse_failures_total=self._parse_failures,
+                )
+                if self._client:
+                    await self._client.xack(stream_key, group, msg_id)
+
         while True:
             if not self._client:
                 return
@@ -157,7 +282,12 @@ class RedisConsumer:
                         if self._client:
                             await self._client.xack(stream_key, group, msg_id)
                     else:
-                        logger.warning("unparseable_tick_message", data=data)
+                        self._parse_failures += 1
+                        logger.warning(
+                            "unparseable_tick_message",
+                            data=data,
+                            parse_failures_total=self._parse_failures,
+                        )
                         if self._client:
                             await self._client.xack(stream_key, group, msg_id)
 
@@ -309,6 +439,7 @@ class BarConsumer:
         self.config = config
         self.strategies_config = strategies_config
         self._client: Optional[redis.Redis] = None
+        self._parse_failures = 0
 
     async def connect(self) -> None:
         """Connect to Redis and create consumer group if needed."""
@@ -355,6 +486,28 @@ class BarConsumer:
         stream_key = self.strategies_config.bar_stream
         group = self.strategies_config.consumer_group
 
+        async for msg_id, data in _recover_pending(
+            self._client, stream_key, group, consumer_name
+        ):
+            if not data:
+                if self._client:
+                    await self._client.xack(stream_key, group, msg_id)
+                continue
+            bar_data = self._parse_bar_data(data)
+            if bar_data:
+                yield bar_data
+                if self._client:
+                    await self._client.xack(stream_key, group, msg_id)
+            else:
+                self._parse_failures += 1
+                logger.warning(
+                    "unparseable_bar_message",
+                    data=data,
+                    parse_failures_total=self._parse_failures,
+                )
+                if self._client:
+                    await self._client.xack(stream_key, group, msg_id)
+
         while True:
             if not self._client:
                 return
@@ -381,7 +534,12 @@ class BarConsumer:
                         if self._client:
                             await self._client.xack(stream_key, group, msg_id)
                     else:
-                        logger.warning("unparseable_bar_message", data=data)
+                        self._parse_failures += 1
+                        logger.warning(
+                            "unparseable_bar_message",
+                            data=data,
+                            parse_failures_total=self._parse_failures,
+                        )
                         if self._client:
                             await self._client.xack(stream_key, group, msg_id)
 

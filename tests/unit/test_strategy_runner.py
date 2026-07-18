@@ -3,6 +3,7 @@
 Tests for strategy loading, bar consumption, and order flow.
 """
 
+import socket
 from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -78,6 +79,11 @@ class TestStrategyRunner:
         assert runner.config == mock_config
         assert runner._running is False
         assert runner._strategies == {}
+
+    def test_consumer_name_is_stable_by_hostname(self, runner: StrategyRunner) -> None:
+        """Consumer name must be stable across restarts (audit P2-7) so
+        Redis PEL recovery can find this consumer's own pending entries."""
+        assert runner._consumer_name == f"strategy-runner-{socket.gethostname()}"
 
     def test_load_strategies_from_config(
         self, runner: StrategyRunner, mock_config: Config

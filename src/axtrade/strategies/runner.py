@@ -3,7 +3,7 @@
 import asyncio
 import re
 import signal
-import uuid
+import socket
 from typing import Optional
 
 from axtrade.common import (
@@ -39,7 +39,7 @@ class StrategyRunner:
         self._order_manager: Optional[OrderManager] = None
         self._strategies: dict[str, BaseStrategy] = {}
         self._running = False
-        self._consumer_name = f"strategy-runner-{uuid.uuid4().hex[:8]}"
+        self._consumer_name = f"strategy-runner-{socket.gethostname()}"
         self._state_repo: Optional[StrategyStateRepository] = None
         self._control_subscriber: Optional[StrategyControlSubscriber] = None
         self._control_task: Optional[asyncio.Task] = None

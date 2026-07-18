@@ -2,7 +2,7 @@
 
 import asyncio
 import signal
-import uuid
+import socket
 
 from axtrade.common import (
     Bar,
@@ -58,7 +58,7 @@ class AggregatorService:
         )
 
         self._running = False
-        self._consumer_name = f"aggregator-{uuid.uuid4().hex[:8]}"
+        self._consumer_name = f"aggregator-{socket.gethostname()}"
         self._consume_supervisor: LoopSupervisor | None = None
 
     async def start(self) -> None:

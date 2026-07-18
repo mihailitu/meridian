@@ -91,9 +91,10 @@ iteration in the phase-4 plan — it is a harness-quality feature, not a bot rev
 **Phase 4 is done; phase 5 P0+P1 tiers are done** (10 iterations on `phase5-audit-fixes`,
 through 2026-07-17). What remains open, in priority order (sequencing agreed 2026-07-17):
 
-1. **Live-robustness P2s** (phase-5 iterations 11+): P2-7 PEL recovery, P2-8 shutdown
-   partial-bar flush, P2-9 gateway Redis-down no-op, P2-10 silent Alpaca stream death.
-   Start with P2-7. These de-risk item 3 directly.
+1. **Live-robustness P2s** (phase-5 iterations 11+): P2-7 PEL recovery **done**
+   (iteration 11, 2026-07-18 — stable consumer names + startup PEL recovery, verified
+   against real Redis); remaining: P2-8 shutdown partial-bar flush, P2-9 gateway
+   Redis-down no-op, P2-10 silent Alpaca stream death. These de-risk item 3 directly.
 2. **Merge `phase5-audit-fixes` → main** — the branch is self-contained; later P2 work
    lands on a fresh branch.
 3. **Live paper validation run** — the stack is integration-tested in-process; the next

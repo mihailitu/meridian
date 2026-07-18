@@ -1,5 +1,6 @@
 """Unit tests for bar aggregation engine."""
 
+import socket
 from datetime import datetime, timezone
 
 import pytest
@@ -9,7 +10,8 @@ from axtrade.aggregator.engine import (
     get_bar_start,
     parse_interval_seconds,
 )
-from axtrade.common import Tick
+from axtrade.aggregator.service import AggregatorService
+from axtrade.common import Config, Tick
 
 
 class TestParseIntervalSeconds:
@@ -231,3 +233,13 @@ class TestBarEngine:
         bar, interval = completed[0]
         assert interval == "5m"
         assert bar.timestamp == datetime(2024, 1, 15, 9, 30, 0, tzinfo=timezone.utc)
+
+
+class TestAggregatorServiceConsumerName:
+    """Tests for AggregatorService consumer naming."""
+
+    def test_consumer_name_is_stable_by_hostname(self) -> None:
+        """Consumer name must be stable across restarts (audit P2-7) so
+        Redis PEL recovery can find this consumer's own pending entries."""
+        service = AggregatorService(Config())
+        assert service._consumer_name == f"aggregator-{socket.gethostname()}"

@@ -269,6 +269,7 @@ class TestRedisConsumer:
 
         mock_redis.xreadgroup = mock_xreadgroup
         mock_redis.xack = AsyncMock()
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
         consumer._client = mock_redis
 
         ticks = []
@@ -430,6 +431,7 @@ class TestRedisConsumer:
 
         mock_redis.xreadgroup = mock_xreadgroup
         mock_redis.xack = AsyncMock()
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
         consumer._client = mock_redis
 
         ticks = []
@@ -455,6 +457,298 @@ class TestRedisConsumer:
         assert consumer.connected is False
         consumer._client = MagicMock()
         assert consumer.connected is True
+
+
+class TestRedisConsumerPelRecovery:
+    """Tests for the startup PEL-recovery pass in RedisConsumer.consume()
+    (audit P2-7)."""
+
+    @pytest.fixture
+    def redis_config(self) -> RedisConfig:
+        """Create Redis config for testing."""
+        return RedisConfig(host="localhost", port=6379)
+
+    @pytest.fixture
+    def aggregator_config(self) -> AggregatorConfig:
+        """Create aggregator config for testing."""
+        return AggregatorConfig(
+            source_stream="stream:ticks:us",
+            consumer_group="test-aggregator",
+        )
+
+    @pytest.fixture
+    def consumer(
+        self, redis_config: RedisConfig, aggregator_config: AggregatorConfig
+    ) -> RedisConsumer:
+        """Create RedisConsumer instance."""
+        return RedisConsumer(redis_config, aggregator_config)
+
+    async def test_consume_replays_own_pending_before_fresh_messages(
+        self, consumer: RedisConsumer, aggregator_config: AggregatorConfig
+    ) -> None:
+        """Messages already in this consumer's own PEL (delivered before a
+        crash) are replayed before fresh (">") messages, and both are
+        acked."""
+        mock_redis = AsyncMock()
+
+        pending_message = (
+            aggregator_config.source_stream,
+            [
+                (
+                    "100-0",
+                    {
+                        "symbol": "PEND",
+                        "price": "10.0",
+                        "timestamp": "2024-01-15T09:30:00+00:00",
+                    },
+                )
+            ],
+        )
+        fresh_message = (
+            aggregator_config.source_stream,
+            [
+                (
+                    "200-0",
+                    {
+                        "symbol": "FRESH",
+                        "price": "20.0",
+                        "timestamp": "2024-01-15T09:31:00+00:00",
+                    },
+                )
+            ],
+        )
+
+        calls = []
+
+        async def mock_xreadgroup(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return [pending_message]
+            if len(calls) == 2:
+                return []  # own PEL drained
+            if len(calls) == 3:
+                return [fresh_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xack = AsyncMock()
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        consumer._client = mock_redis
+
+        ticks = []
+        async for tick in consumer.consume("stable-consumer"):
+            ticks.append(tick)
+
+        assert [t.symbol for t in ticks] == ["PEND", "FRESH"]
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "100-0"
+        )
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "200-0"
+        )
+
+        assert calls[0]["streams"] == {aggregator_config.source_stream: "0"}
+        assert calls[0]["consumername"] == "stable-consumer"
+
+    async def test_consume_claims_orphaned_pending_via_xautoclaim(
+        self, consumer: RedisConsumer, aggregator_config: AggregatorConfig
+    ) -> None:
+        """Entries orphaned by a dead (e.g. old random-uuid) consumer are
+        claimed via XAUTOCLAIM with the configured idle threshold."""
+        mock_redis = AsyncMock()
+
+        claimed_message = (
+            "300-0",
+            {
+                "symbol": "ORPHAN",
+                "price": "30.0",
+                "timestamp": "2024-01-15T09:32:00+00:00",
+            },
+        )
+
+        xreadgroup_call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal xreadgroup_call_count
+            xreadgroup_call_count += 1
+            if xreadgroup_call_count == 1:
+                return []  # own PEL empty
+            consumer._client = None
+            return []
+
+        xautoclaim_calls = []
+
+        async def mock_xautoclaim(*args, **kwargs):
+            xautoclaim_calls.append(kwargs)
+            if len(xautoclaim_calls) == 1:
+                return ("1234-0", [claimed_message], [])
+            return ("0-0", [], [])
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = mock_xautoclaim
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        ticks = []
+        async for tick in consumer.consume("stable-consumer"):
+            ticks.append(tick)
+
+        assert len(ticks) == 1
+        assert ticks[0].symbol == "ORPHAN"
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "300-0"
+        )
+        assert xautoclaim_calls[0]["min_idle_time"] == 60_000
+
+    async def test_consume_handles_two_tuple_xautoclaim_response(
+        self, consumer: RedisConsumer
+    ) -> None:
+        """Redis 6.2's XAUTOCLAIM returns a 2-tuple (no deleted-ids
+        element); the recovery pass must not error unpacking it."""
+        mock_redis = AsyncMock()
+
+        async def mock_xreadgroup(*args, **kwargs):
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        ticks = []
+        async for tick in consumer.consume("stable-consumer"):
+            ticks.append(tick)
+
+        assert ticks == []
+
+    async def test_consume_pel_recovery_trimmed_entry_acked_not_yielded(
+        self, consumer: RedisConsumer, aggregator_config: AggregatorConfig
+    ) -> None:
+        """A pending entry whose stream data was trimmed/deleted surfaces as
+        data=None or data={} depending on server version; both must be acked
+        and skipped, not yielded or raise."""
+        mock_redis = AsyncMock()
+
+        trimmed_message = (
+            aggregator_config.source_stream,
+            [("400-0", None), ("400-1", {})],
+        )
+
+        call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [trimmed_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        ticks = []
+        async for tick in consumer.consume("stable-consumer"):
+            ticks.append(tick)
+
+        assert ticks == []
+        assert consumer._parse_failures == 0
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "400-0"
+        )
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "400-1"
+        )
+
+    async def test_consume_pel_recovery_unparseable_message_acked_and_counted(
+        self, consumer: RedisConsumer, aggregator_config: AggregatorConfig
+    ) -> None:
+        """An unparseable message recovered from the PEL is acked, logged,
+        and counted via _parse_failures, matching main-loop poison handling."""
+        mock_redis = AsyncMock()
+
+        poison_message = (
+            aggregator_config.source_stream,
+            [("500-0", {"invalid": "data"})],
+        )
+
+        call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [poison_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        ticks = []
+        with structlog.testing.capture_logs() as cap_logs:
+            async for tick in consumer.consume("stable-consumer"):
+                ticks.append(tick)
+
+        assert ticks == []
+        events = [entry["event"] for entry in cap_logs]
+        assert "unparseable_tick_message" in events
+        mock_redis.xack.assert_any_call(
+            aggregator_config.source_stream, aggregator_config.consumer_group, "500-0"
+        )
+        assert consumer._parse_failures == 1
+
+    async def test_consume_empty_pel_proceeds_straight_to_fresh_read(
+        self, consumer: RedisConsumer, aggregator_config: AggregatorConfig
+    ) -> None:
+        """When there is nothing to recover, consume() goes straight to
+        reading fresh (">") messages."""
+        mock_redis = AsyncMock()
+
+        fresh_message = (
+            aggregator_config.source_stream,
+            [
+                (
+                    "600-0",
+                    {
+                        "symbol": "AAPL",
+                        "price": "185.50",
+                        "timestamp": "2024-01-15T09:30:00+00:00",
+                    },
+                )
+            ],
+        )
+
+        calls = []
+
+        async def mock_xreadgroup(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return []  # own PEL empty
+            if len(calls) == 2:
+                return [fresh_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        ticks = []
+        async for tick in consumer.consume("stable-consumer"):
+            ticks.append(tick)
+
+        assert len(ticks) == 1
+        assert ticks[0].symbol == "AAPL"
+        assert calls[0]["streams"] == {aggregator_config.source_stream: "0"}
+        assert calls[1]["streams"] == {aggregator_config.source_stream: ">"}
 
 
 class TestBarPublisher:
@@ -758,6 +1052,7 @@ class TestBarConsumer:
 
         mock_redis.xreadgroup = mock_xreadgroup
         mock_redis.xack = AsyncMock()
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
         consumer._client = mock_redis
 
         bars = []
@@ -901,6 +1196,7 @@ class TestBarConsumer:
 
         mock_redis.xreadgroup = mock_xreadgroup
         mock_redis.xack = AsyncMock()
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
         consumer._client = mock_redis
 
         bars = []
@@ -926,3 +1222,277 @@ class TestBarConsumer:
         assert consumer.connected is False
         consumer._client = MagicMock()
         assert consumer.connected is True
+
+
+def _bar_message_data(symbol: str, timestamp: str) -> dict:
+    """Minimal valid bar message payload for PEL-recovery tests."""
+    return {
+        "symbol": symbol,
+        "open": "185.0",
+        "high": "186.0",
+        "low": "184.0",
+        "close": "185.50",
+        "volume": "10000",
+        "timestamp": timestamp,
+    }
+
+
+class TestBarConsumerPelRecovery:
+    """Tests for the startup PEL-recovery pass in BarConsumer.consume()
+    (audit P2-7)."""
+
+    @pytest.fixture
+    def redis_config(self) -> RedisConfig:
+        """Create Redis config for testing."""
+        return RedisConfig(host="localhost", port=6379)
+
+    @pytest.fixture
+    def strategies_config(self) -> StrategiesConfig:
+        """Create strategies config for testing."""
+        return StrategiesConfig(
+            bar_stream="stream:bars:1m:us",
+            consumer_group="test-strategies",
+        )
+
+    @pytest.fixture
+    def consumer(
+        self, redis_config: RedisConfig, strategies_config: StrategiesConfig
+    ) -> BarConsumer:
+        """Create BarConsumer instance."""
+        return BarConsumer(redis_config, strategies_config)
+
+    async def test_consume_replays_own_pending_before_fresh_messages(
+        self, consumer: BarConsumer, strategies_config: StrategiesConfig
+    ) -> None:
+        """Messages already in this consumer's own PEL (delivered before a
+        crash) are replayed before fresh (">") messages, and both are
+        acked."""
+        mock_redis = AsyncMock()
+
+        pending_message = (
+            strategies_config.bar_stream,
+            [("100-0", _bar_message_data("PEND", "2024-01-15T09:30:00+00:00"))],
+        )
+        fresh_message = (
+            strategies_config.bar_stream,
+            [("200-0", _bar_message_data("FRESH", "2024-01-15T09:31:00+00:00"))],
+        )
+
+        calls = []
+
+        async def mock_xreadgroup(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return [pending_message]
+            if len(calls) == 2:
+                return []  # own PEL drained
+            if len(calls) == 3:
+                return [fresh_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xack = AsyncMock()
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        consumer._client = mock_redis
+
+        bars = []
+        async for bar_data in consumer.consume("stable-consumer"):
+            bars.append(bar_data)
+
+        assert [b["bar"].symbol for b in bars] == ["PEND", "FRESH"]
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "100-0"
+        )
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "200-0"
+        )
+
+        assert calls[0]["streams"] == {strategies_config.bar_stream: "0"}
+        assert calls[0]["consumername"] == "stable-consumer"
+
+    async def test_consume_claims_orphaned_pending_via_xautoclaim(
+        self, consumer: BarConsumer, strategies_config: StrategiesConfig
+    ) -> None:
+        """Entries orphaned by a dead (e.g. old random-uuid) consumer are
+        claimed via XAUTOCLAIM with the configured idle threshold."""
+        mock_redis = AsyncMock()
+
+        claimed_message = (
+            "300-0",
+            _bar_message_data("ORPHAN", "2024-01-15T09:32:00+00:00"),
+        )
+
+        xreadgroup_call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal xreadgroup_call_count
+            xreadgroup_call_count += 1
+            if xreadgroup_call_count == 1:
+                return []  # own PEL empty
+            consumer._client = None
+            return []
+
+        xautoclaim_calls = []
+
+        async def mock_xautoclaim(*args, **kwargs):
+            xautoclaim_calls.append(kwargs)
+            if len(xautoclaim_calls) == 1:
+                return ("1234-0", [claimed_message], [])
+            return ("0-0", [], [])
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = mock_xautoclaim
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        bars = []
+        async for bar_data in consumer.consume("stable-consumer"):
+            bars.append(bar_data)
+
+        assert len(bars) == 1
+        assert bars[0]["bar"].symbol == "ORPHAN"
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "300-0"
+        )
+        assert xautoclaim_calls[0]["min_idle_time"] == 60_000
+
+    async def test_consume_handles_two_tuple_xautoclaim_response(
+        self, consumer: BarConsumer
+    ) -> None:
+        """Redis 6.2's XAUTOCLAIM returns a 2-tuple (no deleted-ids
+        element); the recovery pass must not error unpacking it."""
+        mock_redis = AsyncMock()
+
+        async def mock_xreadgroup(*args, **kwargs):
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        bars = []
+        async for bar_data in consumer.consume("stable-consumer"):
+            bars.append(bar_data)
+
+        assert bars == []
+
+    async def test_consume_pel_recovery_trimmed_entry_acked_not_yielded(
+        self, consumer: BarConsumer, strategies_config: StrategiesConfig
+    ) -> None:
+        """A pending entry whose stream data was trimmed/deleted surfaces as
+        data=None or data={} depending on server version; both must be acked
+        and skipped, not yielded or raise."""
+        mock_redis = AsyncMock()
+
+        trimmed_message = (
+            strategies_config.bar_stream,
+            [("400-0", None), ("400-1", {})],
+        )
+
+        call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [trimmed_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        bars = []
+        async for bar_data in consumer.consume("stable-consumer"):
+            bars.append(bar_data)
+
+        assert bars == []
+        assert consumer._parse_failures == 0
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "400-0"
+        )
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "400-1"
+        )
+
+    async def test_consume_pel_recovery_unparseable_message_acked_and_counted(
+        self, consumer: BarConsumer, strategies_config: StrategiesConfig
+    ) -> None:
+        """An unparseable message recovered from the PEL is acked, logged,
+        and counted via _parse_failures, matching main-loop poison handling."""
+        mock_redis = AsyncMock()
+
+        poison_message = (
+            strategies_config.bar_stream,
+            [("500-0", {"invalid": "data"})],
+        )
+
+        call_count = 0
+
+        async def mock_xreadgroup(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [poison_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        bars = []
+        with structlog.testing.capture_logs() as cap_logs:
+            async for bar_data in consumer.consume("stable-consumer"):
+                bars.append(bar_data)
+
+        assert bars == []
+        events = [entry["event"] for entry in cap_logs]
+        assert "unparseable_bar_message" in events
+        mock_redis.xack.assert_any_call(
+            strategies_config.bar_stream, strategies_config.consumer_group, "500-0"
+        )
+        assert consumer._parse_failures == 1
+
+    async def test_consume_empty_pel_proceeds_straight_to_fresh_read(
+        self, consumer: BarConsumer, strategies_config: StrategiesConfig
+    ) -> None:
+        """When there is nothing to recover, consume() goes straight to
+        reading fresh (">") messages."""
+        mock_redis = AsyncMock()
+
+        fresh_message = (
+            strategies_config.bar_stream,
+            [("600-0", _bar_message_data("AAPL", "2024-01-15T09:30:00+00:00"))],
+        )
+
+        calls = []
+
+        async def mock_xreadgroup(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return []  # own PEL empty
+            if len(calls) == 2:
+                return [fresh_message]
+            consumer._client = None
+            return []
+
+        mock_redis.xreadgroup = mock_xreadgroup
+        mock_redis.xautoclaim = AsyncMock(return_value=("0-0", [], []))
+        mock_redis.xack = AsyncMock()
+        consumer._client = mock_redis
+
+        bars = []
+        async for bar_data in consumer.consume("stable-consumer"):
+            bars.append(bar_data)
+
+        assert len(bars) == 1
+        assert bars[0]["bar"].symbol == "AAPL"
+        assert calls[0]["streams"] == {strategies_config.bar_stream: "0"}
+        assert calls[1]["streams"] == {strategies_config.bar_stream: ">"}
