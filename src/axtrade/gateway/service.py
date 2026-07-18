@@ -14,6 +14,10 @@ from .yahoo import YahooAdapter
 
 logger = get_logger(__name__)
 
+# Consecutive tick-publish failures before the error is re-raised to the
+# stream supervisor for backoff + alerting.
+PUBLISH_FAILURE_ESCALATION_THRESHOLD = 10
+
 
 class GatewayService:
     """Main gateway service that orchestrates data flow.
@@ -38,6 +42,7 @@ class GatewayService:
         self._stream_supervisor: Optional[LoopSupervisor] = None
         self._control_subscriber: Optional[GatewayControlSubscriber] = None
         self._control_task: Optional[asyncio.Task] = None
+        self._publish_failures = 0
 
     def _create_adapter(self) -> DataAdapter:
         """Create the appropriate data adapter based on config.
@@ -77,9 +82,8 @@ class GatewayService:
             await self._publisher.connect()
             logger.info("redis_connected")
         except Exception as e:
-            logger.warning("redis_connection_failed", error=str(e))
-            logger.info("continuing_without_redis")
-            self._publisher = None
+            logger.critical("redis_connection_failed_at_startup", error=str(e))
+            raise
 
         await self._adapter.subscribe(self.config.gateway.symbols)
         logger.info(
@@ -95,13 +99,12 @@ class GatewayService:
         )
 
         # Start control subscriber for dynamic symbol management
-        if self._publisher:
-            self._control_subscriber = GatewayControlSubscriber(
-                self.config.redis, self.config.gateway
-            )
-            await self._control_subscriber.connect()
-            self._control_task = asyncio.create_task(self._control_loop())
-            logger.info("Gateway control subscriber started")
+        self._control_subscriber = GatewayControlSubscriber(
+            self.config.redis, self.config.gateway
+        )
+        await self._control_subscriber.connect()
+        self._control_task = asyncio.create_task(self._control_loop())
+        logger.info("Gateway control subscriber started")
 
         self._running = True
         await self._stream_loop()
@@ -207,10 +210,19 @@ class GatewayService:
                         try:
                             await self._publisher.publish_tick(tick)
                         except Exception as e:
-                            logger.error("redis_publish_failed", error=str(e))
-
-                    # Reset errors on successful iteration
-                    self._stream_supervisor.reset_errors()
+                            self._publish_failures += 1
+                            logger.error(
+                                "redis_publish_failed",
+                                error=str(e),
+                                consecutive_failures=self._publish_failures,
+                            )
+                            if self._publish_failures >= PUBLISH_FAILURE_ESCALATION_THRESHOLD:
+                                self._publish_failures = 0
+                                raise
+                        else:
+                            self._publish_failures = 0
+                            # Reset errors on successful iteration
+                            self._stream_supervisor.reset_errors()
 
             except asyncio.CancelledError:
                 break
@@ -260,12 +272,24 @@ async def run_gateway(config_path: Optional[str] = None, adapter: Optional[str] 
 
     async def run_with_stop():
         task = asyncio.create_task(service.start())
-        await stop_event.wait()
-        await service.stop()
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        stop_task = asyncio.create_task(stop_event.wait())
+        done, _ = await asyncio.wait(
+            {task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if task in done:
+            stop_task.cancel()
+            try:
+                await stop_task
+            except asyncio.CancelledError:
+                pass
+            await service.stop()
+            task.result()  # propagate a startup/stream crash to the caller
+        else:
+            await service.stop()
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     await run_with_stop()
