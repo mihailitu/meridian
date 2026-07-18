@@ -89,7 +89,14 @@ platform + calibrated harness. Option A's *data work* survives as an optional, u
 iteration in the phase-4 plan — it is a harness-quality feature, not a bot revival.
 
 **Phase 4 is done; phase 5 P0+P1 tiers are done** (10 iterations on `phase5-audit-fixes`,
-through 2026-07-17). What remains open, in priority order (sequencing agreed 2026-07-17):
+through 2026-07-17). **Phase 6 (cross-sectional daily strategy track) scoped 2026-07-18**
+([`docs/phase6-cross-sectional.md`](docs/phase6-cross-sectional.md)) — the Option B
+"strategy search concluded" stance is amended: the 2026-07-18 diagnostics
+(`docs/DIAGNOSTICS-2026-07-18.md`) showed three of six DEAD verdicts measured broken
+implementations, closed the 1m intraday family with evidence (all pre-registered
+redesigns failed IS against a 3–5bp/trade cost floor), and redirected strategy research
+to daily-horizon cross-sectional portfolios over the S&P 1500. What remains open, in
+priority order (platform sequencing agreed 2026-07-17):
 
 1. **Live-robustness P2s** (phase-5 iterations 11+): P2-7 PEL recovery **done**
    (iteration 11, 2026-07-18 — stable consumer names + startup PEL recovery, verified
