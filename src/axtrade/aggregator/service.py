@@ -3,6 +3,7 @@
 import asyncio
 import signal
 import socket
+from datetime import datetime, timezone
 
 from axtrade.common import (
     Bar,
@@ -128,10 +129,19 @@ class AggregatorService:
         if self._consume_supervisor:
             self._consume_supervisor.stop()
 
-        # Flush remaining bars
-        completed = self._engine.flush()
+        # Flush remaining bars. Only bars whose window has fully elapsed by
+        # now are safe to persist/publish; true mid-window partials (audit
+        # P2-8) are dropped rather than upserted over the DB row with an
+        # incomplete OHLCV.
+        completed, partial = self._engine.flush(as_of=datetime.now(timezone.utc))
         for bar, interval in completed:
             await self._process_completed_bar(bar, interval)
+        if partial:
+            self.logger.warning(
+                "partial_bars_dropped_on_shutdown",
+                count=len(partial),
+                bars=[(b.symbol, interval, b.timestamp.isoformat()) for b, interval in partial],
+            )
 
         await self._consumer.disconnect()
         await self._publisher.disconnect()

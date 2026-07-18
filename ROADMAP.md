@@ -93,8 +93,10 @@ through 2026-07-17). What remains open, in priority order (sequencing agreed 202
 
 1. **Live-robustness P2s** (phase-5 iterations 11+): P2-7 PEL recovery **done**
    (iteration 11, 2026-07-18 — stable consumer names + startup PEL recovery, verified
-   against real Redis); remaining: P2-8 shutdown partial-bar flush, P2-9 gateway
-   Redis-down no-op, P2-10 silent Alpaca stream death. These de-risk item 3 directly.
+   against real Redis); P2-8 shutdown partial-bar flush **done** (iteration 12,
+   2026-07-18 — mid-window partials dropped at shutdown, fulltest final-bar path
+   re-verified to the cent); remaining: P2-9 gateway Redis-down no-op, P2-10 silent
+   Alpaca stream death. These de-risk item 3 directly.
 2. **Merge `phase5-audit-fixes` → main** — the branch is self-contained; later P2 work
    lands on a fresh branch.
 3. **Live paper validation run** — the stack is integration-tested in-process; the next

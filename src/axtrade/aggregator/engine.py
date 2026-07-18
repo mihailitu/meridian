@@ -1,7 +1,7 @@
 """Bar aggregation engine."""
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from axtrade.common import Bar, Tick
@@ -139,20 +139,47 @@ class BarEngine:
 
         return completed
 
-    def flush(self) -> list[tuple[Bar, str]]:
-        """Force-complete all open bars.
+    def flush(
+        self, as_of: Optional[datetime] = None
+    ) -> tuple[list[tuple[Bar, str]], list[tuple[Bar, str]]]:
+        """Force-complete all open bars, splitting genuinely complete bars
+        from true mid-window partials.
+
+        A bar's window has "elapsed" when no future tick could still belong
+        to it, i.e. `bar_start + interval <= as_of`. Elapsed bars are safe to
+        persist/publish as normal completed bars (e.g. a fulltest replay bar
+        whose historical window is long over, or the day's last bar at an
+        after-hours shutdown). Bars whose window is still open at `as_of`
+        are genuine partials — flushing them would publish/persist a bar
+        built from only part of its interval's ticks — so they are returned
+        separately instead of being treated as completed.
+
+        `as_of=None` is the original unconditional force-flush: every open
+        bar is treated as elapsed, matching prior behavior.
+
+        Args:
+            as_of: Wall-clock time to classify bar windows against. None
+                treats all open bars as elapsed (backward-compatible).
 
         Returns:
-            List of (bar, interval) tuples for all open bars
+            (elapsed, partial): two lists of (bar, interval) tuples. All
+            open bars are cleared regardless of which list they land in.
         """
-        completed: list[tuple[Bar, str]] = []
+        elapsed: list[tuple[Bar, str]] = []
+        partial: list[tuple[Bar, str]] = []
 
         for symbol_bars in self._open_bars.values():
             for interval, open_bar in symbol_bars.items():
-                completed.append((open_bar.to_bar(), interval))
+                window_end = open_bar.bar_start + timedelta(
+                    seconds=self._interval_seconds[interval]
+                )
+                if as_of is None or window_end <= as_of:
+                    elapsed.append((open_bar.to_bar(), interval))
+                else:
+                    partial.append((open_bar.to_bar(), interval))
 
         self._open_bars.clear()
-        return completed
+        return elapsed, partial
 
     def get_open_bar(self, symbol: str, interval: str) -> Optional[OpenBar]:
         """Get the current open bar for a symbol and interval.
