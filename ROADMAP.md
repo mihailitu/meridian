@@ -97,7 +97,9 @@ through 2026-07-17). What remains open, in priority order (sequencing agreed 202
    2026-07-18 — mid-window partials dropped at shutdown, fulltest final-bar path
    re-verified to the cent); P2-9 gateway Redis-down no-op **done** (iteration 13,
    2026-07-18 — fail-fast startup, publish failures escalate to the supervisor);
-   remaining: P2-10 silent Alpaca stream death. These de-risk item 3 directly.
+   P2-10 silent Alpaca stream death **done** (iteration 14, 2026-07-18 — thread-safe
+   tick handoff, loud death detection + rebuild, tick-staleness watchdog for all
+   adapters). **All four live-robustness P2s are complete** — next is item 2 (merge).
 2. **Merge `phase5-audit-fixes` → main** — the branch is self-contained; later P2 work
    lands on a fresh branch.
 3. **Live paper validation run** — the stack is integration-tested in-process; the next

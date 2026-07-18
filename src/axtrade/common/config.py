@@ -60,6 +60,9 @@ class GatewayConfig:
     yahoo: YahooConfig = field(default_factory=YahooConfig)
     symbols: list[SymbolConfig] = field(default_factory=list)
     control_channel: str = "axtrade:gateway:control"
+    # Seconds since the last received tick before the staleness watchdog logs
+    # a warning (covers all adapters, not just Alpaca). 0 disables.
+    tick_staleness_seconds: int = 300
 
 
 @dataclass
@@ -296,6 +299,7 @@ def load_config(path: Optional[Path] = None) -> Config:
             ),
             symbols=symbols,
             control_channel=gateway_data.get("control_channel", "axtrade:gateway:control"),
+            tick_staleness_seconds=gateway_data.get("tick_staleness_seconds", 300),
         ),
         redis=RedisConfig(
             host=redis_data.get("host", "localhost"),

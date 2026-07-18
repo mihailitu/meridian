@@ -68,6 +68,7 @@ class TestGatewayConfig:
         assert isinstance(config.mock, MockConfig)
         assert isinstance(config.ibkr, IBKRConfig)
         assert config.symbols == []
+        assert config.tick_staleness_seconds == 300
 
     def test_with_symbols(self) -> None:
         """Test with symbol configs."""
@@ -478,6 +479,26 @@ gateway:
             assert config.gateway.alpaca.secret_key == "test_secret"
             assert config.gateway.alpaca.feed == "sip"
             assert config.gateway.alpaca.paper is False
+        finally:
+            temp_path.unlink()
+
+    def test_load_tick_staleness_seconds(self) -> None:
+        """Test loading the gateway tick-staleness watchdog threshold."""
+        yaml_content = """
+gateway:
+  adapter: mock
+  tick_staleness_seconds: 42
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = Path(f.name)
+
+        try:
+            config = load_config(temp_path)
+            assert config.gateway.tick_staleness_seconds == 42
         finally:
             temp_path.unlink()
 

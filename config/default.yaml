@@ -31,6 +31,10 @@ gateway:
     - symbol: NVDA
       base_price: 880.00
 
+  # Seconds since the last received tick before the watchdog logs a warning
+  # (covers all adapters). 0 disables.
+  tick_staleness_seconds: 300
+
 redis:
   host: "localhost"
   port: 6380

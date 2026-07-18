@@ -1,11 +1,15 @@
 """Tests for gateway module."""
 
-from unittest.mock import AsyncMock, Mock, patch
+import asyncio
+import time
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from axtrade.common import MockConfig, RedisPublisher, SymbolConfig, Tick
+from axtrade.common import AlpacaConfig, MockConfig, RedisPublisher, SymbolConfig, Tick
 from axtrade.gateway import MockAdapter
+from axtrade.gateway.alpaca import _STREAM_DEAD, AlpacaAdapter
 from axtrade.gateway.control import GatewayControlSubscriber
 from axtrade.gateway.service import PUBLISH_FAILURE_ESCALATION_THRESHOLD, GatewayService
 
@@ -274,3 +278,182 @@ class TestGatewayServiceStreamLoopPublishFailures:
         assert service._publish_failures == 0
         mock_supervisor.reset_errors.assert_called_once()
         mock_supervisor.handle_error.assert_not_called()
+
+
+class TestAlpacaAdapterEmitTick:
+    """Tests for the thread-safe tick handoff (audit P2-10). Handlers run on
+    the stream's own event loop inside the executor thread, so ticks must be
+    handed to the gateway loop via call_soon_threadsafe rather than a bare
+    put_nowait, which isn't thread-safe and doesn't wake the getter."""
+
+    def test_emit_tick_with_loop_uses_call_soon_threadsafe(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        fake_loop = MagicMock()
+        fake_loop.is_closed.return_value = False
+        adapter._loop = fake_loop
+
+        tick = Tick(symbol="AAPL", price=100.0)
+        adapter._emit_tick(tick)
+
+        fake_loop.call_soon_threadsafe.assert_called_once_with(adapter._enqueue, tick)
+        assert adapter._tick_queue.empty()  # not enqueued directly
+
+        # Invoking the scheduled callback (as the real loop would) puts the
+        # tick on the queue.
+        callback, *args = fake_loop.call_soon_threadsafe.call_args[0]
+        callback(*args)
+        assert adapter._tick_queue.get_nowait() is tick
+
+    def test_emit_tick_without_loop_enqueues_directly(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        adapter._loop = None
+
+        tick = Tick(symbol="AAPL", price=100.0)
+        adapter._emit_tick(tick)
+
+        assert adapter._tick_queue.get_nowait() is tick
+
+    async def test_handle_trade_routes_through_emit_tick(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        adapter._emit_tick = Mock()
+
+        fake_trade = Mock()
+        fake_trade.symbol = "AAPL"
+        fake_trade.price = 123.45
+        fake_trade.timestamp = datetime(2024, 1, 15, 9, 30, 0, tzinfo=UTC)
+        fake_trade.size = 10
+
+        await adapter._handle_trade(fake_trade)
+
+        adapter._emit_tick.assert_called_once()
+        tick = adapter._emit_tick.call_args[0][0]
+        assert tick.symbol == "AAPL"
+        assert tick.price == 123.45
+        assert tick.volume == 10
+        assert tick.timestamp == fake_trade.timestamp
+
+
+class TestAlpacaAdapterStreamDeath:
+    """Tests for loud stream-death detection and rebuild-on-retry (audit
+    P2-10). Without _on_stream_run_done, stream.run() raising or returning
+    silently stops all tick flow with zero errors."""
+
+    def test_on_stream_run_done_exception_enqueues_sentinel(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        adapter._running = True
+        fut = Mock()
+        fut.cancelled.return_value = False
+        fut.exception.return_value = RuntimeError("boom")
+
+        adapter._on_stream_run_done(fut)
+
+        assert adapter._stream_death_error == "boom"
+        assert adapter._tick_queue.get_nowait() is _STREAM_DEAD
+
+    def test_on_stream_run_done_not_running_is_ignored(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        adapter._running = False
+        fut = Mock()
+        fut.cancelled.return_value = False
+        fut.exception.return_value = None
+
+        adapter._on_stream_run_done(fut)
+
+        assert adapter._tick_queue.empty()
+
+    def test_on_stream_run_done_cancelled_is_ignored(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        adapter._running = True
+        fut = Mock()
+        fut.cancelled.return_value = True
+
+        adapter._on_stream_run_done(fut)
+
+        assert adapter._tick_queue.empty()
+
+    async def test_stream_ticks_raises_on_stream_death(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        fake_stream = MagicMock()
+        fake_stream.run = Mock(return_value=None)  # returns immediately -> "died"
+        adapter._stream = fake_stream
+        adapter._connected = True
+
+        async def consume():
+            async for _ in adapter.stream_ticks():
+                pass
+
+        with pytest.raises(RuntimeError, match="alpaca stream died"):
+            await asyncio.wait_for(consume(), timeout=5)
+
+        assert adapter._stream_dead is True
+
+    async def test_stream_ticks_rebuilds_stream_on_reentry_after_death(self):
+        adapter = AlpacaAdapter(AlpacaConfig())
+        adapter._stream = MagicMock()  # old, dead stream object
+        adapter._stream_dead = True
+        adapter._stream_death_error = "boom"
+        adapter._symbols = [SymbolConfig(symbol="AAPL", base_price=100.0)]
+
+        def fake_connect_side_effect():
+            new_stream = MagicMock()
+            new_stream.run = Mock(return_value=None)  # dies again immediately
+            adapter._stream = new_stream
+            adapter._connected = True
+
+        adapter.disconnect = AsyncMock()
+        adapter.connect = AsyncMock(side_effect=fake_connect_side_effect)
+        adapter.subscribe = AsyncMock()
+
+        async def consume():
+            async for _ in adapter.stream_ticks():
+                pass
+
+        with pytest.raises(RuntimeError, match="alpaca stream died"):
+            await asyncio.wait_for(consume(), timeout=5)
+
+        adapter.connect.assert_awaited_once()
+        adapter.subscribe.assert_awaited_once_with(list(adapter._symbols))
+        # The rebuild cleared the flag before the second death set it again.
+        assert adapter._stream_dead is True
+        assert adapter._stream_death_error != "boom"
+
+
+class TestGatewayServiceStalenessWatchdog:
+    """Tests for the cross-adapter tick-staleness watchdog (audit P2-10)."""
+
+    async def test_watchdog_warns_then_resumes(self, config):
+        config.gateway.tick_staleness_seconds = 1
+        service = GatewayService(config)
+        service._running = True
+        service._last_tick_monotonic = time.monotonic() - 10
+
+        with patch("axtrade.gateway.service.logger") as mock_logger:
+            task = asyncio.create_task(service._staleness_watchdog())
+            try:
+                await asyncio.sleep(0.4)
+                assert mock_logger.warning.call_count == 1
+                assert service._tick_stale_flagged is True
+
+                service._last_tick_monotonic = time.monotonic()
+                await asyncio.sleep(0.3)
+                assert mock_logger.info.call_count == 1
+                assert service._tick_stale_flagged is False
+            finally:
+                service._running = False
+                try:
+                    await asyncio.wait_for(task, timeout=2)
+                except asyncio.TimeoutError:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+
+class TestGatewayConfigTickStaleness:
+    """Tests for GatewayConfig.tick_staleness_seconds defaults."""
+
+    def test_default_is_300(self):
+        from axtrade.common import GatewayConfig
+
+        assert GatewayConfig().tick_staleness_seconds == 300

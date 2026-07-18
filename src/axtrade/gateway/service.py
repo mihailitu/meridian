@@ -2,6 +2,7 @@
 
 import asyncio
 import signal
+import time
 from typing import Optional
 
 from ..common import Config, LoopSupervisor, RedisPublisher, SymbolConfig, get_logger, load_config
@@ -43,6 +44,9 @@ class GatewayService:
         self._control_subscriber: Optional[GatewayControlSubscriber] = None
         self._control_task: Optional[asyncio.Task] = None
         self._publish_failures = 0
+        self._last_tick_monotonic: Optional[float] = None
+        self._tick_stale_flagged = False
+        self._watchdog_task: Optional[asyncio.Task] = None
 
     def _create_adapter(self) -> DataAdapter:
         """Create the appropriate data adapter based on config.
@@ -107,6 +111,9 @@ class GatewayService:
         logger.info("Gateway control subscriber started")
 
         self._running = True
+        self._last_tick_monotonic = time.monotonic()
+        if self.config.gateway.tick_staleness_seconds > 0:
+            self._watchdog_task = asyncio.create_task(self._staleness_watchdog())
         await self._stream_loop()
 
     async def stop(self) -> None:
@@ -121,6 +128,13 @@ class GatewayService:
             self._control_task.cancel()
             try:
                 await self._control_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
             except asyncio.CancelledError:
                 pass
 
@@ -203,6 +217,7 @@ class GatewayService:
                     last_price = self._last_prices.get(tick.symbol)
                     change = tick.price - last_price if last_price else 0.0
                     self._last_prices[tick.symbol] = tick.price
+                    self._last_tick_monotonic = time.monotonic()
 
                     self._print_tick(tick, change)
 
@@ -229,6 +244,37 @@ class GatewayService:
             except Exception as e:
                 if not await self._stream_supervisor.handle_error(e):
                     break
+
+    async def _staleness_watchdog(self) -> None:
+        """Warn when no ticks have arrived for tick_staleness_seconds.
+
+        Covers all adapters (not just Alpaca's explicit death detection) -
+        a source can go quiet without raising anything, e.g. a polling
+        adapter that stops updating or a websocket that stalls without
+        closing. Quiet markets/overnight make staleness normal, so this
+        only warns (once per stale episode) rather than escalating.
+        """
+        threshold = self.config.gateway.tick_staleness_seconds
+        interval = max(0.05, min(30.0, threshold / 4))
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                return
+            if not self._running or self._last_tick_monotonic is None:
+                continue
+            elapsed = time.monotonic() - self._last_tick_monotonic
+            if elapsed > threshold and not self._tick_stale_flagged:
+                self._tick_stale_flagged = True
+                logger.warning(
+                    "tick_stream_stale",
+                    seconds_since_last_tick=round(elapsed, 1),
+                    threshold=threshold,
+                    adapter=self.config.gateway.adapter,
+                )
+            elif elapsed <= threshold and self._tick_stale_flagged:
+                self._tick_stale_flagged = False
+                logger.info("tick_stream_resumed")
 
     def _print_tick(self, tick, change: float) -> None:
         """Log tick data.

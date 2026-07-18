@@ -11,6 +11,11 @@ from .base import DataAdapter
 
 logger = get_logger(__name__)
 
+# Sentinel enqueued to signal that the underlying stream.run() executor task
+# has died (raised or returned) so stream_ticks() can raise loudly instead of
+# silently draining nothing forever.
+_STREAM_DEAD = object()
+
 
 class AlpacaAdapter(DataAdapter):
     """Alpaca adapter using alpaca-py SDK.
@@ -31,6 +36,13 @@ class AlpacaAdapter(DataAdapter):
         self._symbols: list[SymbolConfig] = []
         self._tick_queue: asyncio.Queue[Tick] = asyncio.Queue()
         self._running = False
+        # The gateway loop that stream_ticks() runs on. StockDataStream.run()
+        # hosts its own event loop inside the executor thread, so the async
+        # handlers (_handle_trade/_handle_quote) execute there, not here -
+        # this lets them hand ticks back thread-safely (see _emit_tick).
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._stream_dead = False
+        self._stream_death_error: Optional[str] = None
 
     def _get_credentials(self) -> tuple[str, str]:
         """Get API credentials from config or environment.
@@ -99,6 +111,22 @@ class AlpacaAdapter(DataAdapter):
         self._connected = False
         logger.info("disconnected_from_alpaca")
 
+    def _enqueue(self, item) -> None:
+        try:
+            self._tick_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            pass
+
+    def _emit_tick(self, tick: Tick) -> None:
+        # Handlers run on the stream's own event loop in the executor thread;
+        # hand the tick to the gateway loop thread-safely so the getter wakes
+        # immediately instead of draining on the 1s timeout poll.
+        loop = self._loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self._enqueue, tick)
+        else:
+            self._enqueue(tick)
+
     async def _handle_trade(self, trade) -> None:
         """Handle incoming trade updates.
 
@@ -114,10 +142,7 @@ class AlpacaAdapter(DataAdapter):
                 else trade.timestamp,
                 volume=int(trade.size) if trade.size else None,
             )
-            try:
-                self._tick_queue.put_nowait(tick)
-            except asyncio.QueueFull:
-                pass
+            self._emit_tick(tick)
         except Exception as e:
             logger.error("alpaca_trade_handler_error", error=str(e))
 
@@ -146,10 +171,7 @@ class AlpacaAdapter(DataAdapter):
                 bid=float(quote.bid_price),
                 ask=float(quote.ask_price),
             )
-            try:
-                self._tick_queue.put_nowait(tick)
-            except asyncio.QueueFull:
-                pass
+            self._emit_tick(tick)
         except Exception as e:
             logger.error("alpaca_quote_handler_error", error=str(e))
 
@@ -202,28 +224,73 @@ class AlpacaAdapter(DataAdapter):
         self._symbols = [s for s in self._symbols if s.symbol not in remove_set]
         logger.info("alpaca_removed_symbols", symbols=to_remove)
 
+    def _on_stream_run_done(self, fut) -> None:
+        """Done-callback for the stream.run() executor task.
+
+        run_in_executor's future resolves on the gateway loop, so this runs
+        there (not the stream's internal loop). Without this callback,
+        stream.run() raising (auth/subscription error) or returning
+        (websocket death) silently stops all tick flow - the getter just
+        keeps timing out with nothing to report.
+        """
+        if fut.cancelled():
+            return
+        exc = fut.exception()
+        if not self._running:
+            return  # normal shutdown
+        self._stream_death_error = (
+            str(exc) if exc else "stream.run() returned unexpectedly"
+        )
+        logger.error("alpaca_stream_died", error=self._stream_death_error)
+        self._enqueue(_STREAM_DEAD)
+
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Stream ticks from Alpaca.
 
         Yields:
             Tick objects as they arrive from Alpaca
+
+        Raises:
+            RuntimeError: If the underlying stream.run() dies (raises or
+                returns). The caller (GatewayService's stream supervisor)
+                retries by calling this again, which rebuilds the stream
+                below since a prior death was recorded.
         """
         if not self._stream:
             raise RuntimeError("Not connected to Alpaca")
 
-        self._running = True
+        if self._stream_dead:
+            # A previous stream.run() died; the old stream object is stopped
+            # for good, so rebuild it before streaming again.
+            logger.warning("alpaca_stream_rebuild", last_error=self._stream_death_error)
+            await self.disconnect()
+            await self.connect()
+            if self._symbols:
+                await self.subscribe(list(self._symbols))
+            self._stream_dead = False
+            self._stream_death_error = None
+            while not self._tick_queue.empty():
+                self._tick_queue.get_nowait()
 
-        loop = asyncio.get_event_loop()
-        stream_task = loop.run_in_executor(None, self._stream.run)
+        self._running = True
+        self._loop = asyncio.get_running_loop()
+
+        stream_task = self._loop.run_in_executor(None, self._stream.run)
+        stream_task.add_done_callback(self._on_stream_run_done)
 
         try:
             while self._running and self._connected:
                 try:
-                    tick = await asyncio.wait_for(
+                    item = await asyncio.wait_for(
                         self._tick_queue.get(),
                         timeout=1.0,
                     )
-                    yield tick
+                    if item is _STREAM_DEAD:
+                        self._stream_dead = True
+                        raise RuntimeError(
+                            f"alpaca stream died: {self._stream_death_error}"
+                        )
+                    yield item
                 except asyncio.TimeoutError:
                     continue
         finally:
