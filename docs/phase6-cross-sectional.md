@@ -135,6 +135,19 @@ pre-reg MUST include a corporate-action guard (e.g. exclude formation
 signals where the overnight gap exceeds a stated threshold, or an explicit
 audited exclusion list of the 13), fixed before any Phase C run.
 
+## Phase B results (2026-07-19)
+
+Pre-registration frozen in [`phase6-preregistration.md`](phase6-preregistration.md)
+(binding). Headline freezes: 3 primary cells = 3 binding tests (F1 single
+cell; F2 primary J=5/H=5 of a 3×3 grid; F3 primary J=63 of {63,126}, skip-5,
+21-day hold, overlapping tranches); entry conventions are implementable (F1
+MOC via `bar1600_close` + MOO exit; F2/F3 next-open entry/exit); costs swept
+{0,2,5,10}bp/side with 5bp binding; corporate-action guard = exclude
+|gap_ret| > 25% within the formation lookback (covers the DD/CORT fake
+crashes); advance = net>0 at 5bp AND gross > matched EW benchmark AND
+positive in ≥(n−1) of n available quarters AND rank-IC |t| ≥ 2 — else kill,
+no cell-switching. Next: Phase C implements and runs the frozen grid on IS.
+
 ## Relation to other tracks
 - Platform track unchanged: live paper validation day (ROADMAP #3) still
   pending; alert channels (C1) queued behind it.
