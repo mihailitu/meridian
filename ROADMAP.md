@@ -3,7 +3,7 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-07-15 (phase 5 underway; data layer re-certified)._
+_Last refreshed: 2026-07-19 (phase 5 merged; phase 6 Phase A landed)._
 
 ## Today
 
@@ -106,9 +106,17 @@ priority order (platform sequencing agreed 2026-07-17):
    2026-07-18 — fail-fast startup, publish failures escalate to the supervisor);
    P2-10 silent Alpaca stream death **done** (iteration 14, 2026-07-18 — thread-safe
    tick handoff, loud death detection + rebuild, tick-staleness watchdog for all
-   adapters). **All four live-robustness P2s are complete** — next is item 2 (merge).
-2. **Merge `phase5-audit-fixes` → main** — the branch is self-contained; later P2 work
-   lands on a fresh branch.
+   adapters). **All four live-robustness P2s are complete.**
+2. **Merge `phase5-audit-fixes` → main** — **done** (merged 2026-07-18; the diagnostics
+   report and phase-6 scope landed directly on main).
+   **Phase 6 Phase A (data foundation) landed 2026-07-19** on branch
+   `phase6-cross-sectional`: `src/axtrade/research/` builds daily bars (DST-correct ET
+   sessions, RTH + auction-close capture), a no-look-ahead per-day eligible universe
+   (~1,350 names/day), and the hygiene + survivorship report (`data/daily/`, untracked).
+   Survivorship/size spread: EW eligible universe −13.4% vs SPY over the full window.
+   One binding finding: spinoffs are unadjusted (DD/Qnity −58.7% fake gap) — Phase B
+   pre-registration must include a corporate-action guard before any Phase C run.
+   Next on this track: **Phase B pre-registration**.
 3. **Live paper validation run** — the stack is integration-tested in-process; the next
    confidence step is running the real services (`scripts/start-all.sh`, mock or Alpaca
    adapter, paper mode) for a market day and checking the dashboard/DB against expectations.

@@ -94,6 +94,47 @@ months, one regime), the OOS is one draw, and survivorship is unquantified
 until Phase A. A clean triple-kill in Phase C/D is a fully acceptable outcome
 and would close strategy research on this dataset with evidence.
 
+## Phase A results (2026-07-19)
+
+Landed as `src/axtrade/research/` (daily-bar builder, eligibility, hygiene +
+survivorship reporting; 18 unit tests). Artifacts in `data/daily/` (untracked,
+~36 MB — covered by `docs/data-backup.md`): `daily_bars.parquet` (541,134
+rows, 1,446 symbols + SPY benchmark), `calendar.txt` (376 trading days,
+2024-08-01 → 2026-01-30), `eligibility.parquet`, `hygiene_report.md`.
+
+Key numbers:
+- **Eligible universe** (63-day trailing window, ≥90% coverage, ≥$5M median
+  RTH dollar volume, 21-day warmup): median 1,347/day, max 1,369 — the floors
+  cut only ~5% of names. Warmup means no eligibility before 2024-09.
+- **Survivorship/size drift**: EW eligible-universe total return +14.0% vs
+  SPY +27.4% over the full period (spread −13.4%; IS year −13.8%, OOS half
+  +1.7%). The naive expectation (survivorship inflates EW) is swamped by the
+  size effect in this window — mega-caps led. The spread conflates
+  survivorship + size and is NOT a clean survivorship estimate; the reason
+  Phase B benchmarks against the **EW eligible universe itself** stands.
+  Returns exclude dividends (split-adjusted-only data) on both legs.
+- **The universe partially includes deaths/births**: 16 symbols have <90%
+  full-period coverage — M&A delistings that ended mid-window (MRO, CTLT,
+  DFS, JNPR, ANSS, PARA, WBA…) and late listings/spinoffs (AMTM, SARO,
+  VSNT…). Coverage-gated eligibility handles both edges without look-ahead.
+- **Sessions are clean**: 5 half-days detected (modal close 13:00 ET), zero
+  zero-volume RTH days, late-open pathologies (601 symbol-days) concentrated
+  in ultra-thin names (GHC) that the liquidity floor excludes anyway. The
+  closing auction lands in the 16:00 ET bar — outside the doc's canonical
+  RTH close — captured as `bar1600_close` (missing on only 0.4% of full
+  symbol-days) so Phase B can pre-register either close definition.
+
+**Data-integrity finding for Phase B (binding)**: split adjustment does not
+cover spinoffs/special dividends. DD 2025-11-03 shows a −58.7% overnight gap
+with flat dollar volume and doubled share volume — the Qnity spinoff, a fake
+crash (holders were made whole). CORT 2025-12-31 (−50.4%, gap-only) is a
+second suspect. Of 13 |cc_ret|>50% symbol-days, all are gap-dominated; most
+are real news, at least one is a corporate action. **F1/F2 are long-loser
+rules and would systematically buy fake spinoff crashes** — the Phase B
+pre-reg MUST include a corporate-action guard (e.g. exclude formation
+signals where the overnight gap exceeds a stated threshold, or an explicit
+audited exclusion list of the 13), fixed before any Phase C run.
+
 ## Relation to other tracks
 - Platform track unchanged: live paper validation day (ROADMAP #3) still
   pending; alert channels (C1) queued behind it.
