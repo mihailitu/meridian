@@ -148,6 +148,63 @@ crashes); advance = net>0 at 5bp AND gross > matched EW benchmark AND
 positive in ≥(n−1) of n available quarters AND rank-IC |t| ≥ 2 — else kill,
 no cell-switching. Next: Phase C implements and runs the frozen grid on IS.
 
+## Phase C results (2026-07-19) — TRIPLE KILL, track closes
+
+Engine landed as `src/axtrade/research/xsect.py` (26 unit tests on synthetic
+frames: signal orientation, guard windows, entry/exit fallbacks, overlap
+accounting, cost arithmetic, NW t-stats, advance-rule truth table,
+no-look-ahead). One frozen IS run (6s wall clock), full report at
+`data/research/is_report.md` (untracked). All 1,195 unit tests pass.
+
+**Verdicts (primary cells, binding rule §8 of the pre-reg):**
+
+| Family | net@5bp | gross vs EW bench | quarters | IC (NW t) | verdict |
+|---|---|---|---|---|---|
+| F1 overnight reversal | **−4.2% FAIL** | +20.6% vs +5.6% pass | 3/4 pass | +0.037 (t=+3.1) pass | **KILL** |
+| F2 reversal J5/H5 | +6.4% pass | +11.4% vs +0.7% pass | 3/4 pass | **+0.013 (t=+0.8) FAIL** | **KILL** |
+| F3 momentum J63 | **−9.4% FAIL** | −8.5% vs −5.4% **FAIL** | 2/3 pass | **−0.044 (t=−1.1) FAIL** | **KILL** |
+
+**What the data actually said:**
+- **F1 is a real signal that costs eat.** IC t=+3.1, monotone deciles, gross
+  +20.6% over the IS year vs the EW-universe overnight drift of +5.6% — the
+  ranking genuinely selects. But the construction trades 2 sides/day
+  (~8.5bp/day gross vs a 10bp/day cost floor at the binding 5bp/side): net
+  −4.2%. At 2bp/side it made +10.0%; the pre-registered gate was 5bp, and
+  5bp is the honest number for MOC+MOO across ~135 names reaching down to
+  $5M/day liquidity. Same shape as the 1m-family finding, one level up:
+  signal real, gross-per-trade under the cost floor.
+- **F2 is F1's echo, too weak to trust.** Positive net at the primary cell
+  (+6.4%) but the signal itself doesn't clear sanity (IC t≈0.8 across the
+  whole 3×3 grid, best cell t=1.6). The grid's positive cells are
+  low-double-digit net returns riding a −15%-in-one-quarter drawdown
+  profile. The rule killed it for exactly the pre-registered reason: a net
+  P&L without a statistically detectable signal is selection noise.
+- **F3 momentum is inverted in this window.** Long winners lost on every
+  metric (J63 deciles: bottom +61bp/hold, top −112bp/hold; J126 same
+  shape). 2024-11→2025-07 was a reversal regime (tariff crash + violent
+  bounce); 3–6-month winners were exactly what mean-reverted. A one-regime
+  18-month window cannot rehabilitate momentum, and the pre-reg forbids
+  flipping the sign post-hoc.
+- Consistent cross-family picture: every long-side portfolio craters in the
+  2025-02→05 quarter and recovers after — the April-2025 whipsaw dominates
+  the IS year. That is the "18 months is one macro regime" caveat from the
+  scope doc made concrete.
+
+**Track closure (per §D of this doc and §8 of the pre-reg):** no family
+advances; the OOS half-year (2025-08→2026-02) stays untouched — usable as
+virgin OOS by any future pre-registered cycle. Honest residuals: (1) F1's
+overnight-reversal signal is real at this universe scale and would clear a
+2bp cost world or a lower-turnover construction — either requires a NEW
+pre-registered cycle, ideally on extended/point-in-time data, not a re-cut
+of this one; (2) all numbers exclude dividends and ride current-membership
+survivorship (quantified in Phase A); (3) F3's kill is regime-specific
+evidence, not a theorem about momentum.
+
+Strategy research on this dataset is now closed with evidence: the 1m
+intraday family (2026-07-18 diagnostics) and the daily cross-sectional
+family (this run) both die honestly. The platform track (live paper
+validation, alert channels) is what remains.
+
 ## Relation to other tracks
 - Platform track unchanged: live paper validation day (ROADMAP #3) still
   pending; alert channels (C1) queued behind it.

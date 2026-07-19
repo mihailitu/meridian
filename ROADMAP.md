@@ -3,7 +3,7 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-07-19 (phase 5 merged; phase 6 Phase A landed)._
+_Last refreshed: 2026-07-19 (phase 6 complete: pre-registered triple kill; strategy research closed, platform track remains)._
 
 ## Today
 
@@ -116,7 +116,17 @@ priority order (platform sequencing agreed 2026-07-17):
    Survivorship/size spread: EW eligible universe −13.4% vs SPY over the full window.
    One binding finding: spinoffs are unadjusted (DD/Qnity −58.7% fake gap) — Phase B
    pre-registration must include a corporate-action guard before any Phase C run.
-   Next on this track: **Phase B pre-registration**.
+   **Phases B+C done 2026-07-19, track CLOSED**: binding pre-registration
+   ([`docs/phase6-preregistration.md`](docs/phase6-preregistration.md)) committed first,
+   then one frozen IS run of all three families (`src/axtrade/research/xsect.py`) →
+   **triple kill** by the pre-registered rule. F1 overnight reversal: real signal
+   (IC t=+3.1, gross +20.6%) destroyed by the 5bp/side cost floor at 2-sides/day
+   turnover (net −4.2%). F2 short-term reversal: positive net at the primary cell but
+   no statistically detectable signal (IC t=0.8) — selection noise by rule. F3
+   momentum: inverted in this window (winners −112bp/hold, losers +61bp). No OOS shot;
+   the 2025-08→2026-02 half stays virgin for any future pre-registered cycle. Full
+   detail in [`docs/phase6-cross-sectional.md`](docs/phase6-cross-sectional.md)
+   (Phase C results). Strategy research on this dataset is closed with evidence.
 3. **Live paper validation run** — the stack is integration-tested in-process; the next
    confidence step is running the real services (`scripts/start-all.sh`, mock or Alpaca
    adapter, paper mode) for a market day and checking the dashboard/DB against expectations.
