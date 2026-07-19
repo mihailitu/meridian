@@ -2,6 +2,7 @@
 
 import asyncio
 import inspect
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Awaitable, Callable, Optional, Union
@@ -107,7 +108,16 @@ class OrderManager:
                 max_volume_participation=self.config.oms.max_volume_participation,
             )
         else:
-            self._broker = IBKRBroker(self.config.gateway.ibkr)
+            # Order connection uses its own clientId (D1): gateway and
+            # strategy-runner are separate processes both holding live IB
+            # API connections, and IBKR rejects a second connection reusing
+            # the same clientId as an existing one.
+            ibkr_config = replace(
+                self.config.gateway.ibkr, client_id=self.config.oms.ibkr_client_id
+            )
+            self._broker = IBKRBroker(
+                ibkr_config, allow_live=self.config.oms.ibkr_allow_live
+            )
 
         self._broker.set_fill_callback(self._on_broker_fill)
         self._broker.set_terminal_callback(self._on_broker_terminal)

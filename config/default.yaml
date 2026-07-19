@@ -9,6 +9,7 @@ gateway:
     host: "127.0.0.1"
     port: 7497
     client_id: 1
+    market_data_type: "delayed"  # live requires paid market-data subscriptions
 
   alpaca:
     api_key: ""  # Use ALPACA_API_KEY env var
@@ -77,6 +78,8 @@ oms:
   max_positions: 20
   # Reject paper orders larger than this fraction of the symbol's last bar volume (0 = disabled). Audit C3.
   max_volume_participation: 0.0
+  ibkr_client_id: 2  # order connection must not share the gateway's client_id 1
+  ibkr_allow_live: false  # refuse live ports 7496/4001 unless explicitly enabled
   commission:
     per_share: 0.005    # IBKR Pro Fixed: $0.005/share
     minimum: 1.00       # Min $1.00 per order

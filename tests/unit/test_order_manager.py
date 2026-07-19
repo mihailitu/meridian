@@ -12,7 +12,14 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from axtrade.common import Config, DatabaseConfig, OMSConfig, RedisConfig, RiskConfig
+from axtrade.common import (
+    Config,
+    DatabaseConfig,
+    IBKRConfig,
+    OMSConfig,
+    RedisConfig,
+    RiskConfig,
+)
 from axtrade.oms.broker import VolumeCapExceededError
 from axtrade.oms.manager import OrderManager, OrderRejectedError
 from axtrade.oms.risk import RiskCheckResult
@@ -890,6 +897,75 @@ class TestOrderManager:
     def test_risk_manager_property_none(self, manager: OrderManager) -> None:
         """Test risk_manager property returns None before connect."""
         assert manager.risk_manager is None
+
+
+class TestOrderManagerIBKRBrokerConstruction:
+    """Tests for OrderManager wiring IBKRBroker with its own clientId (D1)
+    and the live-port allow flag (D3), rather than handing IBKRBroker the
+    gateway's IBKRConfig verbatim -- gateway and order manager are separate
+    processes and IBKR rejects two connections sharing a clientId."""
+
+    @pytest.fixture
+    def mock_config(self) -> Config:
+        """Paper mode off so OrderManager.connect() selects IBKRBroker."""
+        config = Config()
+        config.redis = RedisConfig(host="localhost", port=6379)
+        config.database = DatabaseConfig()
+        config.gateway.ibkr = IBKRConfig(host="127.0.0.1", port=7497, client_id=1)
+        config.oms = OMSConfig(
+            paper_mode=False,
+            ibkr_client_id=2,
+            ibkr_allow_live=False,
+            risk=RiskConfig(),
+        )
+        return config
+
+    @pytest.fixture
+    def mock_pool(self) -> MagicMock:
+        pool = MagicMock()
+        pool.acquire = MagicMock()
+        return pool
+
+    @pytest.fixture
+    def manager(self, mock_config: Config, mock_pool: MagicMock) -> OrderManager:
+        return OrderManager(mock_config, mock_pool)
+
+    async def test_broker_gets_overridden_client_id(
+        self, manager: OrderManager, mock_config: Config
+    ) -> None:
+        mock_redis = AsyncMock()
+        mock_broker = AsyncMock()
+
+        with patch("axtrade.oms.manager.redis.Redis", return_value=mock_redis):
+            with patch(
+                "axtrade.oms.manager.IBKRBroker", return_value=mock_broker
+            ) as mock_ibkr_broker_cls:
+                await manager.connect()
+
+        mock_ibkr_broker_cls.assert_called_once()
+        call_args, call_kwargs = mock_ibkr_broker_cls.call_args
+        broker_config = call_args[0]
+
+        assert broker_config.client_id == 2
+        assert call_kwargs["allow_live"] is False
+        # The gateway's own IBKRConfig must be untouched by the override.
+        assert mock_config.gateway.ibkr.client_id == 1
+
+    async def test_allow_live_flag_passed_through(
+        self, manager: OrderManager, mock_config: Config
+    ) -> None:
+        mock_config.oms.ibkr_allow_live = True
+        mock_redis = AsyncMock()
+        mock_broker = AsyncMock()
+
+        with patch("axtrade.oms.manager.redis.Redis", return_value=mock_redis):
+            with patch(
+                "axtrade.oms.manager.IBKRBroker", return_value=mock_broker
+            ) as mock_ibkr_broker_cls:
+                await manager.connect()
+
+        _, call_kwargs = mock_ibkr_broker_cls.call_args
+        assert call_kwargs["allow_live"] is True
 
 
 class _RacyOrderRepo:

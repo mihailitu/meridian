@@ -17,6 +17,11 @@ class IBKRAdapter(DataAdapter):
     Requires TWS or IB Gateway to be running and accepting connections.
     """
 
+    # reqMarketDataType argument: 1 = live streaming, 3 = delayed (15-min).
+    # config.market_data_type is validated to one of these keys at load time
+    # (IBKRConfig.__post_init__).
+    _MARKET_DATA_TYPE = {"live": 1, "delayed": 3}
+
     def __init__(self, config: IBKRConfig):
         """Initialize IBKR adapter.
 
@@ -51,6 +56,15 @@ class IBKRAdapter(DataAdapter):
                 "connected_to_ibkr",
                 host=self.config.host,
                 port=self.config.port,
+            )
+
+            # A fresh paper account has no paid market-data subscriptions;
+            # live streaming data (the ib_insync default) errors with code
+            # 354 without one. Default is delayed (D2).
+            self._ib.reqMarketDataType(self._MARKET_DATA_TYPE[self.config.market_data_type])
+            logger.info(
+                "market_data_type_set",
+                market_data_type=self.config.market_data_type,
             )
         except Exception as e:
             logger.error("ibkr_connection_failed", error=str(e))

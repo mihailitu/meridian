@@ -2,9 +2,12 @@
 
 # Start all axtrade services in background with logging
 # Each service logs to its own file in logs/ with daily rotation
+#
+# Usage: start-all.sh [adapter]   (mock | ibkr | alpaca | yahoo; default alpaca)
 
 set -e
 
+ADAPTER="${1:-alpaca}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$PROJECT_DIR/logs"
 VENV="$PROJECT_DIR/.venv/bin/python"
@@ -23,8 +26,8 @@ if ! docker compose -f "$PROJECT_DIR/docker-compose.yml" ps --status running | g
 fi
 
 # Start Gateway (logs to logs/gateway.log with daily rotation)
-echo "Starting Gateway..."
-$VENV -m axtrade.gateway --adapter alpaca >> "$LOG_DIR/gateway.log" 2>&1 &
+echo "Starting Gateway (adapter: $ADAPTER)..."
+$VENV -m axtrade.gateway --adapter "$ADAPTER" >> "$LOG_DIR/gateway.log" 2>&1 &
 echo $! > "$LOG_DIR/gateway.pid"
 echo "  PID: $(cat $LOG_DIR/gateway.pid)"
 

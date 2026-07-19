@@ -1,9 +1,11 @@
 """Unit tests for OMS broker implementations."""
 
 import asyncio
+import sys
+import types
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -628,3 +630,70 @@ class TestIBKRBrokerCancelOrder:
         # broker._ib is None until connect() runs.
         result = await broker.cancel_order("7")
         assert result is False
+
+
+class _FakeConnectIB:
+    """Minimal fake ib_insync.IB for exercising IBKRBroker.connect() (D3).
+
+    ib_insync can't actually be imported in this environment (eventkit's
+    module-level asyncio.get_event_loop() call is incompatible with the
+    installed Python), so connect()'s local `from ib_insync import IB` is
+    redirected via sys.modules rather than patched directly.
+    """
+
+    def __init__(self):
+        self.connect_kwargs: dict | None = None
+        self.orderStatusEvent = MagicMock()
+        self.execDetailsEvent = MagicMock()
+
+    async def connectAsync(self, host, port, clientId):
+        self.connect_kwargs = {"host": host, "port": port, "clientId": clientId}
+
+
+def _install_fake_ib_insync(monkeypatch, fake_ib_instance) -> None:
+    """Install a fake `ib_insync` module so `from ib_insync import IB` inside
+    connect() resolves to a stand-in instead of the real (unimportable)
+    package."""
+    fake_module = types.ModuleType("ib_insync")
+    fake_module.IB = lambda: fake_ib_instance
+    monkeypatch.setitem(sys.modules, "ib_insync", fake_module)
+
+
+class TestIBKRBrokerLivePortGuard:
+    """Tests for IBKRBroker.connect() refusing live ports (7496 TWS / 4001
+    IB Gateway) unless oms.ibkr_allow_live is explicitly set (D3)."""
+
+    @pytest.mark.parametrize("port", [7496, 4001])
+    async def test_live_port_refused_by_default(self, port: int) -> None:
+        broker = IBKRBroker(IBKRConfig(port=port))
+        assert broker.allow_live is False
+
+        with pytest.raises(RuntimeError, match=str(port)):
+            await broker.connect()
+
+        # Refused before ever touching ib_insync.
+        assert broker._ib is None
+
+    @pytest.mark.parametrize("port", [7496, 4001])
+    async def test_live_port_allowed_when_flag_set(
+        self, port: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ib = _FakeConnectIB()
+        _install_fake_ib_insync(monkeypatch, fake_ib)
+
+        broker = IBKRBroker(IBKRConfig(port=port), allow_live=True)
+        await broker.connect()
+
+        assert fake_ib.connect_kwargs["port"] == port
+
+    @pytest.mark.parametrize("port", [7497, 4002])
+    async def test_paper_ports_not_blocked_by_guard(
+        self, port: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        fake_ib = _FakeConnectIB()
+        _install_fake_ib_insync(monkeypatch, fake_ib)
+
+        broker = IBKRBroker(IBKRConfig(port=port), allow_live=False)
+        await broker.connect()
+
+        assert fake_ib.connect_kwargs["port"] == port

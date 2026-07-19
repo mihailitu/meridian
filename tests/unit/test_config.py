@@ -49,13 +49,22 @@ class TestIBKRConfig:
         assert config.host == "127.0.0.1"
         assert config.port == 7497
         assert config.client_id == 1
+        assert config.market_data_type == "delayed"
 
     def test_custom_values(self) -> None:
         """Test custom values."""
-        config = IBKRConfig(host="192.168.1.100", port=4001, client_id=5)
+        config = IBKRConfig(
+            host="192.168.1.100", port=4001, client_id=5, market_data_type="live"
+        )
         assert config.host == "192.168.1.100"
         assert config.port == 4001
         assert config.client_id == 5
+        assert config.market_data_type == "live"
+
+    def test_invalid_market_data_type_raises(self) -> None:
+        """Test D2: invalid market_data_type is rejected at construction."""
+        with pytest.raises(ValueError, match="market_data_type"):
+            IBKRConfig(market_data_type="realtime")
 
 
 class TestGatewayConfig:
@@ -154,6 +163,8 @@ class TestOMSConfig:
         config = OMSConfig()
         assert config.paper_mode is True
         assert config.slippage_bps == 10
+        assert config.ibkr_client_id == 2
+        assert config.ibkr_allow_live is False
         assert isinstance(config.risk, RiskConfig)
 
 
@@ -437,6 +448,7 @@ gateway:
     host: 192.168.1.50
     port: 4001
     client_id: 10
+    market_data_type: live
 """
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", delete=False
@@ -451,6 +463,75 @@ gateway:
             assert config.gateway.ibkr.host == "192.168.1.50"
             assert config.gateway.ibkr.port == 4001
             assert config.gateway.ibkr.client_id == 10
+            assert config.gateway.ibkr.market_data_type == "live"
+        finally:
+            temp_path.unlink()
+
+    def test_load_ibkr_market_data_type_default(self) -> None:
+        """Test D2: gateway.ibkr.market_data_type defaults to delayed."""
+        yaml_content = """
+gateway:
+  adapter: ibkr
+  ibkr:
+    host: 192.168.1.50
+    port: 4001
+    client_id: 10
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = Path(f.name)
+
+        try:
+            config = load_config(temp_path)
+            assert config.gateway.ibkr.market_data_type == "delayed"
+        finally:
+            temp_path.unlink()
+
+    def test_load_oms_ibkr_settings(self) -> None:
+        """Test D1/D3: oms.ibkr_client_id / oms.ibkr_allow_live round-trip."""
+        yaml_content = """
+gateway:
+  adapter: ibkr
+
+oms:
+  paper_mode: false
+  ibkr_client_id: 7
+  ibkr_allow_live: true
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = Path(f.name)
+
+        try:
+            config = load_config(temp_path)
+            assert config.oms.ibkr_client_id == 7
+            assert config.oms.ibkr_allow_live is True
+        finally:
+            temp_path.unlink()
+
+    def test_load_oms_ibkr_settings_defaults(self) -> None:
+        """Test D1/D3: oms.ibkr_client_id / oms.ibkr_allow_live default when omitted."""
+        yaml_content = """
+gateway:
+  adapter: mock
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = Path(f.name)
+
+        try:
+            config = load_config(temp_path)
+            assert config.oms.ibkr_client_id == 2
+            assert config.oms.ibkr_allow_live is False
         finally:
             temp_path.unlink()
 

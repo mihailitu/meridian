@@ -30,6 +30,17 @@ class IBKRConfig:
     host: str = "127.0.0.1"
     port: int = 7497
     client_id: int = 1
+    # "live" | "delayed" -> reqMarketDataType(1) / reqMarketDataType(3).
+    # Default delayed: a fresh paper account has no paid market-data
+    # subscriptions, and live streaming data errors (code 354) without one.
+    market_data_type: str = "delayed"
+
+    def __post_init__(self) -> None:
+        if self.market_data_type not in ("live", "delayed"):
+            raise ValueError(
+                f"ibkr.market_data_type must be 'live' or 'delayed', "
+                f"got {self.market_data_type!r}"
+            )
 
 
 @dataclass
@@ -161,6 +172,15 @@ class OMSConfig:
     # When > 0, the PaperBroker rejects orders larger than this fraction of
     # the symbol's last known bar volume (0 = disabled). Audit C3.
     max_volume_participation: float = 0.0
+    # Order connection's IBKR clientId. Must differ from gateway.ibkr.client_id
+    # (1): gateway and strategy-runner are separate processes, both holding
+    # live IB API connections, and IBKR rejects a second connection reusing
+    # the same clientId. See docs/ibkr-connection-design.md D1.
+    ibkr_client_id: int = 2
+    # Refuses IBKRBroker.connect() on live ports (TWS 7496 / IB Gateway 4001)
+    # unless explicitly set. Live (real-money) trading is out of scope until
+    # a strategy earns it. See docs/ibkr-connection-design.md D3.
+    ibkr_allow_live: bool = False
     risk: RiskConfig = field(default_factory=RiskConfig)
     commission: CommissionConfig = field(default_factory=CommissionConfig)
 
@@ -287,6 +307,7 @@ def load_config(path: Optional[Path] = None) -> Config:
                 host=ibkr_data.get("host", "127.0.0.1"),
                 port=ibkr_data.get("port", 7497),
                 client_id=ibkr_data.get("client_id", 1),
+                market_data_type=ibkr_data.get("market_data_type", "delayed"),
             ),
             alpaca=AlpacaConfig(
                 api_key=alpaca_data.get("api_key", ""),
@@ -342,6 +363,8 @@ def load_config(path: Optional[Path] = None) -> Config:
             slippage_bps=oms_data.get("slippage_bps", 10),
             max_positions=oms_data.get("max_positions", 20),
             max_volume_participation=oms_data.get("max_volume_participation", 0.0),
+            ibkr_client_id=oms_data.get("ibkr_client_id", 2),
+            ibkr_allow_live=oms_data.get("ibkr_allow_live", False),
             risk=RiskConfig(
                 max_position_size=oms_data.get("risk", {}).get("max_position_size", 1000),
                 max_position_value=oms_data.get("risk", {}).get("max_position_value", 50000.0),

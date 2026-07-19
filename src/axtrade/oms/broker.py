@@ -434,13 +434,21 @@ class PaperBroker(BrokerProtocol):
 class IBKRBroker(BrokerProtocol):
     """Interactive Brokers order execution via ib_insync."""
 
-    def __init__(self, config: IBKRConfig):
+    # IBKR distinguishes paper vs live ONLY by port: TWS 7497 paper / 7496
+    # live, IB Gateway 4002 paper / 4001 live. Live (real-money) trading is
+    # out of scope until a strategy earns it (docs/ibkr-connection-design.md D3).
+    _LIVE_PORTS = frozenset({7496, 4001})
+
+    def __init__(self, config: IBKRConfig, allow_live: bool = False):
         """Initialize IBKR broker.
 
         Args:
             config: IBKR connection configuration
+            allow_live: When False (default), connect() refuses live ports
+                (7496/4001). Set from oms.ibkr_allow_live.
         """
         self.config = config
+        self.allow_live = allow_live
         self.logger = get_logger("ibkr_broker")
 
         self._ib: Optional["IB"] = None
@@ -456,6 +464,13 @@ class IBKRBroker(BrokerProtocol):
 
     async def connect(self) -> None:
         """Connect to TWS/Gateway."""
+        if self.config.port in self._LIVE_PORTS and not self.allow_live:
+            raise RuntimeError(
+                f"Refusing to connect IBKRBroker to live port {self.config.port} "
+                "(7496 TWS / 4001 IB Gateway); set oms.ibkr_allow_live: true to "
+                "enable live (real-money) trading."
+            )
+
         from ib_insync import IB
 
         self._ib = IB()

@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+import sys
+import types
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -335,6 +337,59 @@ class TestIBKRAdapterDynamicSymbols:
 
         assert fake.cancel_mkt_data_calls == []
         assert "AAPL" in adapter._contracts
+
+
+class _FakeConnectIB:
+    """Minimal fake ib_insync.IB for exercising IBKRAdapter.connect() (D2).
+
+    ib_insync can't actually be imported in this environment (eventkit's
+    module-level asyncio.get_event_loop() call is incompatible with the
+    installed Python), so IBKRAdapter.connect()'s local `from ib_insync
+    import IB` is redirected via sys.modules rather than patched directly.
+    """
+
+    def __init__(self):
+        self.connect_kwargs: dict | None = None
+        self.market_data_type_calls: list[int] = []
+
+    async def connectAsync(self, host, port, clientId):
+        self.connect_kwargs = {"host": host, "port": port, "clientId": clientId}
+
+    def reqMarketDataType(self, market_data_type: int) -> None:
+        self.market_data_type_calls.append(market_data_type)
+
+
+def _install_fake_ib_insync(monkeypatch, fake_ib_instance) -> None:
+    """Install a fake `ib_insync` module so `from ib_insync import IB` inside
+    connect() resolves to a stand-in instead of the real (unimportable)
+    package."""
+    fake_module = types.ModuleType("ib_insync")
+    fake_module.IB = lambda: fake_ib_instance
+    monkeypatch.setitem(sys.modules, "ib_insync", fake_module)
+
+
+class TestIBKRAdapterConnectMarketDataType:
+    """Tests for IBKRAdapter.connect() requesting the configured market data
+    type (D2): delayed (reqMarketDataType(3)) by default, live (1) when
+    gateway.ibkr.market_data_type is set to "live"."""
+
+    async def test_connect_requests_delayed_by_default(self, monkeypatch) -> None:
+        fake_ib = _FakeConnectIB()
+        _install_fake_ib_insync(monkeypatch, fake_ib)
+
+        adapter = IBKRAdapter(IBKRConfig())
+        await adapter.connect()
+
+        assert fake_ib.market_data_type_calls == [3]
+
+    async def test_connect_requests_live_when_configured(self, monkeypatch) -> None:
+        fake_ib = _FakeConnectIB()
+        _install_fake_ib_insync(monkeypatch, fake_ib)
+
+        adapter = IBKRAdapter(IBKRConfig(market_data_type="live"))
+        await adapter.connect()
+
+        assert fake_ib.market_data_type_calls == [1]
 
 
 class TestGatewayServiceControlCommandReachesIBKRAdapter:
