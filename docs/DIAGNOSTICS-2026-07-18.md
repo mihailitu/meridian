@@ -128,8 +128,24 @@ band also contains winners. The IS-year close-to-open reversal on these mega-cap
 negative-drift signal; the certified OOS PF 2.85 (25 trades) and the isolated OOS
 breakeven were regime luck. Retired.
 
-### discovery_momentum — (pending overnight regeneration)
-IS leg running since 2026-07-18 15:45 (~12h), OOS follows (~6h). To be filled in.
+### discovery_momentum — churn on scanned symbols, same long-hold decay (final, 2026-07-19)
+Isolated regeneration (discovery on): IS 11,337 trips across 218 discovered symbols,
+net −$99.2k, PF 0.42, 45 trades/day; OOS 6,493 trips / 158 symbols, −$66.7k, PF 0.50
+(certified PF 0.40/0.44 shape reproduced; certified runs traded ~26/day because the $1k
+daily-loss halt truncated days). Commission alone is 20–23% of the net loss — the
+highest-churn strategy in the book. Loss anatomy mirrors the family: the 2h–1d hold
+bucket is −$70k IS / −$57k OOS at 29–35% WR; breadth (218 names) does not change the
+economics. No symbol concentration (worst single name ~15% of IS losses).
+
+One nuance, stated with care: the 5–30m bucket is net-positive **in both legs** (+$5.4k
+IS at 50% WR, +$8.0k OOS at 58% WR) — and those nets already carry the platform's 10bps
+slippage and commission. This is **outcome-conditioned** (hold time is an exit-path
+result, not a decision variable), so it is *not* an achievable strategy claim — a
+time-capped exit would reshape all buckets, not harvest this one. It is recorded as the
+only IS/OOS-consistent positive slice found anywhere in the diagnostics, i.e. a
+hypothesis ("momentum-scanner entries + strict time-capped exits") that would need its
+own pre-registered pass — with the standing 3–5bp/trade cost floor making success
+unlikely at 1m horizon. The certified DEAD verdict is earned and stands.
 
 ---
 
