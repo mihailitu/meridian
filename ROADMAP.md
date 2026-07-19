@@ -132,6 +132,14 @@ priority order (platform sequencing agreed 2026-07-17):
    adapter, paper mode) for a market day and checking the dashboard/DB against expectations.
    Cheap, and exercises the exact `make run*` path. The dashboard numbers being checked are
    real as of P1-11, and a tripped daily-loss halt can no longer trap open positions (P1-12).
+   **Part 1 done 2026-07-19** (mock full-stack shakedown, ~70 min, PASS — pipeline exact,
+   zero errors; 3 findings incl. `/api/gateway/status` reporting config not runtime and a
+   3h-off discovery timestamp; see
+   [`docs/live-validation-2026-07-19.md`](docs/live-validation-2026-07-19.md)). Part 2
+   (Alpaca market-day session, exercises order path + bridge) pending next US session.
+   IBKR track scoped + D1-D3 safety fixes landed the same day
+   ([`docs/ibkr-connection-design.md`](docs/ibkr-connection-design.md)); S0 smoke gated on
+   paper-account approval.
 4. **Decide the fate of the harness-realism P2s (P2-1..P2-6)** — they only improve future
    strategy evaluations, which the Option B pivot concluded. Park with a written note or do
    them; explicit decision after the live-paper run, not default work.
