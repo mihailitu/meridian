@@ -156,8 +156,13 @@ validation — pin it as part of the S5/unattended hardening, not before.
 ## Implementation status
 
 D1–D3 + the S0 smoke script + unit tests landed 2026-07-19 (1,209 unit
-tests green). D4 (disconnectedEvent hook) and D5 (subscription cap) are
-still open — needed before S2 runs long, not before S0/S1.
+tests green). D4 (disconnectedEvent hook, rebuild-on-redial in
+`stream_ticks`, broker reconnect-on-next-submit with the D3 guard
+re-applied) and D5 (`gateway.ibkr.max_subscriptions: 90`, log-and-skip in
+`add_symbols`) landed 2026-08-04 on branch `ibkr-d4-d5` (1,221 unit tests
+green). Note: no cross-loop handoff needed for IBKR, unlike Alpaca P2-10 —
+ib_insync fires `disconnectedEvent` on the same asyncio loop
+`connectAsync()` ran on.
 
 **S0 gate PASSED 2026-08-04** against classic TWS 10.49 (`~/tws`), paper
 account DUQ887385, all 7 checks green (both clientIds concurrent, delayed

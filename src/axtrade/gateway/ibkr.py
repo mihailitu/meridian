@@ -101,6 +101,9 @@ class IBKRAdapter(DataAdapter):
             self._ib = None
         self._connected = False
         self._last_cum_volume.clear()
+        # Drop dead subscriptions so a post-reconnect requalification failure
+        # can't leave a stale entry that add_symbols would skip forever.
+        self._contracts.clear()
         logger.info("disconnected_from_ibkr")
 
     async def _subscribe_symbol(self, symbol_config: SymbolConfig) -> bool:
