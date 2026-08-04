@@ -159,6 +159,17 @@ D1–D3 + the S0 smoke script + unit tests landed 2026-07-19 (1,209 unit
 tests green). D4 (disconnectedEvent hook) and D5 (subscription cap) are
 still open — needed before S2 runs long, not before S0/S1.
 
+**S0 gate PASSED 2026-08-04** against classic TWS 10.49 (`~/tws`), paper
+account DUQ887385, all 7 checks green (both clientIds concurrent, delayed
+data type, AAPL qualified, DU account, clean disconnect; snapshot NaN —
+market closed, allowed). Setup findings along the way: IBKR Desktop (ntws)
+does NOT support the TWS API — classic TWS was installed for the API host;
+and the live-username+Paper-toggle login is rejected with
+MULTIPLE_PAPER_ERROR when several paper users exist — TWS needs the
+dedicated paper username (from Client Portal, live login → Settings →
+Account Settings → Paper Trading Account). Next stage: S1 (data path,
+market hours).
+
 ## Open questions for the user
 
 1. Does an IBKR account with paper trading exist, and is TWS installed on
