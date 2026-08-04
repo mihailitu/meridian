@@ -100,8 +100,9 @@ timestamp at subscribe time and on every real trade tick (quote-only
 updates don't count - `last` being absent is exactly what made the trap
 invisible). `stream_ticks()`'s consume loop scans it at most once every 30s
 and calls `cancelMktData`/`reqMktData` for anything stale, bumping its
-timestamp regardless of outcome so a still-silent symbol is retried once
-per period rather than every scan. The scan is deliberately unconditional
+timestamp on success so a still-silent symbol is retried once per period
+rather than every scan (a failed resubscribe is retried on the next 30s
+scan). The scan is deliberately unconditional
 on market hours - outside RTH everything is silent and gets resubscribed
 once per period, which is cheap and also covers the all-symbols-stuck case.
 
