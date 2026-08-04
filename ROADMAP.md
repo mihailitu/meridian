@@ -3,9 +3,12 @@
 > Where the project actually is, what's next, and what's deferred.
 > For deeper detail on any item, follow the link to the audit or work doc.
 
-_Last refreshed: 2026-07-19 (phase 6 complete: pre-registered triple kill; strategy research closed, platform track remains)._
+_Last refreshed: 2026-08-04 (IBKR validation day: S0+S1 PASS, D1–D6 merged; phase 7 drafted — validation close-out + one pre-registered F1 low-turnover retest under a binding stopping rule)._
 
 ## Today
+
+- **Phase 7 is the active plan** ([`docs/phase7-validation-close-and-f1-retest.md`](docs/phase7-validation-close-and-f1-retest.md), drafted 2026-08-04). Track P: root-cause the S1 indicator-warmup anomaly (P-1), hygiene batch (P-2), S3 order-path validation (P-3); S2/S4/S5 parked until something earns unattended runtime. Track R: the one evidence-backed research thread — phase 6's F1 overnight reversal had a real signal (IC t=+3.1, +20.6% gross) killed by turnover costs, not absence of signal — gets a single pre-registered low-turnover retest (design space → binding pre-registration → one frozen IS run, at most one OOS shot on the virgin 2025-08→2026-02 half). **Binding stopping rule: if this cycle dies, strategy research on this dataset closes permanently and the platform is the deliverable.**
+- **IBKR is real (2026-08-04).** Paper account approved (DUQ887385), classic TWS installed (`~/tws`; IBKR Desktop has no TWS API). S0 smoke gate PASSED (concurrent data+order clientIds, delayed data, DU account). S1 data-path gate PASSED on the clean window — 66×1m + 13×5m bars per symbol in 66 minutes across all 5 symbols, DB and consumer group exact, zero errors ([`docs/live-validation-2026-08-04.md`](docs/live-validation-2026-08-04.md), 4 findings). D1–D6 all merged to main same day: clientId split, delayed data type, live-port guard, disconnect detection (adapter raise-and-rebuild + broker reconnect-on-submit), subscription cap, and the D6 silent-symbol watchdog fixing S1's load-bearing finding (delayed-feed subscriptions opened pre-open never start streaming). Suite 1,226 green.
 
 - **Phase 5 (audit fixes) is underway** on branch `phase5-audit-fixes`. A fresh
   whole-project audit ([`docs/AUDIT-2026-07-12.md`](docs/AUDIT-2026-07-12.md)) found that
@@ -136,7 +139,10 @@ priority order (platform sequencing agreed 2026-07-17):
    zero errors; 3 findings incl. `/api/gateway/status` reporting config not runtime and a
    3h-off discovery timestamp; see
    [`docs/live-validation-2026-07-19.md`](docs/live-validation-2026-07-19.md)). Part 2
-   (Alpaca market-day session, exercises order path + bridge) pending next US session.
+   (Alpaca market-day session, exercises order path + bridge) pending next US session —
+   now folded into phase-7 iteration P-3 alongside IBKR S3. The IBKR leg of live
+   validation (S0 smoke + S1 data path) completed 2026-08-04; see the phase-7 plan for
+   what remains.
    IBKR track scoped + D1-D3 safety fixes landed the same day
    ([`docs/ibkr-connection-design.md`](docs/ibkr-connection-design.md)); S0 smoke gated on
    paper-account approval.
