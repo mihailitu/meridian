@@ -483,6 +483,7 @@ class IBKRBroker(BrokerProtocol):
         # Subscribe to order events
         self._ib.orderStatusEvent += self._on_order_status
         self._ib.execDetailsEvent += self._on_execution
+        self._ib.disconnectedEvent += self._on_disconnected
 
         self.logger.info(
             "Connected to IBKR",
@@ -501,10 +502,20 @@ class IBKRBroker(BrokerProtocol):
         if self._ib:
             self._ib.orderStatusEvent -= self._on_order_status
             self._ib.execDetailsEvent -= self._on_execution
+            self._ib.disconnectedEvent -= self._on_disconnected
             self._ib.disconnect()
             self._ib = None
 
         self.logger.info("Disconnected from IBKR")
+
+    def _on_disconnected(self) -> None:
+        """ib_insync fires this when the connection drops - our own
+        disconnect() or TWS/Gateway-initiated (daily logoff, weekly
+        restart). isConnected() already reflects the new state (submit_order
+        checks it directly); this just makes the drop visible in logs so the
+        reconnect-on-next-submit path below (D4) has something to log
+        against."""
+        self.logger.warning("ibkr_broker_disconnected")
 
     async def submit_order(self, order: Order) -> str:
         """Submit order to IBKR.
@@ -515,6 +526,16 @@ class IBKRBroker(BrokerProtocol):
         Returns:
             IBKR order ID as string
         """
+        if not self._ib or not self._ib.isConnected():
+            # Connection may have dropped since connect() (TWS daily
+            # logoff, IB Gateway weekly restart - D4) or never succeeded.
+            # Attempt a single reconnect through connect() itself, so the
+            # D3 live-port guard and D1 clientId apply exactly as they did
+            # on the initial connect - there is only one connect() and this
+            # reuses it rather than duplicating the guard.
+            self.logger.warning("ibkr_broker_reconnecting")
+            await self.connect()
+
         if not self._ib or not self._ib.isConnected():
             raise RuntimeError("Not connected to IBKR")
 
