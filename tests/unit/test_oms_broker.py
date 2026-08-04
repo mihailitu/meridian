@@ -645,6 +645,7 @@ class _FakeConnectIB:
         self.connect_kwargs: dict | None = None
         self.orderStatusEvent = MagicMock()
         self.execDetailsEvent = MagicMock()
+        self.disconnectedEvent = MagicMock()
 
     async def connectAsync(self, host, port, clientId):
         self.connect_kwargs = {"host": host, "port": port, "clientId": clientId}
@@ -697,3 +698,144 @@ class TestIBKRBrokerLivePortGuard:
         await broker.connect()
 
         assert fake_ib.connect_kwargs["port"] == port
+
+
+def _install_fake_ib_insync_for_orders(monkeypatch, fake_ib_instance) -> None:
+    """Install a fake `ib_insync` module providing IB/Stock/MarketOrder/
+    LimitOrder - enough for IBKRBroker.submit_order()'s local `from
+    ib_insync import ...` imports to resolve after a mid-submit reconnect
+    (D4), not just connect()'s own import."""
+    fake_module = types.ModuleType("ib_insync")
+    fake_module.IB = lambda: fake_ib_instance
+
+    class _Stock:
+        def __init__(self, symbol, exchange, currency):
+            self.symbol = symbol
+
+    class _MarketOrder:
+        def __init__(self, action, totalQuantity):
+            self.action = action
+            self.totalQuantity = totalQuantity
+
+    class _LimitOrder:
+        def __init__(self, action, totalQuantity, lmtPrice):
+            self.action = action
+            self.totalQuantity = totalQuantity
+            self.lmtPrice = lmtPrice
+
+    fake_module.Stock = _Stock
+    fake_module.MarketOrder = _MarketOrder
+    fake_module.LimitOrder = _LimitOrder
+    monkeypatch.setitem(sys.modules, "ib_insync", fake_module)
+
+
+class _FakeReconnectIB:
+    """Fake ib_insync.IB exercising IBKRBroker's reconnect-on-submit path
+    (D4): starts disconnected, connectAsync() flips it connected,
+    placeOrder() records the call and hands back an incrementing orderId."""
+
+    def __init__(self):
+        self.connect_kwargs: dict | None = None
+        self.orderStatusEvent = MagicMock()
+        self.execDetailsEvent = MagicMock()
+        self.disconnectedEvent = MagicMock()
+        self._connected = False
+        self.placed: list = []
+
+    async def connectAsync(self, host, port, clientId):
+        self.connect_kwargs = {"host": host, "port": port, "clientId": clientId}
+        self._connected = True
+
+    def isConnected(self) -> bool:
+        return self._connected
+
+    def placeOrder(self, contract, order):
+        self.placed.append((contract, order))
+
+        class _IBOrder:
+            orderId = len(self.placed)
+
+        class _Trade:
+            order = _IBOrder()
+
+        return _Trade()
+
+
+class TestIBKRBrokerReconnectOnSubmit:
+    """Tests for IBKRBroker.submit_order's reconnect-on-next-submit (D4):
+    when the connection has dropped, submit_order attempts a reconnect
+    through connect() itself, so D3's live-port guard and D1's clientId
+    apply on every reconnect path exactly as they do on the initial connect.
+    """
+
+    def _order(self) -> Order:
+        return Order(
+            strategy_id="momentum_01",
+            symbol="AAPL",
+            side=OrderSide.BUY,
+            quantity=Decimal("10"),
+        )
+
+    async def test_submit_order_reconnects_when_disconnected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        broker = IBKRBroker(IBKRConfig(port=7497, client_id=2))
+        # Simulate a broker that connected once, then dropped (disconnectedEvent
+        # flips ib_insync's own isConnected() False on the stale IB object).
+        stale_ib = _FakeReconnectIB()
+        broker._ib = stale_ib
+
+        fresh_ib = _FakeReconnectIB()
+        _install_fake_ib_insync_for_orders(monkeypatch, fresh_ib)
+
+        broker_order_id = await broker.submit_order(self._order())
+
+        assert fresh_ib.connect_kwargs == {
+            "host": "127.0.0.1",
+            "port": 7497,
+            "clientId": 2,
+        }
+        assert len(fresh_ib.placed) == 1
+        assert broker._ib is fresh_ib
+        assert broker_order_id == "1"
+
+    async def test_submit_order_reconnect_respects_live_port_guard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        broker = IBKRBroker(IBKRConfig(port=7496, client_id=2), allow_live=False)
+        stale_ib = _FakeReconnectIB()
+        broker._ib = stale_ib
+
+        fresh_ib = _FakeReconnectIB()
+        _install_fake_ib_insync_for_orders(monkeypatch, fresh_ib)
+
+        with pytest.raises(RuntimeError, match="7496"):
+            await broker.submit_order(self._order())
+
+        # The guard fires inside connect() before it ever touches the new
+        # ib_insync module.
+        assert fresh_ib.connect_kwargs is None
+        assert len(fresh_ib.placed) == 0
+
+    async def test_submit_order_already_connected_does_not_reconnect(self) -> None:
+        broker = IBKRBroker(IBKRConfig())
+        connected_ib = _FakeReconnectIB()
+        connected_ib._connected = True
+        broker._ib = connected_ib
+
+        broker_order_id = await broker.submit_order(self._order())
+
+        # No reconnect attempted: connect_kwargs stays unset on the already-
+        # connected instance, and the order was placed on it directly.
+        assert connected_ib.connect_kwargs is None
+        assert len(connected_ib.placed) == 1
+        assert broker_order_id == "1"
+
+
+class TestIBKRBrokerOnDisconnected:
+    """Tests for IBKRBroker's disconnectedEvent hook (D4)."""
+
+    async def test_on_disconnected_does_not_raise(self) -> None:
+        broker = IBKRBroker(IBKRConfig())
+        # Plain sync ib_insync event handler; must be safe to call directly.
+        broker._on_disconnected()

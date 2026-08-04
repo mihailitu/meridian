@@ -34,6 +34,11 @@ class IBKRConfig:
     # Default delayed: a fresh paper account has no paid market-data
     # subscriptions, and live streaming data errors (code 354) without one.
     market_data_type: str = "delayed"
+    # Cap on total concurrent market-data subscriptions (initial config
+    # symbols + dynamic add_symbols, e.g. discovery auto_subscribe). IBKR's
+    # default market-data line limit is ~100; add_symbols logs and skips
+    # past this rather than raising (D5).
+    max_subscriptions: int = 90
 
     def __post_init__(self) -> None:
         if self.market_data_type not in ("live", "delayed"):
@@ -308,6 +313,7 @@ def load_config(path: Optional[Path] = None) -> Config:
                 port=ibkr_data.get("port", 7497),
                 client_id=ibkr_data.get("client_id", 1),
                 market_data_type=ibkr_data.get("market_data_type", "delayed"),
+                max_subscriptions=ibkr_data.get("max_subscriptions", 90),
             ),
             alpaca=AlpacaConfig(
                 api_key=alpaca_data.get("api_key", ""),

@@ -39,6 +39,27 @@ class IBKRAdapter(DataAdapter):
         # track the last observed cumulative value per symbol so we can emit
         # a per-tick delta instead of summing day-volume into every bar.
         self._last_cum_volume: dict[str, float] = {}
+        # Set by _on_disconnected when ib_insync's disconnectedEvent fires
+        # while we're still supposed to be running (TWS daily logoff, IB
+        # Gateway weekly restart) rather than via our own disconnect().
+        # stream_ticks() raises when it sees this so the gateway's
+        # LoopSupervisor treats it as a dead stream and reconnects with
+        # backoff, same as the Alpaca stream-death fix (D4, P2-10). Unlike
+        # alpaca-py's StockDataStream.run() (its own thread + event loop),
+        # ib_insync's socket I/O runs on the same loop connect() was awaited
+        # from, so there is no cross-loop handoff to do here - the handler
+        # can just flip these flags directly.
+        self._disconnected_unexpectedly = False
+
+    def _on_disconnected(self) -> None:
+        """ib_insync fires this whenever the connection drops - our own
+        disconnect() or TWS/Gateway-initiated. Always mark disconnected;
+        only flag it as unexpected (triggering stream_ticks' raise-and-
+        reconnect path) when we weren't already shutting down."""
+        self._connected = False
+        if self._running:
+            logger.warning("ibkr_disconnected_unexpectedly")
+            self._disconnected_unexpectedly = True
 
     async def connect(self) -> None:
         """Connect to TWS/IB Gateway."""
@@ -52,6 +73,7 @@ class IBKRAdapter(DataAdapter):
                 clientId=self.config.client_id,
             )
             self._connected = True
+            self._ib.disconnectedEvent += self._on_disconnected
             logger.info(
                 "connected_to_ibkr",
                 host=self.config.host,
@@ -74,10 +96,14 @@ class IBKRAdapter(DataAdapter):
         """Disconnect from TWS/IB Gateway."""
         self._running = False
         if self._ib:
+            self._ib.disconnectedEvent -= self._on_disconnected
             self._ib.disconnect()
             self._ib = None
         self._connected = False
         self._last_cum_volume.clear()
+        # Drop dead subscriptions so a post-reconnect requalification failure
+        # can't leave a stale entry that add_symbols would skip forever.
+        self._contracts.clear()
         logger.info("disconnected_from_ibkr")
 
     async def _subscribe_symbol(self, symbol_config: SymbolConfig) -> bool:
@@ -134,6 +160,18 @@ class IBKRAdapter(DataAdapter):
         for symbol_config in symbols:
             if symbol_config.symbol in self._contracts:
                 logger.info("symbol_already_subscribed", symbol=symbol_config.symbol)
+                continue
+            # Cap total concurrent subscriptions (initial + dynamic) rather
+            # than raising - discovery auto_subscribe churns through many
+            # candidates and one over-cap symbol shouldn't kill the batch
+            # (D5). Recomputed each iteration since _contracts grows as we go.
+            if len(self._contracts) >= self.config.max_subscriptions:
+                logger.warning(
+                    "max_subscriptions_reached",
+                    symbol=symbol_config.symbol,
+                    max_subscriptions=self.config.max_subscriptions,
+                    current_subscriptions=len(self._contracts),
+                )
                 continue
             added = await self._subscribe_symbol(symbol_config)
             if added:
@@ -225,7 +263,28 @@ class IBKRAdapter(DataAdapter):
 
         Yields:
             Tick objects as they arrive from IBKR
+
+        Raises:
+            RuntimeError: If the connection dropped unexpectedly since the
+                last call (D4). The caller (GatewayService's stream
+                supervisor) retries by calling this again, which rebuilds
+                the connection below since the disconnect was recorded.
         """
+        if self._disconnected_unexpectedly:
+            # TWS/Gateway dropped the connection since the last call (daily
+            # logoff, weekly restart); the gateway's LoopSupervisor is
+            # retrying after backoff. Rebuild before streaming again, same
+            # rebuild-on-redial shape as the Alpaca stream-death fix (P2-10).
+            logger.warning("ibkr_reconnecting_after_disconnect")
+            symbols = list(self._symbols)
+            await self.disconnect()
+            await self.connect()
+            if symbols:
+                await self.subscribe(symbols)
+            self._disconnected_unexpectedly = False
+            while not self._tick_queue.empty():
+                self._tick_queue.get_nowait()
+
         self._running = True
 
         while self._running and self._connected:
@@ -241,6 +300,9 @@ class IBKRAdapter(DataAdapter):
                 # into loop.run_until_complete() from within the running
                 # loop and raise RuntimeError, killing the tick generator.
                 continue
+
+        if self._disconnected_unexpectedly:
+            raise RuntimeError("ibkr connection lost (disconnectedEvent)")
 
     @property
     def connected(self) -> bool:

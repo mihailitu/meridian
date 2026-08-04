@@ -212,6 +212,7 @@ class _FakeIB:
         self.req_mkt_data_calls: list = []
         self.cancel_mkt_data_calls: list = []
         self.pendingTickersEvent = MagicMock()
+        self.disconnectedEvent = MagicMock()
         self.sleep_calls = 0
 
     async def qualifyContractsAsync(self, contract):
@@ -351,6 +352,7 @@ class _FakeConnectIB:
     def __init__(self):
         self.connect_kwargs: dict | None = None
         self.market_data_type_calls: list[int] = []
+        self.disconnectedEvent = MagicMock()
 
     async def connectAsync(self, host, port, clientId):
         self.connect_kwargs = {"host": host, "port": port, "clientId": clientId}
@@ -527,3 +529,172 @@ class TestIBKRAdapterStreamLoop:
         assert ticks == []
         assert call_count == 2
         assert fake.sleep_calls == 0
+
+
+class _FakeReconnectIB:
+    """Fake ib_insync.IB for exercising IBKRAdapter's rebuild-on-redial path
+    (D4): supports connect()/disconnect() but not qualifyContractsAsync, so
+    tests using it keep adapter._symbols empty (resubscribe is a no-op)."""
+
+    def __init__(self):
+        self.connect_kwargs: dict | None = None
+        self.market_data_type_calls: list[int] = []
+        self.disconnect_calls = 0
+        self.pendingTickersEvent = MagicMock()
+        self.disconnectedEvent = MagicMock()
+
+    async def connectAsync(self, host, port, clientId):
+        self.connect_kwargs = {"host": host, "port": port, "clientId": clientId}
+
+    def reqMarketDataType(self, market_data_type: int) -> None:
+        self.market_data_type_calls.append(market_data_type)
+
+    def disconnect(self) -> None:
+        self.disconnect_calls += 1
+
+
+class TestIBKRAdapterDisconnectedEvent:
+    """Tests for IBKRAdapter's disconnectedEvent hook (D4): an unexpected
+    TWS/Gateway-side disconnect must end stream_ticks() (not spin on an
+    empty queue forever) so the gateway's LoopSupervisor reconnects with
+    backoff, and the next stream_ticks() call must rebuild the connection."""
+
+    @pytest.fixture
+    def adapter(self):
+        return IBKRAdapter(IBKRConfig())
+
+    async def test_on_disconnected_marks_disconnected_while_running(self, adapter):
+        adapter._running = True
+        adapter._connected = True
+
+        adapter._on_disconnected()
+
+        assert adapter._connected is False
+        assert adapter._disconnected_unexpectedly is True
+
+    async def test_on_disconnected_during_our_own_shutdown_is_not_unexpected(
+        self, adapter
+    ):
+        """Our own disconnect() sets _running False before calling
+        ib.disconnect() (which fires this same event) - that path must not
+        be flagged as an unexpected disconnect."""
+        adapter._running = False
+        adapter._connected = True
+
+        adapter._on_disconnected()
+
+        assert adapter._connected is False
+        assert adapter._disconnected_unexpectedly is False
+
+    async def test_disconnected_event_ends_stream_ticks_with_raise(self, adapter):
+        """stream_ticks() must raise (not silently return) so the gateway's
+        LoopSupervisor.handle_error backoff path actually fires - a plain
+        return would busy-spin (empty generator, no backoff) on the next
+        immediate retry."""
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+        adapter._running = True
+
+        call_count = 0
+
+        async def fake_wait_for(coro, timeout):
+            nonlocal call_count
+            call_count += 1
+            coro.close()
+            if call_count == 1:
+                adapter._on_disconnected()  # simulate a TWS-side disconnect
+            raise asyncio.TimeoutError()
+
+        with patch(
+            "axtrade.gateway.ibkr.asyncio.wait_for", side_effect=fake_wait_for
+        ):
+            with pytest.raises(RuntimeError, match="ibkr"):
+                _ = [tick async for tick in adapter.stream_ticks()]
+
+        assert adapter._connected is False
+        assert adapter._disconnected_unexpectedly is True
+
+    async def test_stream_ticks_rebuilds_connection_after_disconnect(
+        self, adapter, monkeypatch
+    ):
+        """The call after a raise must rebuild the connection (disconnect/
+        connect/resubscribe) before streaming again, mirroring the Alpaca
+        stream-death rebuild (P2-10)."""
+        old_fake = _FakeReconnectIB()
+        adapter._ib = old_fake
+        adapter._connected = False  # already flipped by the prior disconnectedEvent
+        adapter._running = True
+        adapter._disconnected_unexpectedly = True
+        adapter._symbols = []  # keep resubscribe a no-op; qualify isn't faked here
+
+        new_fake = _FakeReconnectIB()
+        _install_fake_ib_insync(monkeypatch, new_fake)
+
+        call_count = 0
+
+        async def fake_wait_for(coro, timeout):
+            nonlocal call_count
+            call_count += 1
+            coro.close()
+            adapter._running = False
+            raise asyncio.TimeoutError()
+
+        with patch(
+            "axtrade.gateway.ibkr.asyncio.wait_for", side_effect=fake_wait_for
+        ):
+            ticks = [tick async for tick in adapter.stream_ticks()]
+
+        assert ticks == []
+        assert old_fake.disconnect_calls == 1
+        assert adapter._ib is new_fake
+        assert new_fake.connect_kwargs is not None
+        assert adapter._disconnected_unexpectedly is False
+        assert adapter._connected is True
+
+
+class TestIBKRAdapterSubscriptionCap:
+    """Tests for IBKRAdapter.add_symbols respecting gateway.ibkr.max_subscriptions (D5)."""
+
+    async def test_add_symbols_skips_past_cap(self):
+        adapter = IBKRAdapter(IBKRConfig(max_subscriptions=2))
+        fake = _FakeIB(qualify_succeeds=True)
+        adapter._ib = fake
+        adapter._connected = True
+        adapter._contracts = {"AAPL": object(), "MSFT": object()}  # already at cap
+
+        with structlog.testing.capture_logs() as cap_logs:
+            await adapter.add_symbols([SymbolConfig(symbol="TSLA", base_price=250.0)])
+
+        assert "TSLA" not in adapter._contracts
+        assert len(fake.req_mkt_data_calls) == 0
+        events = [entry["event"] for entry in cap_logs]
+        assert "max_subscriptions_reached" in events
+
+    async def test_add_symbols_stops_mid_batch_at_cap(self):
+        adapter = IBKRAdapter(IBKRConfig(max_subscriptions=1))
+        fake = _FakeIB(qualify_succeeds=True)
+        adapter._ib = fake
+        adapter._connected = True
+
+        await adapter.add_symbols(
+            [
+                SymbolConfig(symbol="AAPL", base_price=185.0),
+                SymbolConfig(symbol="MSFT", base_price=420.0),
+            ]
+        )
+
+        assert "AAPL" in adapter._contracts
+        assert "MSFT" not in adapter._contracts
+        assert len(fake.req_mkt_data_calls) == 1
+
+    async def test_add_symbols_under_cap_unaffected(self):
+        adapter = IBKRAdapter(IBKRConfig(max_subscriptions=90))
+        fake = _FakeIB(qualify_succeeds=True)
+        adapter._ib = fake
+        adapter._connected = True
+
+        await adapter.add_symbols([SymbolConfig(symbol="TSLA", base_price=250.0)])
+
+        assert "TSLA" in adapter._contracts
+        assert len(fake.req_mkt_data_calls) == 1
