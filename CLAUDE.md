@@ -60,9 +60,14 @@ python -m axtrade.fulltest oos --is-start 2024-08-01 --is-end 2025-08-01 \
     --oos-start 2025-08-01 --oos-end 2026-02-01 \
     --symbols AAPL MSFT GOOGL AMZN NVDA --capital 100000 \
     --strategy-overrides params.yaml   # optional YAML {strategy_type: {param: value}}
+
+# Phase-6 research data foundation (offline pandas pipeline, not the event loop):
+# builds daily bars, trading calendar, eligibility, and hygiene/survivorship report
+# from the 1m parquet archive. See docs/phase6-cross-sectional.md
+python -m axtrade.research --out data/daily   # --data-dir/--benchmark/--min-dollar-volume/--window/--symbols
 ```
 
-Historical parquet data lives in `data/historical/` (~6.3 GB, S&P 1500 coverage for 2024-08→2025-08 and 2025-08→2026-02); fulltest reports go to `data/fulltest_results/`. Both are untracked (not in `.gitignore`) — never `git add` them.
+Historical parquet data lives in `data/historical/` (~6.3 GB, S&P 1500 coverage for 2024-08→2025-08 and 2025-08→2026-02); fulltest reports go to `data/fulltest_results/`. Other research/diagnostic outputs land in `data/daily/`, `data/diagnostics/`, `data/momentum/`, and `data/research/`. All of these are untracked (not in `.gitignore`) — never `git add` anything under `data/` except the checked-in `sp500.csv`/`sp1500.csv`.
 
 ## Architecture
 
@@ -125,6 +130,7 @@ Each service is runnable as a Python module:
 - `web/ui/`: React frontend (Vite + TypeScript + Tailwind + Recharts)
 - `alerts/`: Alert system with channels, deduplication, and health monitoring
 - `analytics/`: Performance analytics (`metrics`, `drawdown`, `trades`, per-strategy aggregation) shared by backtest, fulltest, and the API
+- `research/`: Phase-6 offline research layer (plain pandas, no asyncio) over the `data/historical/` 1m parquet archive — daily-bar construction, data-driven trading calendar, per-day eligibility, hygiene/survivorship reporting. Runnable via `python -m axtrade.research`. `xsect.py` (`python -m axtrade.research.xsect`) is the cross-sectional rank-portfolio engine implementing `docs/phase6-preregistration.md` — that document is BINDING: its frozen constants must not change without an amendment there
 - `discovery/`: Symbol screening with momentum, volatility, volume, and trend screeners. `DiscoveryRunner` runs periodic background scans via `LoopSupervisor`, optionally feeds discovered symbols to gateway via `GatewayControlPublisher` when `auto_subscribe` is enabled. `SymbolProvider` protocol enables pluggable symbol sources (default: `ConfigSymbolProvider` reads from gateway config)
 
 ### Database
@@ -137,9 +143,11 @@ Loaded from `config/default.yaml` via `load_config()`. Alpaca credentials come f
 
 Every strategy ships `enabled: false` in `config/default.yaml` (phase-3 verdicts — see the ROADMAP per-strategy table before enabling anything). Flip `discovery_momentum` on to exercise the discovery→trading bridge.
 
+**IBKR connections** (`docs/ibkr-connection-design.md`): gateway (data) and strategy-runner (orders) are separate processes, so IBKR clientIds are split by role — `gateway.ibkr.client_id: 1` for market data, `oms.ibkr_client_id: 2` for orders, 9x reserved for ad-hoc tools. `gateway.ibkr.market_data_type` defaults to `delayed` (live streaming needs paid subscriptions). `IBKRBroker.connect()` refuses live ports 7496/4001 unless `oms.ibkr_allow_live: true` — do not enable it; live trading is out of scope (nothing has earned it).
+
 ### Project Docs
 
-`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` and `AUDIT-2026-05-02.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log, `phase4-platform-pivot.md` for the platform pivot, `data-backup.md` for replicating the untracked `data/` to the secondary workstation).
+`ROADMAP.md` is the canonical "where the project is / what's next" doc — read it before starting strategy or platform work, and keep it updated when a phase lands. Supporting detail lives in `docs/` (`active-plan.md` for the current phased plan, `PROGRESS.md` for history, `strategy-logic-fixes.md` plus `AUDIT-2026-05-02.md`/`AUDIT-2026-07-12.md`/`DIAGNOSTICS-2026-07-18.md` for findings, `phase3-trustworthy-harness.md` + `docs/iterations/` for the phase-3 harness-fix and strategy-iteration log, `phase4-platform-pivot.md` for the platform pivot, `phase5-audit-fixes.md` for the phase-5 fix log, `phase6-cross-sectional.md` + `phase6-preregistration.md` (BINDING) for the phase-6 research track, `ibkr-connection-design.md` for the IBKR connection design and safety decisions, `live-validation-2026-07-19.md` for the live-validation shakedown, `data-backup.md` for replicating the untracked `data/` to the secondary workstation).
 
 ### Helper Scripts
 
@@ -147,6 +155,8 @@ Every strategy ships `enabled: false` in `config/default.yaml` (phase-3 verdicts
 - `scripts/status.sh` - Check service status
 - `scripts/reset-paper-trading.sh` - Reset paper trading state
 - `scripts/collect_historical.py` - Collect historical data
+- `scripts/test_ibkr_connection.py` / `test_alpaca_connection.py` - Standalone broker-connectivity smoke tests (IBKR one requires TWS/IB Gateway on a PAPER account; uses ad-hoc clientIds 91/92, places no orders)
+- `scripts/research/` - Phase-6 strategy research scripts (momentum/MTF/ONR studies, `trade_diagnostics.py`)
 
 ## Code Conventions
 
