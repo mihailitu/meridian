@@ -11,6 +11,7 @@ gateway:
     client_id: 1
     market_data_type: "delayed"  # live requires paid market-data subscriptions
     max_subscriptions: 90  # cap on concurrent market-data lines (IBKR default ~100)
+    resubscribe_silent_after_seconds: 300  # resubscribe symbols that produced no ticks for this long; 0 = off
 
   alpaca:
     api_key: ""  # Use ALPACA_API_KEY env var

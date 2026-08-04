@@ -39,6 +39,10 @@ class IBKRConfig:
     # default market-data line limit is ~100; add_symbols logs and skips
     # past this rather than raising (D5).
     max_subscriptions: int = 90
+    # Resubscribe symbols that produced no ticks for this long, in seconds;
+    # 0 = off (D6, S1 finding 1: delayed-feed subscriptions opened pre-open
+    # silently never start streaming).
+    resubscribe_silent_after_seconds: int = 300
 
     def __post_init__(self) -> None:
         if self.market_data_type not in ("live", "delayed"):
@@ -314,6 +318,9 @@ def load_config(path: Optional[Path] = None) -> Config:
                 client_id=ibkr_data.get("client_id", 1),
                 market_data_type=ibkr_data.get("market_data_type", "delayed"),
                 max_subscriptions=ibkr_data.get("max_subscriptions", 90),
+                resubscribe_silent_after_seconds=ibkr_data.get(
+                    "resubscribe_silent_after_seconds", 300
+                ),
             ),
             alpaca=AlpacaConfig(
                 api_key=alpaca_data.get("api_key", ""),

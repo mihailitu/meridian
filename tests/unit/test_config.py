@@ -51,6 +51,7 @@ class TestIBKRConfig:
         assert config.client_id == 1
         assert config.market_data_type == "delayed"
         assert config.max_subscriptions == 90
+        assert config.resubscribe_silent_after_seconds == 300
 
     def test_custom_values(self) -> None:
         """Test custom values."""
@@ -60,12 +61,14 @@ class TestIBKRConfig:
             client_id=5,
             market_data_type="live",
             max_subscriptions=50,
+            resubscribe_silent_after_seconds=120,
         )
         assert config.host == "192.168.1.100"
         assert config.port == 4001
         assert config.client_id == 5
         assert config.market_data_type == "live"
         assert config.max_subscriptions == 50
+        assert config.resubscribe_silent_after_seconds == 120
 
     def test_invalid_market_data_type_raises(self) -> None:
         """Test D2: invalid market_data_type is rejected at construction."""
@@ -456,6 +459,7 @@ gateway:
     client_id: 10
     market_data_type: live
     max_subscriptions: 45
+    resubscribe_silent_after_seconds: 120
 """
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".yaml", delete=False
@@ -472,6 +476,7 @@ gateway:
             assert config.gateway.ibkr.client_id == 10
             assert config.gateway.ibkr.market_data_type == "live"
             assert config.gateway.ibkr.max_subscriptions == 45
+            assert config.gateway.ibkr.resubscribe_silent_after_seconds == 120
         finally:
             temp_path.unlink()
 
@@ -495,6 +500,29 @@ gateway:
         try:
             config = load_config(temp_path)
             assert config.gateway.ibkr.max_subscriptions == 90
+        finally:
+            temp_path.unlink()
+
+    def test_load_ibkr_resubscribe_silent_after_seconds_default(self) -> None:
+        """Test D6: gateway.ibkr.resubscribe_silent_after_seconds defaults to 300."""
+        yaml_content = """
+gateway:
+  adapter: ibkr
+  ibkr:
+    host: 192.168.1.50
+    port: 4001
+    client_id: 10
+"""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            f.write(yaml_content)
+            f.flush()
+            temp_path = Path(f.name)
+
+        try:
+            config = load_config(temp_path)
+            assert config.gateway.ibkr.resubscribe_silent_after_seconds == 300
         finally:
             temp_path.unlink()
 

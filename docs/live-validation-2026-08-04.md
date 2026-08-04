@@ -41,9 +41,10 @@ outside RTH as pre-committed, not a failure.
    Operational rule until fixed: **with delayed data, start the gateway
    after ~16:45 EEST** (delayed clock past the open). Proper fix: a
    silent-symbol watchdog in the adapter (resubscribe symbols with no
-   ticks after N minutes) — also valuable for live data. The adapter's
-   tick handler drops updates with no positive `last`, so quote-only
-   pre-open updates are invisible by design.
+   ticks after N minutes) — also valuable for live data. Landed as D6
+   (branch `ibkr-silent-watchdog`, see `ibkr-connection-design.md`). The
+   adapter's tick handler drops updates with no positive `last`, so
+   quote-only pre-open updates are invisible by design.
 2. **Stale state across validation runs**: Redis db 0 still held the
    July-19 mock-run streams (and TimescaleDB the mock bars), which made
    raw stream counts misleading during monitoring and may have fed the

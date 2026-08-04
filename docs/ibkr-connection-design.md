@@ -88,6 +88,23 @@ scale, but the bridge has no cap of its own.
 (`gateway.ibkr.max_subscriptions: 90`; `add_symbols` logs and skips past
 the cap). Contract qualification failures already log-and-skip.
 
+## Silent-symbol watchdog (S1 finding 1)
+
+S1 (2026-08-04) found that delayed-feed subscriptions opened while the
+delayed clock is still pre-open silently never start streaming - no error,
+just zero ticks until something (a restart) resubscribes them.
+
+**Decision D6**: new config `gateway.ibkr.resubscribe_silent_after_seconds`
+(default 300, `0` disables). The adapter stamps a per-symbol liveness
+timestamp at subscribe time and on every real trade tick (quote-only
+updates don't count - `last` being absent is exactly what made the trap
+invisible). `stream_ticks()`'s consume loop scans it at most once every 30s
+and calls `cancelMktData`/`reqMktData` for anything stale, bumping its
+timestamp regardless of outcome so a still-silent symbol is retried once
+per period rather than every scan. The scan is deliberately unconditional
+on market hours - outside RTH everything is silent and gets resubscribed
+once per period, which is cheap and also covers the all-symbols-stuck case.
+
 ## Runtime infrastructure
 
 - **Validation stages (attended): TWS desktop, paper login, on the
@@ -162,7 +179,8 @@ re-applied) and D5 (`gateway.ibkr.max_subscriptions: 90`, log-and-skip in
 `add_symbols`) landed 2026-08-04 on branch `ibkr-d4-d5` (1,221 unit tests
 green). Note: no cross-loop handoff needed for IBKR, unlike Alpaca P2-10 —
 ib_insync fires `disconnectedEvent` on the same asyncio loop
-`connectAsync()` ran on.
+`connectAsync()` ran on. D6 (silent-symbol watchdog) landed 2026-08-04 on
+branch `ibkr-silent-watchdog` (1,226 unit tests green).
 
 **S0 gate PASSED 2026-08-04** against classic TWS 10.49 (`~/tws`), paper
 account DUQ887385, all 7 checks green (both clientIds concurrent, delayed

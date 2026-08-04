@@ -698,3 +698,106 @@ class TestIBKRAdapterSubscriptionCap:
 
         assert "TSLA" in adapter._contracts
         assert len(fake.req_mkt_data_calls) == 1
+
+
+class TestIBKRAdapterSilentSymbolWatchdog:
+    """Tests for the D6 silent-symbol watchdog (S1 finding 1: delayed-feed
+    subscriptions opened pre-open never start streaming on their own)."""
+
+    @pytest.fixture
+    def adapter(self):
+        return IBKRAdapter(IBKRConfig(resubscribe_silent_after_seconds=300))
+
+    async def test_silent_symbol_past_threshold_is_resubscribed(self, adapter):
+        """A symbol silent past the threshold gets cancelMktData +
+        reqMktData; a recently-ticking symbol is left alone."""
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+        aapl_contract = object()
+        msft_contract = object()
+        adapter._contracts = {"AAPL": aapl_contract, "MSFT": msft_contract}
+        now = 10_000.0
+        adapter._last_tick_at = {
+            "AAPL": now - 400,  # silent 400s, past the 300s threshold
+            "MSFT": now - 10,  # ticked 10s ago, well under threshold
+        }
+
+        with structlog.testing.capture_logs() as cap_logs:
+            adapter._resubscribe_silent_symbols(now)
+
+        assert fake.cancel_mkt_data_calls == [aapl_contract]
+        assert fake.req_mkt_data_calls == [aapl_contract]
+        assert adapter._last_tick_at["AAPL"] == now
+        assert adapter._last_tick_at["MSFT"] == now - 10
+        events = [entry["event"] for entry in cap_logs]
+        assert "silent_symbol_resubscribed" in events
+
+    def test_scan_throttled_to_once_per_watchdog_interval(self, adapter, monkeypatch):
+        """Backoff: a second watchdog scan inside the same
+        _WATCHDOG_SCAN_INTERVAL window must not resubscribe again.
+
+        Synchronous (no `async def`/event loop): monkeypatching the shared
+        `time` module's `monotonic` affects every caller process-wide,
+        including asyncio's own loop-clock reads - an async test body would
+        drain a finite fake-time iterator via those unrelated reads too.
+        """
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+        contract = object()
+        adapter._contracts = {"AAPL": contract}
+        adapter._last_tick_at = {"AAPL": 0.0}
+        adapter._last_watchdog_scan = 0.0
+
+        call_times = iter([1000.0, 1005.0])  # second call 5s later, < 30s interval
+        monkeypatch.setattr(
+            "axtrade.gateway.ibkr.time.monotonic", lambda: next(call_times)
+        )
+
+        adapter._maybe_resubscribe_silent_symbols()  # scans, resubscribes AAPL
+        adapter._maybe_resubscribe_silent_symbols()  # throttled, no scan at all
+
+        assert fake.req_mkt_data_calls == [contract]
+        assert fake.cancel_mkt_data_calls == [contract]
+
+    async def test_disabled_when_resubscribe_silent_after_seconds_is_zero(
+        self, adapter
+    ):
+        """resubscribe_silent_after_seconds: 0 disables the watchdog entirely."""
+        adapter.config = IBKRConfig(resubscribe_silent_after_seconds=0)
+        fake = _FakeIB()
+        adapter._ib = fake
+        adapter._connected = True
+        contract = object()
+        adapter._contracts = {"AAPL": contract}
+        adapter._last_tick_at = {"AAPL": 0.0}  # silent since the epoch
+
+        adapter._maybe_resubscribe_silent_symbols()
+
+        assert fake.req_mkt_data_calls == []
+        assert fake.cancel_mkt_data_calls == []
+
+    async def test_freshly_subscribed_symbol_is_not_resubscribed(
+        self, adapter, monkeypatch
+    ):
+        """Liveness stamp is set at subscribe time: a fresh-subscribed
+        symbol scanned shortly after, still under the threshold, is left
+        alone."""
+        fake = _FakeIB(qualify_succeeds=True)
+        adapter._ib = fake
+        adapter._connected = True
+
+        fixed_time = 5000.0
+        monkeypatch.setattr(
+            "axtrade.gateway.ibkr.time.monotonic", lambda: fixed_time
+        )
+
+        await adapter._subscribe_symbol(SymbolConfig(symbol="AAPL", base_price=185.0))
+        assert adapter._last_tick_at["AAPL"] == fixed_time
+        fake.req_mkt_data_calls.clear()  # discard the subscribe's own reqMktData call
+
+        adapter._resubscribe_silent_symbols(fixed_time + 5)  # well under 300s
+
+        assert fake.req_mkt_data_calls == []
+        assert fake.cancel_mkt_data_calls == []

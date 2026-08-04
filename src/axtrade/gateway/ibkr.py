@@ -1,6 +1,7 @@
 """IBKR data adapter using ib_insync."""
 
 import asyncio
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Optional
@@ -22,6 +23,11 @@ class IBKRAdapter(DataAdapter):
     # (IBKRConfig.__post_init__).
     _MARKET_DATA_TYPE = {"live": 1, "delayed": 3}
 
+    # Throttle for the silent-symbol watchdog scan in stream_ticks() (D6).
+    # Private class attribute rather than a constructor knob so tests can
+    # monkeypatch it directly to shorten the wait.
+    _WATCHDOG_SCAN_INTERVAL = 30.0
+
     def __init__(self, config: IBKRConfig):
         """Initialize IBKR adapter.
 
@@ -39,6 +45,17 @@ class IBKRAdapter(DataAdapter):
         # track the last observed cumulative value per symbol so we can emit
         # a per-tick delta instead of summing day-volume into every bar.
         self._last_cum_volume: dict[str, float] = {}
+        # Per-symbol liveness: monotonic timestamp of the last tick actually
+        # emitted for the symbol, or the moment it was (re)subscribed if more
+        # recent. stream_ticks()'s watchdog resubscribes any symbol whose
+        # stamp is older than resubscribe_silent_after_seconds (D6, S1
+        # finding 1: delayed-feed subscriptions opened pre-open never start
+        # streaming). time.monotonic() rather than the event loop's clock
+        # because _on_pending_tickers is a sync ib_insync callback.
+        self._last_tick_at: dict[str, float] = {}
+        # Monotonic time of the last silent-symbol watchdog scan; throttles
+        # it to at most once every _WATCHDOG_SCAN_INTERVAL seconds.
+        self._last_watchdog_scan: float = 0.0
         # Set by _on_disconnected when ib_insync's disconnectedEvent fires
         # while we're still supposed to be running (TWS daily logoff, IB
         # Gateway weekly restart) rather than via our own disconnect().
@@ -104,6 +121,7 @@ class IBKRAdapter(DataAdapter):
         # Drop dead subscriptions so a post-reconnect requalification failure
         # can't leave a stale entry that add_symbols would skip forever.
         self._contracts.clear()
+        self._last_tick_at.clear()
         logger.info("disconnected_from_ibkr")
 
     async def _subscribe_symbol(self, symbol_config: SymbolConfig) -> bool:
@@ -126,6 +144,10 @@ class IBKRAdapter(DataAdapter):
         if qualified:
             self._contracts[symbol_config.symbol] = qualified[0]
             self._ib.reqMktData(qualified[0])
+            # Stamp liveness at subscribe time so a symbol that NEVER ticks
+            # still trips the watchdog resubscribe_silent_after_seconds
+            # later, rather than looking silent since the epoch.
+            self._last_tick_at[symbol_config.symbol] = time.monotonic()
             logger.info("subscribed", symbol=symbol_config.symbol)
             return True
         else:
@@ -200,6 +222,7 @@ class IBKRAdapter(DataAdapter):
             del self._contracts[name]
             self._symbols = [s for s in self._symbols if s.symbol != name]
             self._last_cum_volume.pop(name, None)
+            self._last_tick_at.pop(name, None)
             logger.info("unsubscribed", symbol=name)
 
     def _tick_volume(self, symbol: str, cum_volume: float) -> Optional[int]:
@@ -239,6 +262,11 @@ class IBKRAdapter(DataAdapter):
         for ticker in tickers:
             if ticker.last and ticker.last > 0:
                 symbol = ticker.contract.symbol
+                # Liveness only counts real trade ticks, never quote-only
+                # updates (those are dropped below the `if` because `last`
+                # is missing) - that filter is the whole reason the S1
+                # silent-symbol trap was invisible (D6).
+                self._last_tick_at[symbol] = time.monotonic()
                 # NaN > 0 is False, so NaN volumes are already excluded here.
                 if ticker.volume > 0:
                     tick_volume = self._tick_volume(symbol, ticker.volume)
@@ -257,6 +285,56 @@ class IBKRAdapter(DataAdapter):
                     self._tick_queue.put_nowait(tick)
                 except asyncio.QueueFull:
                     pass
+
+    def _maybe_resubscribe_silent_symbols(self) -> None:
+        """Throttle wrapper around _resubscribe_silent_symbols: runs at most
+        once every _WATCHDOG_SCAN_INTERVAL seconds of wall time, and only
+        when the watchdog is enabled (resubscribe_silent_after_seconds > 0,
+        D6)."""
+        if self.config.resubscribe_silent_after_seconds <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_watchdog_scan < self._WATCHDOG_SCAN_INTERVAL:
+            return
+        self._last_watchdog_scan = now
+        self._resubscribe_silent_symbols(now)
+
+    def _resubscribe_silent_symbols(self, now: float) -> None:
+        """Resubscribe every symbol whose liveness stamp is older than
+        resubscribe_silent_after_seconds (D6, S1 finding 1: delayed-feed
+        subscriptions opened pre-open never start streaming on their own).
+
+        Deliberately unconditional on market hours: outside RTH every
+        symbol is silent and gets resubscribed once per scan period. That
+        churn is negligible, and accepting it keeps the logic simple while
+        also covering the case where ALL symbols are stuck, not just some.
+
+        Bumping the liveness stamp to `now` here - whether or not the
+        symbol ticks again before the next scan - is itself the backoff: a
+        still-silent symbol is retried once per period, not every scan.
+        """
+        threshold = self.config.resubscribe_silent_after_seconds
+        for symbol, last_tick_at in list(self._last_tick_at.items()):
+            silent_seconds = now - last_tick_at
+            if silent_seconds < threshold:
+                continue
+            contract = self._contracts.get(symbol)
+            if contract is None:
+                continue
+            try:
+                self._ib.cancelMktData(contract)
+                self._ib.reqMktData(contract)
+                self._last_tick_at[symbol] = now
+                logger.warning(
+                    "silent_symbol_resubscribed",
+                    symbol=symbol,
+                    silent_seconds=int(silent_seconds),
+                )
+            except Exception as e:
+                # One bad contract must not kill the tick stream.
+                logger.error(
+                    "silent_symbol_resubscribe_failed", symbol=symbol, error=str(e)
+                )
 
     async def stream_ticks(self) -> AsyncIterator[Tick]:
         """Stream ticks from IBKR.
@@ -299,7 +377,12 @@ class IBKRAdapter(DataAdapter):
                 # asyncio loop; calling self._ib.sleep(0) here would recurse
                 # into loop.run_until_complete() from within the running
                 # loop and raise RuntimeError, killing the tick generator.
-                continue
+                pass
+
+            # The loop already wakes at least once a second (queue get with
+            # timeout above); piggyback the silent-symbol watchdog scan on
+            # that wakeup rather than a separate timer (D6).
+            self._maybe_resubscribe_silent_symbols()
 
         if self._disconnected_unexpectedly:
             raise RuntimeError("ibkr connection lost (disconnectedEvent)")
