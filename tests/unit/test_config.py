@@ -663,3 +663,56 @@ gateway:
             assert config.gateway.yahoo.poll_interval_ms == 10000
         finally:
             temp_path.unlink()
+
+
+class TestLocalOverlay:
+    """local.yaml next to the loaded config is deep-merged on top of it
+    (per-machine overrides, e.g. IB Gateway port 4002 vs TWS 7497)."""
+
+    BASE = """
+gateway:
+  adapter: mock
+  ibkr:
+    host: "127.0.0.1"
+    port: 7497
+    client_id: 1
+
+aggregator:
+  intervals: ["1m", "5m"]
+"""
+
+    def _write(self, tmp_path: Path, base: str, local: str | None) -> Path:
+        config_path = tmp_path / "default.yaml"
+        config_path.write_text(base)
+        if local is not None:
+            (tmp_path / "local.yaml").write_text(local)
+        return config_path
+
+    def test_no_local_yaml_leaves_config_unchanged(self, tmp_path: Path) -> None:
+        config = load_config(self._write(tmp_path, self.BASE, None))
+        assert config.gateway.ibkr.port == 7497
+
+    def test_nested_override_merges_keeping_siblings(self, tmp_path: Path) -> None:
+        local = """
+gateway:
+  ibkr:
+    port: 4002
+"""
+        config = load_config(self._write(tmp_path, self.BASE, local))
+        assert config.gateway.ibkr.port == 4002
+        # Siblings at every level of the merged branch survive.
+        assert config.gateway.ibkr.host == "127.0.0.1"
+        assert config.gateway.ibkr.client_id == 1
+        assert config.gateway.adapter == "mock"
+
+    def test_lists_are_replaced_not_merged(self, tmp_path: Path) -> None:
+        local = """
+aggregator:
+  intervals: ["1m"]
+"""
+        config = load_config(self._write(tmp_path, self.BASE, local))
+        assert config.aggregator.intervals == ["1m"]
+
+    def test_empty_local_yaml_is_harmless(self, tmp_path: Path) -> None:
+        config = load_config(self._write(tmp_path, self.BASE, ""))
+        assert config.gateway.ibkr.port == 7497

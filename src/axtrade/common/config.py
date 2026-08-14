@@ -266,8 +266,26 @@ class Config:
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Merge override into base recursively: nested dicts merge key-by-key,
+    everything else (scalars, lists) is replaced by the override value."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_config(path: Optional[Path] = None) -> Config:
     """Load configuration from YAML file.
+
+    If a `local.yaml` exists next to the loaded file, it is deep-merged on
+    top — the gitignored per-machine overlay (e.g. gateway.ibkr.port 4002
+    on a workstation running IB Gateway instead of TWS). Keep it to
+    machine-local facts; anything meant for every machine belongs in
+    default.yaml.
 
     Args:
         path: Path to config file. Defaults to config/default.yaml
@@ -280,6 +298,12 @@ def load_config(path: Optional[Path] = None) -> Config:
 
     with open(path) as f:
         data = yaml.safe_load(f)
+
+    local_path = path.parent / "local.yaml"
+    if local_path.exists():
+        with open(local_path) as f:
+            local_data = yaml.safe_load(f) or {}
+        data = _deep_merge(data or {}, local_data)
 
     gateway_data = data.get("gateway", {})
     redis_data = data.get("redis", {})

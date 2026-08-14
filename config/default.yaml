@@ -7,7 +7,7 @@ gateway:
 
   ibkr:
     host: "127.0.0.1"
-    port: 4002  # IB Gateway paper; TWS paper is 7497 (live ports 4001/7496 are refused by IBKRBroker)
+    port: 7497  # TWS paper; IB Gateway paper is 4002 — set per machine in config/local.yaml (live ports 7496/4001 are refused by IBKRBroker)
     client_id: 1
     market_data_type: "delayed"  # live requires paid market-data subscriptions
     max_subscriptions: 90  # cap on concurrent market-data lines (IBKR default ~100)
