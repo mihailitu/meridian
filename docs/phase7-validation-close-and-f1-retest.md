@@ -32,7 +32,7 @@
 |---|-----------|--------|--------|
 | P-1 | **Indicator warmup anomaly root-cause + fix** (S1 finding 3). Working hypothesis: aggregator seeds IndicatorEngine buffers from TimescaleDB history at startup, and that history held July's mock-run bars at mock price levels — predicting the observed impossible SMA20=275 against real 304 closes. Plan: read the warmup path; write a deterministic repro test (restart with stale-history DB → assert either clean-warmup NULLs or correctly-seeded values); fix; if the hypothesis is wrong, root-cause whatever is. Gate: repro test red→green; next validation run shows sane warmup from bar 1. | S1 finding 3 | PLANNED |
 | P-2 | **Validation + API hygiene batch** (implementer-grade): (a) state-reset step for validation runs — extend `reset-paper-trading.sh` or a sibling script to flush the axtrade Redis streams and truncate live-DB bar tables, and reference it in the validation docs; (b) `/api/gateway/status` reports runtime truth, not config (July part-1 finding 1); (c) discovery `discovered_at` 3h-off naive-datetime bug (July part-1 finding 2); (d) decide vestigial `bars.regime` column: drop or populate (July part-1 finding 3). Gate: unit tests + one mock `start-all.sh` smoke confirming the status endpoint and timestamps. | S1 finding 2; live-validation-2026-07-19 findings 1–3 | PLANNED |
-| P-3 | **S3 — IBKR order path** (attended, market hours, ~30 min): scripted per the design doc — 1-share MARKET buy → fill in `fills`/`positions` AND the TWS blotter; far LIMIT buy → cancel → terminal status, no fill; `get_positions()` reconciles. Gate: DB and TWS agree exactly. Optionally fold the still-pending Alpaca part-2 session into the same market day (separate adapter, same checks). | design doc S3; live-validation-2026-07-19 "Part 2 pending" | PLANNED |
+| P-3 | **S3 — IBKR order path** (attended, market hours, ~30 min): scripted per the design doc — 1-share MARKET buy → fill in `fills`/`positions` AND the TWS blotter; far LIMIT buy → cancel → terminal status, no fill; `get_positions()` reconciles. Gate: DB and TWS agree exactly. Optionally fold the still-pending Alpaca part-2 session into the same market day (separate adapter, same checks). | design doc S3; live-validation-2026-07-19 "Part 2 pending" | IBKR DONE 2026-08-14 (4/4 via `scripts/test_ibkr_order_path.py`; two findings fixed — see design doc S3 gate entry; Alpaca part-2 still pending) |
 | P-4 | **S2 soak / S4 strategy loop / S5 unattended — PARKED.** Scheduled only when something earns unattended runtime. If Track R dies, the S5 ladder can still be justified once as an infrastructure proof (benchmark buy_hold live-paper for a day) as part of the platform write-up — decide then, not now. | design doc S2/S4/S5 | PARKED |
 
 Sequencing: P-1 first (it is the only open correctness question in the
@@ -57,3 +57,10 @@ primary cell named in advance; verdicts by rule, not judgment.
 ## Progress log
 
 - 2026-08-04: Phase drafted and committed. All iterations PLANNED.
+- 2026-08-14: P-3 IBKR side DONE, out of plan order (market was open and
+  the order path had just been unblocked by the IB Gateway setup on the
+  secondary workstation; P-3 has no dependency on P-1/P-2). S3 gate 4/4
+  via new `scripts/test_ibkr_order_path.py`, Client Portal record
+  confirmed matching same day; findings + fixes (explicit
+  `tif="DAY"` in `IBKRBroker`, `tzdata` dependency) recorded in the design
+  doc. Alpaca part-2 remains the open half of P-3. Unit suite 1263 green.

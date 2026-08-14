@@ -48,7 +48,8 @@ strategy-real needs `live` + subscriptions (or data sharing from a funded
 account's login) — that decision is deferred until a strategy earns it.
 The delayed default also means ticker fields can be `delayedLast` etc.;
 ib_insync maps them into `last`/`bid`/`ask` transparently, so the adapter
-code is unchanged.
+code is unchanged. (Delayed snapshots can take >5s to start streaming —
+scripts polling for a first price should allow ~20s.)
 
 ## Live-port safety guard
 
@@ -193,6 +194,33 @@ MULTIPLE_PAPER_ERROR when several paper users exist — TWS needs the
 dedicated paper username (from Client Portal, live login → Settings →
 Account Settings → Paper Trading Account). Next stage: S1 (data path,
 market hours).
+
+**S3 gate PASSED 2026-08-14** (DB side) via the new
+`scripts/test_ibkr_order_path.py`, run against IB Gateway 10.45 on the
+secondary workstation (port 4002, paper DUQ887385, market hours): market
+buy filled with matching `orders`/`fills`/`positions` rows; far limit buy
+cancelled with terminal status and zero fills; `get_positions()`
+reconciled exactly; cleanup sell closed the position and returned the
+broker to baseline. Independent-record verification via Client Portal
+(IB Gateway has no trades UI): confirmed same day — executions and
+cancelled limit orders match the DB exactly, no unexplained activity, no
+open orders. Two findings fixed en route:
+
+1. **IBKR warning 10349 → phantom local cancel.** IBKR now emits
+   warning 10349 ("Order TIF was set to DAY based on order preset") for
+   orders without an explicit TIF. ib_insync 0.9.86 predates the code,
+   treats it as a fatal order error, and locally marks the trade
+   Cancelled — while the real order stays live at IBKR (the first S3 run
+   left a resting limit order our side believed cancelled; market orders
+   still filled, racing CANCELLED→FILLED in the DB). Fix:
+   `IBKRBroker.submit_order` sets `tif="DAY"` explicitly, so the warning
+   is never emitted. One more reason the ib_async migration (below)
+   matters: the maintained fork knows 10349 is a warning.
+2. **Missing tz database crashes execution parsing.** IBKR execution
+   timestamps use legacy keys (`US/Eastern`); on hosts whose system
+   zoneinfo lacks legacy links, ib_insync's decoder raises
+   ZoneInfoNotFoundError and drops execDetails on reconnect replay.
+   Fix: `tzdata` added to project dependencies.
 
 ## Open questions for the user
 

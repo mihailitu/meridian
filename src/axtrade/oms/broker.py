@@ -561,6 +561,12 @@ class IBKRBroker(BrokerProtocol):
         else:
             raise ValueError(f"Unsupported order type: {order.order_type}")
 
+        # Explicit TIF: without it IBKR applies its order preset and emits
+        # warning 10349, which ib_insync 0.9.86 (predates the code) treats
+        # as a fatal order error and locally marks the trade Cancelled while
+        # the order stays live at IBKR (found in S3 validation, 2026-08-14).
+        ib_order.tif = "DAY"
+
         # Submit order
         trade = self._ib.placeOrder(contract, ib_order)
 

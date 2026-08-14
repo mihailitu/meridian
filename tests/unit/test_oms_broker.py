@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 from axtrade.common import Bar, IBKRConfig
-from axtrade.oms import Fill, Order, OrderSide, OrderStatus, PaperBroker, Position
+from axtrade.oms import Fill, Order, OrderSide, OrderStatus, OrderType, PaperBroker, Position
 from axtrade.oms.broker import IBKRBroker, InsufficientCashError, VolumeCapExceededError
 
 
@@ -816,6 +816,27 @@ class TestIBKRBrokerReconnectOnSubmit:
         # ib_insync module.
         assert fresh_ib.connect_kwargs is None
         assert len(fresh_ib.placed) == 0
+
+    async def test_submit_order_sets_explicit_day_tif(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Without an explicit TIF, IBKR applies its order preset and emits
+        # warning 10349, which ib_insync 0.9.86 misreads as a fatal order
+        # error: the trade is locally marked Cancelled while the real order
+        # stays live at IBKR (S3 validation finding, 2026-08-14).
+        broker = IBKRBroker(IBKRConfig())
+        connected_ib = _FakeReconnectIB()
+        connected_ib._connected = True
+        broker._ib = connected_ib
+        _install_fake_ib_insync_for_orders(monkeypatch, connected_ib)
+
+        await broker.submit_order(self._order())
+        limit = self._order()
+        limit.order_type = OrderType.LIMIT
+        limit.limit_price = Decimal("100")
+        await broker.submit_order(limit)
+
+        assert all(order.tif == "DAY" for _, order in connected_ib.placed)
 
     async def test_submit_order_already_connected_does_not_reconnect(self) -> None:
         broker = IBKRBroker(IBKRConfig())
