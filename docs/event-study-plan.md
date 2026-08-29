@@ -266,3 +266,77 @@ the first 1–5 minutes after release — squarely inside the cost-infeasible
 sub-15-minute zone the survey ruled out. Nothing in Q2 reopens sub-daily
 prediction; the FOMC-afternoon elevated-vol regime is a risk-management
 fact (position sizing on event days), not a signal.
+
+### Q4 — earnings share of idiosyncratic risk (daily panel, 2024-08→2026-01; §4a definitions)
+
+Code: `scripts/research/event_study/fetch_earnings.py` + `q4_earnings.py`.
+Outputs: `data/research/event_study/earnings_calendar.parquet`,
+`earnings_crosscheck.csv`, `q4_pername.csv`, `q4_summary.csv`,
+`q4_spotcheck_{sample.csv,results.md}`.
+
+**Calendar and the §3 gate.** Nasdaq earnings-calendar API, all 376 trading
+days in the window: 7,915 rows / 1,389 archive symbols after filtering (57
+archive symbols with zero rows). Session tags turned out to be **historically
+unavailable**: Nasdaq returns `time-not-supplied` for past dates, so only 45
+rows (0.6%, all Jan 2026) carry bmo/amc tags — verified in the raw JSON, not
+a parsing artifact. Under the frozen §4a mapping (unknown → date-only) the
+session question is therefore moot and **Q4 ran date-only (±1 trading day),
+the §3 fallback**. Date accuracy was verified two ways: (a) yfinance
+cross-check, 60-symbol random sample: 98.0% of 346 Nasdaq rows match a
+yfinance date within ±1 day; (b) manual 20-name spot-check (seeded, press
+releases/IR pages — see `q4_spotcheck_results.md`): 19/20 dates exact, one
+(STEL) off by 2 days — a real merger-related reschedule Nasdaq kept stale,
+i.e. calendar drift, not a typo (sessions, where tagged: 20/20 correct).
+Reports drifted >1 day from the calendar fall outside the reaction window
+and dilute measured concentration, so the numbers below are, if anything,
+slight underestimates.
+
+**Statistics** (frozen §4a; universe = phase-6 eligible ∩ ≥250 panel rows =
+1,401 names; "eligible" resolved as eligible on ≥1 day, the natural static
+reading for per-name statistics; 15,265 reaction-day panel rows vs 509,590
+other):
+
+| statistic (date-only mapping) | reaction days | other / base |
+|---|---:|---:|
+| (i) per-name share of top-5 \|cc_ret\| days: mean / median / p90 | 0.35 / 0.40 / 0.60 | ~0.03 if random |
+| (ii) panel median \|cc_ret\| | 2.28% | 1.07% |
+| (ii) panel p90 \|cc_ret\| | 10.02% | 3.34% |
+| (iii) share of >2σ idiosyncratic moves (17,775 of 349,667 obs) | 20.2% | 3.07% base rate |
+
+**Findings.** (a) **Earnings are the dominant scheduled driver of single-name
+tail risk**: the median name has 2 of its 5 largest daily moves on
+earnings-reaction days (~40% vs ~3% if random, ~11× concentration), and a
+>2σ idiosyncratic move is 6.6× likelier on a reaction day. This is the
+single-name counterpart of Q1 with the opposite sign: at the index level the
+scheduled calendar explains almost nothing, at the single-name level the one
+scheduled event type owns a fifth of the tail. (b) **But most single-name
+tail risk is still unscheduled**: ~80% of >2σ idiosyncratic moves fall on
+non-earnings days. Any single-name "predict the news" ambition is bounded by
+that 20% share even with a perfect earnings model — the same bounding
+conclusion Q1 gave for the index. (c) Earnings days are a different risk
+regime, not just a shifted mean: the p90 move is 10% vs 3.3% (~3×), which
+matters for position sizing and stop placement on names with a report due.
+
+**Relevance to the §6 ML gate:** Q4 is descriptive/bounding as specified —
+it measures where risk concentrates, not whether anything is predictable,
+and contributes no |t| ≥ 2 drift at a ≥ 1-day horizon. Its actionable
+content is risk management (size down or stand aside through scheduled
+reports in daily single-name strategies), which needs no ML.
+
+**Limitations:** the date-only mapping tags two candidate days per report
+(base rate 3.07% of days vs ~1.5% true), diluting the per-day contrast —
+session-aware numbers would be sharper on both (ii) and (iii); calendar
+drift (STEL-type reschedules) and the 57 zero-coverage archive names cause
+slight undercounting; one window (2024-08→2026-01), one earnings-cycle
+regime.
+
+### Phase 2 close-out (2026-08-29)
+
+Phase 2 is complete (Q2 + Q4). Combined Phase 1–2 evidence against the §6
+gate: the only pattern with |t| ≥ 2 at a ≥ 1-day horizon anywhere in E4 is
+the pre-FOMC drift (Q3, t=2.31), which already belongs to E1 and has its own
+binding pre-registration (`docs/e1-prefomc-preregistration.md`); Q1/Q2/Q4
+are attribution/digestion/bounding results with no drift claim. Whether the
+pre-FOMC case justifies an *ML* experiment over E1's simple rule, and
+whether optional Phase 3 (GDELT, exploratory) runs at all, are open
+decisions — not taken here.
