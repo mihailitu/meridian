@@ -222,3 +222,47 @@ evidence E1 re-counts.
 **Limitations:** CPI/NFP coverage starts 2008-02 and ends 2025-12 (2026
 release dates not yet cleanly sourced — verification item); index-level only;
 earnings and digestion-speed questions are Phase 2.
+
+---
+
+## Phase 2 findings (2026-08-29)
+
+### Q2 — digestion speed (SPY 1m, 2024-08→2026-01; §4a definitions)
+
+Code: `scripts/research/event_study/q2_digestion.py`. Outputs:
+`data/research/event_study/q2_{curves,summary}.csv`, `q2_{event}.png`.
+Events inside the archive window: FOMC 12, CPI 16, NFP 16 (baselines: 123/
+260/203 matched no-event days). Small n — the volatility curves are the
+reliable object here; the drift curves are noise-dominated and none of the
+drift numbers below should be read as evidence of direction.
+
+| event | anchor | peak vol ratio (offset) | minutes to baseline (≤1.25×, sustained 10m) |
+|---|---|---|---|
+| FOMC | 14:00 ET | 3.5× (+39) | **never** within +120 (i.e. through the close) |
+| CPI | 08:30 ET | 5.0× (+4) | **47** |
+| NFP | 08:30 ET | 3.9× (+3) | never within +120 (hovers just above threshold post-open) |
+
+**Findings.** (a) **The initial reprice is essentially instantaneous**: mean
+|1m return| in the event minute is ~19bp (FOMC), ~37bp (CPI), ~24bp (NFP)
+against ~2bp baselines — a 10–20× one-minute spike that collapses to 2–3×
+within ~5 minutes. On the "can you react to the release?" question the
+literature is confirmed on our data: the level move is done before a daily
+system could act. (b) **But full digestion is slower than "minutes" for
+FOMC**: the 14:30 press conference is a clearly visible second vol event
+(re-spike to ~11bp at +33), and event-afternoon vol never returns to within
+1.25× of baseline before the close. FOMC afternoons are elevated-vol
+regimes end-to-end, not a spike plus calm. (c) CPI is the cleanest case of
+fast digestion: back to baseline in ~47 minutes, i.e. about 15 minutes
+after the 09:30 open (the +60 bump in both curves is the open itself,
+present on baseline days too). (d) Drift context only: in this 12-meeting
+sample, FOMC decision afternoons drifted ~−20bp cumulative into the close —
+same sign as Phase 1's (non-significant) negative post-decision day; n=12,
+not evidence. (e) Artifact note: the single leftmost offset (−30) of the
+08:30 events is inflated in both curves by ffill-seeding across sparse
+pre-market gaps; it affects nothing at offsets ≥ 0.
+
+**Relevance to the §6 ML gate:** the only predictable vol structure sits in
+the first 1–5 minutes after release — squarely inside the cost-infeasible
+sub-15-minute zone the survey ruled out. Nothing in Q2 reopens sub-daily
+prediction; the FOMC-afternoon elevated-vol regime is a risk-management
+fact (position sizing on event days), not a signal.
