@@ -89,6 +89,40 @@ spot-check ≥95% correct, else Q4 is restricted to date-only (±1 day window).
 - Universe for cross-sectional questions: the phase-6 eligible universe
   (`research/` eligibility, ~1,350 names/day) — no new universe definitions.
 
+### 4a. Phase 2 amendments (pre-specified 2026-08-29, before any Phase 2 result was examined)
+
+- **Q2 instrument:** SPY 1m from the archive (index proxy; ES futures parquet
+  in the archive named "ES" is the equity ticker ES, Eversource Energy, not the
+  future — not used). Timestamps are naive-UTC bar starts; convert to ET exactly as
+  `research/daily.py` does.
+- **Q2 curves:** build a complete 1-minute grid over [−30, +120] minutes
+  around the official event minute (FOMC 14:00 ET, presser 14:30 marked on
+  plots; CPI/NFP 08:30 ET using extended-hours bars — note thin pre-market
+  liquidity in the writeup). Prices forward-filled onto the grid within each
+  day; per-offset volatility = cross-event mean of |1m log return|;
+  drift curve = cross-event mean cumulative log return from the event minute.
+- **Q2 baseline:** identical construction on matched days — same weekday, no
+  scheduled fomc/cpi/nfp event, within the archive window.
+- **Q2 "minutes to baseline" (frozen):** smooth both vol curves with a
+  trailing 5-minute mean; the digestion time is the first offset m ≥ 0 at
+  which smoothed event vol ≤ 1.25 × smoothed baseline vol and stays there for
+  10 consecutive minutes. The full ratio curve is reported alongside so the
+  single number can be sanity-checked by eye.
+- **Q4 earnings→reaction-day mapping (frozen):** BMO → that trading day;
+  AMC → next trading day; unknown/unverified session → date-only, a move on
+  either the date or the next trading day counts (the §3 fallback).
+- **Q4 statistics (frozen):** universe = phase-6 eligible names with ≥ 250
+  rows in the daily panel. (i) Per name: share of its top-5 |cc_ret| days
+  that are earnings-reaction days; report the cross-name distribution.
+  (ii) Panel: median and p90 of |cc_ret| on earnings-reaction days vs all
+  other days. (iii) Share of >2σ idiosyncratic moves (rolling 63d OLS beta
+  vs SPY cc_ret, residual σ, shifted — §4) falling on earnings-reaction days
+  — the cross-sectional counterpart of Q1.
+- **Earnings source:** Nasdaq earnings-calendar API by date (primary, gives
+  BMO/AMC tags), yfinance `earnings_dates` as an independent cross-check on a
+  random sample; the §3 gate (20-name manual spot-check, ≥95% correct)
+  decides whether session tags may be used or Q4 drops to date-only.
+
 ## 5. Phases and deliverables
 
 - **Phase 1 — calendars + daily (est. ~1 day):** build the event-calendar
