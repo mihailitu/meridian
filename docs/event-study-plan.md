@@ -122,3 +122,69 @@ ML question closes with a written verdict, and B2 stays retired.
 Not authorised by this document under any outcome: platform ML
 infrastructure, sub-daily prediction targets, LLM sentiment pipelines,
 unscheduled-news trading.
+
+---
+
+## Phase 1 findings (2026-08-29)
+
+Code: `scripts/research/event_study/` (tier 2) + `src/axtrade/research/events.py`
+(tier 1, 4 unit tests). Outputs: `data/research/event_study/` (untracked).
+
+**Calendar built:** FOMC 220 decision/action days 2000-02→2026-07 (8
+unscheduled actions flagged; 2020 correctly has 7 scheduled meetings — the
+cancelled March 2020 meeting), CPI 214 and NFP 214 release days
+2008-02→2025-12, all from officially date-stamped publications (Fed minutes/
+statement URLs; BLS release filenames via Wayback snapshots of BLS's own
+archive pages — bls.gov blocks direct fetches). Five statement-URL false
+positives (Jackson Hole speeches, facility announcements, a first-day stamp)
+were caught by the 8-meetings-per-year review check and curated out in the
+fetch script.
+
+**Q1 — attribution of large moves** (|z| > 2, trailing 63d σ; window
+2008-02→2025-12, 4,486 days, 283 large moves):
+
+| category | share of days | share of large moves | lift |
+|---|---|---|---|
+| FOMC | 3.2% | 4.6% | 1.42 |
+| CPI | 4.7% | 5.0% | 1.05 |
+| NFP | 4.6% | 4.2% | 0.91 |
+| any macro event | 12.3% | 13.1% | 1.07 |
+| no event | 87.7% | 86.9% | 0.99 |
+
+**Finding: scheduled macro events explain almost none of the index's large
+moves.** 87% of >2σ days fall on no-event days; only FOMC days are even
+modestly enriched (a large move is ~1.4× likelier, ~9% of FOMC days). The
+"predict the future from event calendars" premise fails at the index level —
+whatever drives most big days is not on the schedule. (Single-name earnings
+attribution: Phase 2.)
+
+**Q3 — event-conditional drift** (scheduled events, log returns, bp):
+
+| event | window | n | mean | median | base mean | t vs 0 | t vs base |
+|---|---|---:|---:|---:|---:|---:|---:|
+| FOMC | t−1c→tc | 212 | **+21.5** | +4.3 | +1.8 | **2.57** | **2.31** |
+| FOMC | tc→t+1c | 212 | −11.0 | +1.1 | +2.9 | −1.15 | −1.45 |
+| FOMC | t+1c→t+3c | 212 | +8.9 | +9.4 | +4.9 | 0.76 | 0.34 |
+| CPI | t−1c→to | 212 | +3.0 | +0.7 | +1.6 | 0.90 | 0.41 |
+| CPI | to→tc | 212 | +6.3 | +8.0 | +1.7 | 0.80 | 0.57 |
+| NFP | t−1c→to | 209 | +3.4 | +3.9 | +1.6 | 1.12 | 0.59 |
+| NFP | to→tc | 209 | +4.1 | +14.2 | +1.8 | 0.56 | 0.31 |
+
+**Findings:** (a) **The shifted pre-FOMC window (E1's exact window) is
+present in our data**: +21.5bp/meeting into the decision close, t=2.31 vs
+baseline over 212 meetings 2000→2026 — ~170bp/yr gross while in the market
+~3% of days. Median 4.3bp vs mean 21.5bp: right-skewed, the mean leans on
+tail meetings — E1 must report robust statistics, not just the mean. (b) A
+negative, non-significant post-decision day (−11bp, t=−1.15). (c) **CPI and
+NFP: nothing** — no window reaches |t|=1.2. Event-calendar structure at the
+index level is FOMC-specific.
+
+**Binding note for E1:** this full-sample look means E1 can no longer claim
+virgin out-of-sample on this window/instrument. Its pre-registration must be
+designed around that: pre-specify subsample-stability tests (halves, regime
+splits) and robust estimators, and treat this table as the *prior*, not as
+evidence E1 re-counts.
+
+**Limitations:** CPI/NFP coverage starts 2008-02 and ends 2025-12 (2026
+release dates not yet cleanly sourced — verification item); index-level only;
+earnings and digestion-speed questions are Phase 2.
