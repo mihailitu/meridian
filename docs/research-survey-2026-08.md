@@ -111,6 +111,11 @@ criteria, one tuning pass, one OOS shot) BEFORE its first run.
   genuine open question, not mining.
 - **E3 (insider filings):** requires an EDGAR Form 4 ingestion pipeline +
   small-cap cost model. Defer until E1/E2 verdicts land.
+- **E4 (event-association study):** descriptive research, not a strategy —
+  attribution of large moves to scheduled events, digestion-speed curves on
+  the 1m archive, event-conditional baselines that E1 freezes its cell from,
+  and a written decision gate that is the only path to resurrecting ML
+  (audit B2). Plan: `docs/event-study-plan.md` (added 2026-08-29).
 - **Not in scope:** anything sub-15min; options/VX infrastructure; L2 data;
   crypto execution. Live trading remains out of scope entirely.
 
