@@ -1,7 +1,16 @@
 # New-asset-class research — scoping (2026-08-29)
 
 Status: SCOPING. Nothing here is pre-registered; no IS run may happen off this
-document. It exists to pick ONE thread and define what its Phase A (data) must
+document.
+
+> **2026-08-29 (same day, later):** the four-thread deep-research survey
+> (`docs/research-survey-2026-08.md`) confirmed T1 as the top-ranked thread
+> and AMENDED its Phase B pre-registration requirements (vol-targeted
+> long-only benchmark, lookbacks ≥ ~3 weeks / medium+slow blend, net Sharpe
+> 0.3–0.5 prior) — see §3 there. It also added two cheap pre-registered
+> micro-experiments (pre-FOMC window, last-half-hour momentum) alongside
+> Phase A, and closed the sub-15-minute horizon question with four
+> independent lines of evidence. It exists to pick ONE thread and define what its Phase A (data) must
 prove before a pre-registration is even drafted.
 
 Relationship to the stopping rule: this track is on **new data and new
