@@ -19,6 +19,18 @@
 > as splice until proven otherwise. IBKR Pro IS the right source for: the
 > recent ~2y leg of the A4 cross-source check (real settlements), empirical
 > spread validation for A5, and all of Phase C.
+>
+> **2026-08-30 (decision): A-lite on IBKR recent data.** User decision:
+> proceed with IBKR's ~2-year per-contract window instead of buying deep
+> history now. Scope: build and unit-test the full data machinery
+> (per-contract fetcher, roll calendar, back-adjustment builder A3), run the
+> hygiene checks that fit a 2y window (roll-gap audit, cross-source check on
+> the overlapping leg), assemble A2/A5 (spec + empirical cost tables).
+> **Binding limits:** no replication gate is possible on 2y, therefore no
+> pre-registration may be drafted and no IS/OOS claim made from this window;
+> any signal/portfolio numbers computed here are machinery shakedown only,
+> non-citable (buy_hold status). Gate A→B stays closed until a deep archive
+> lands; the machinery is built so only the archive swap remains.
 
 Status: PLAN (draft, not yet adopted). Extends
 `docs/research-new-asset-classes.md` (scoping, Phase A authorisation) and is
