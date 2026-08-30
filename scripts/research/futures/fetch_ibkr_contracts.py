@@ -38,19 +38,20 @@ OUT = Path("data/futures/ibkr")
 PAPER_PORTS = {7497, 4002}
 CLIENT_ID = 93  # ad-hoc tool range 9x; 91/92 used by connection smoke tests
 
-# root -> (exchange, currency); full-size contracts (data leg, best history)
+# root -> (ibkr symbol, exchange); full-size contracts (data leg, best
+# history). FX futures use the currency code as IBKR symbol (6E -> EUR).
 DEFAULT_ROOTS = {
-    "CL": ("NYMEX", "USD"),
-    "ES": ("CME", "USD"),
-    "GC": ("COMEX", "USD"),
-    "ZN": ("CBOT", "USD"),
-    "6E": ("CME", "USD"),
+    "CL": ("CL", "NYMEX"),
+    "ES": ("ES", "CME"),
+    "GC": ("GC", "COMEX"),
+    "ZN": ("ZN", "CBOT"),
+    "6E": ("EUR", "CME"),
 }
 
 
-def eligible_contracts(ib: IB, root: str, exchange: str, currency: str) -> list[Contract]:
-    """All contracts for `root` whose expiry falls in the retrievable window."""
-    spec = Future(symbol=root, exchange=exchange, currency=currency, includeExpired=True)
+def eligible_contracts(ib: IB, symbol: str, exchange: str) -> list[Contract]:
+    """All contracts for `symbol` whose expiry falls in the retrievable window."""
+    spec = Future(symbol=symbol, exchange=exchange, currency="USD", includeExpired=True)
     details = ib.reqContractDetails(spec)
     horizon_lo = date.today() - timedelta(days=2 * 365)
     horizon_hi = date.today() + timedelta(days=400)
@@ -66,7 +67,9 @@ def eligible_contracts(ib: IB, root: str, exchange: str, currency: str) -> list[
 
 def fetch_contract(ib: IB, c: Contract) -> "util.df":
     exp = datetime.strptime(c.lastTradeDateOrContractMonth[:8], "%Y%m%d").date()
-    end = "" if exp >= date.today() else exp.strftime("%Y%m%d") + " 23:59:59 US/Central"
+    # UTC dash notation ("yyyymmdd-hh:mm:ss"): NYMEX/COMEX reject the
+    # "date time tz" form that CBOT accepts (observed 2026-08-30)
+    end = "" if exp >= date.today() else exp.strftime("%Y%m%d-23:59:59")
     bars = ib.reqHistoricalData(
         c, endDateTime=end, durationStr="2 Y", barSizeSetting="1 day",
         whatToShow="TRADES", useRTH=True, formatDate=1,
@@ -99,9 +102,9 @@ def main() -> None:
                       "contracts": {}, "errors": {}}
     try:
         for root in args.roots:
-            exchange, currency = DEFAULT_ROOTS.get(root, ("CME", "USD"))
+            symbol, exchange = DEFAULT_ROOTS.get(root, (root, "CME"))
             try:
-                contracts = eligible_contracts(ib, root, exchange, currency)
+                contracts = eligible_contracts(ib, symbol, exchange)
             except Exception as e:  # noqa: BLE001 — recorded, not fatal
                 manifest["errors"][root] = f"contract lookup: {e}"
                 continue
