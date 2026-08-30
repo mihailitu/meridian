@@ -22,12 +22,17 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from ib_insync import IB, Contract, Future, util
+# eventkit (ib_insync dep) calls get_event_loop() at import time, which
+# raises on Python 3.12+ when no loop exists in the main thread
+asyncio.set_event_loop(asyncio.new_event_loop())
+
+from ib_insync import IB, Contract, Future, util  # noqa: E402
 
 OUT = Path("data/futures/ibkr")
 PAPER_PORTS = {7497, 4002}
