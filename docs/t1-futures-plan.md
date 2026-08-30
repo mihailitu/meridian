@@ -11,6 +11,14 @@
 > exists). To resume: Stooq manual download (browser-only), Databento
 > go/no-go + pricing check, then A2/A5. No pre-registration exists; nothing
 > is frozen.
+>
+> **IBKR as source (evaluated 2026-08-30):** ruled out as the primary
+> archive — the TWS API drops expired-contract data two years after expiry
+> (tws-api historical_limitations doc), so no deep per-contract history and
+> no replication gate. `CONTFUT` adjustment method is undocumented — treat
+> as splice until proven otherwise. IBKR Pro IS the right source for: the
+> recent ~2y leg of the A4 cross-source check (real settlements), empirical
+> spread validation for A5, and all of Phase C.
 
 Status: PLAN (draft, not yet adopted). Extends
 `docs/research-new-asset-classes.md` (scoping, Phase A authorisation) and is
