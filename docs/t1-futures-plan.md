@@ -1,5 +1,17 @@
 # T1 — futures trend following: implementation plan (2026-08-30)
 
+> **2026-08-30 (later): DEFERRED at Phase A1** by user decision. State at
+> deferral: A1 partially run — Yahoo `CL=F` proven an unadjusted front-month
+> splice and disqualified for signal work (level tracks FRED spot at 0.12%
+> median basis; 2006–2016 cumret −14.9% vs spot −14.8%, i.e. no roll cost in
+> the series; 12 roll-artifact days summing −16.5%). Probe script:
+> `scripts/research/futures/a1_source_probe.py`; probe data in
+> `data/futures/probe/` (untracked). Spec-table invariant tests already in
+> `tests/unit/test_futures_specs.py` (skip until `config/futures_specs.csv`
+> exists). To resume: Stooq manual download (browser-only), Databento
+> go/no-go + pricing check, then A2/A5. No pre-registration exists; nothing
+> is frozen.
+
 Status: PLAN (draft, not yet adopted). Extends
 `docs/research-new-asset-classes.md` (scoping, Phase A authorisation) and is
 bound by `docs/research-survey-2026-08.md` §3 (pre-registration amendments)
