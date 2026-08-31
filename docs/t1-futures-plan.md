@@ -69,7 +69,33 @@
 > constraint 5 (integer-contract rounding will dominate the €20k cell).
 > Relative tick (tick/price): large-tick books are ZB 2.8 bp, 10Y 2.1 bp,
 > ZN 1.4 bp, CL/MCL 1.2 bp, FX 0.4–1.4 bp; small-tick are NQ/MNQ 0.08 bp,
-> YM 0.19 bp, GC/MGC 0.22 bp. A5 (commissions + empirical spreads) still open.
+> YM 0.19 bp, GC/MGC 0.22 bp.
+>
+> **2026-08-31 (A5 landed): `config/futures_costs.csv`** — per-contract
+> round-trip cost = 2×(commission + exchange fee + regulatory fee) + median
+> quoted spread. Spreads are empirical: `a5_spreads_ibkr.py` pulls hourly RTH
+> BID_ASK bars (open = avg bid, close = avg ask) for 5 sessions to
+> 2026-08-28 (`config/futures_spreads.csv`; streaming quotes are unavailable
+> on this account, even delayed). Fees are hand-transcribed in
+> `config/futures_fees_ibkr.csv` from IBKR's commission page (Pro, ≤1,000
+> contracts/month tier: standard $0.85, e-micro $0.25, e-micro FX $0.15) and
+> the CME/CBOT/NYMEX/COMEX fee-recovery pages (non-member tier), source URL
+> per row; `a5_cost_table.py` merges. Invariant tests:
+> `tests/unit/test_futures_costs.py`. Readings: equity index and rates
+> full-size 0.3–1.8 bp round trip (ES 0.44, ZN 1.75, ZB 3.2 bp because of its
+> large tick), micros 0.3–1.4 bp (MES 0.64, MNQ 0.34); CL 2.2 bp / MCL 3.6
+> bp; FX full 0.8–1.4 bp, micro FX 1.4–2.5 bp; metals 1.3–2.6 bp full, MGC
+> 1.2 bp, MHG 5.3 bp (5.5-tick spread — thin); 10Y micro yield 7.5-tick
+> spread and its "notional" is not economically meaningful (yield-quoted,
+> $10/bp DV01) — treat 10Y as a candidate only after a DV01-based cost
+> restatement. Gaps: SIL exchange fee absent from IBKR's COMEX page (row
+> annotated, rt cost NaN); MHG commission assumed from the e-micro category.
+> At slow-trend turnover (a few round trips per market per year) these
+> costs are 5–30 bp/yr per market — consistent with the survey's "costs are
+> not what kills slow trend" reading, except in the thin micros (MHG, 10Y).
+> **Phase A-lite is complete**: fetcher, builder + tests, cross-source
+> audit, spec table, cost table. Gate A→B remains closed (2y window, no
+> replication gate possible) per the binding limits above.
 
 Status: PLAN (draft, not yet adopted). Extends
 `docs/research-new-asset-classes.md` (scoping, Phase A authorisation) and is

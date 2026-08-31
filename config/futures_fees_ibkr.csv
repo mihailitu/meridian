@@ -1,0 +1,30 @@
+code,commission_usd,exchange_fee_usd,regulatory_fee_usd,fee_note,source_url,as_of
+ES,0.85,1.386,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+MES,0.25,0.353,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+NQ,0.85,1.386,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+MNQ,0.25,0.353,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+RTY,0.85,1.386,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+M2K,0.25,0.353,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+YM,0.85,1.38,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+MYM,0.25,0.35,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+ZT,0.85,0.65,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+ZF,0.85,0.65,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+ZN,0.85,0.80,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+ZB,0.85,0.87,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+10Y,0.25,0.30,0.01,,https://www.interactivebrokers.com/en/accounts/fees/CBOT.php,2026-08-31
+GC,0.85,1.65,0.01,,https://www.interactivebrokers.com/en/accounts/fees/COMEX.php,2026-08-31
+MGC,0.25,0.70,0.01,,https://www.interactivebrokers.com/en/accounts/fees/COMEX.php,2026-08-31
+SI,0.85,1.65,0.01,,https://www.interactivebrokers.com/en/accounts/fees/COMEX.php,2026-08-31
+SIL,0.25,,0.01,SIL absent from IBKR COMEX fee page (only QI e-mini and SIC listed) - exchange fee unknown,https://www.interactivebrokers.com/en/accounts/fees/COMEX.php,2026-08-31
+HG,0.85,1.65,0.01,,https://www.interactivebrokers.com/en/accounts/fees/COMEX.php,2026-08-31
+MHG,0.25,0.70,0.01,MHG not named in the e-micro commission list; 0.25 assumed from the e-micro category,https://www.interactivebrokers.com/en/accounts/fees/COMEX.php,2026-08-31
+CL,0.85,1.50,0.01,,https://www.interactivebrokers.com/en/accounts/fees/NYMEX.php,2026-08-31
+MCL,0.25,0.50,0.01,,https://www.interactivebrokers.com/en/accounts/fees/NYMEX.php,2026-08-31
+NG,0.85,1.60,0.01,,https://www.interactivebrokers.com/en/accounts/fees/NYMEX.php,2026-08-31
+6E,0.85,1.60,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+M6E,0.15,0.24,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+6B,0.85,1.60,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+M6B,0.15,0.24,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+6A,0.85,1.60,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+M6A,0.15,0.24,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
+6J,0.85,1.60,0.011,,https://www.interactivebrokers.com/en/accounts/fees/CME.php,2026-08-31
