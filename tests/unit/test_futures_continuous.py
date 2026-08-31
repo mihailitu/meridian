@@ -62,6 +62,22 @@ class TestRollSchedule:
         # A's 4th bar (3 remaining) -> B active from the 5th day at latest
         assert sched.iloc[4] == "FUTB"
 
+    def test_no_buffer_roll_at_dataset_end_for_live_contract(self):
+        """A live contract's data ends at the fetch date, not at expiry —
+        the expiry buffer must not read that as 'near expiry' and cascade
+        the schedule into back months on the final days."""
+        days = pd.bdate_range("2026-01-05", periods=8)
+        a = ContractBars(
+            "FUTA", pd.Timestamp("2026-03-20"),  # expiry far beyond the data
+            _bars(days, [100.0 + i for i in range(8)], [1000] * 8),
+        )
+        b = ContractBars(
+            "FUTB", pd.Timestamp("2026-06-19"),
+            _bars(days, [105.0 + i for i in range(8)], [100] * 8),
+        )
+        sched = build_roll_schedule([a, b], expiry_buffer_days=3)
+        assert (sched == "FUTA").all()
+
     def test_thin_serial_month_is_skipped(self, two_contracts):
         """The roll target is the most liquid later contract, not the
         next-by-expiry one — thin serial months (GC/6E style) are skipped."""

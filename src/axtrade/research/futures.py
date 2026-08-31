@@ -144,7 +144,13 @@ def build_roll_schedule(
         if nxt_sym is None:
             continue
         remaining = cur.bars.index[cur.bars.index >= day]
-        near_expiry = len(remaining) <= expiry_buffer_days
+        # The buffer counts bars remaining IN THE DATA, which only means
+        # "near expiry" when the data actually runs to expiry (expired
+        # contracts). A live contract's archive ends at the fetch date —
+        # without this guard, every live contract looks near-expiry at the
+        # dataset end and the schedule cascades into deep back months.
+        data_ends_at_expiry = cur.bars.index[-1] >= cur.expiry - pd.Timedelta(days=5)
+        near_expiry = data_ends_at_expiry and len(remaining) <= expiry_buffer_days
         nxt = by_symbol[nxt_sym]
         vol_cross = (
             day in nxt.bars.index

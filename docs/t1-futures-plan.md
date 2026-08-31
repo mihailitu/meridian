@@ -31,6 +31,24 @@
 > any signal/portfolio numbers computed here are machinery shakedown only,
 > non-citable (buy_hold status). Gate A→B stays closed until a deep archive
 > lands; the machinery is built so only the archive swap remains.
+>
+> **2026-08-31 (result): A-lite machinery validated.** Fetcher hauled 89
+> contracts / 0 errors (CL ES GC ZN 6E incl. expired chains). A3 builder
+> (`src/axtrade/research/futures.py`, 10 unit tests) produces textbook roll
+> sequences over the ~1y front-month-representative window. Cross-check
+> (`scripts/research/futures/a3_crosscheck.py`): CL continuous vs Yahoo CL=F
+> corr 0.994, mean |ret diff| 8 bp on ordinary days; every >50 bp day
+> explained (Yahoo splice artifacts at its expiry rolls, contract-holding
+> windows between our volume-crossover roll and Yahoo's splice during the
+> 2026-04 oil-shock backwardation, one Thanksgiving settlement-timing swap
+> whose 2-day compound matches to 4 dp). Raw front close vs FRED WTI spot:
+> median |basis| 1.3% (we hold the liquidity-following month; steep 2026
+> term structure), p95 4.0%. Roll hygiene: active contract in the top 2 by
+> volume on ~99% of days; the rest are the one-day decision lag inherent to
+> the no-look-ahead rule. The audit caught and fixed one real bug: the
+> expiry-buffer rule fired at the DATASET end for live contracts (data ends
+> at fetch date, not expiry) and cascaded every root into deep 2027 months —
+> now guarded (`data_ends_at_expiry`) and regression-tested.
 
 Status: PLAN (draft, not yet adopted). Extends
 `docs/research-new-asset-classes.md` (scoping, Phase A authorisation) and is
