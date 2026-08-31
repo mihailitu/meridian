@@ -49,6 +49,27 @@
 > expiry-buffer rule fired at the DATASET end for live contracts (data ends
 > at fetch date, not expiry) and cascaded every root into deep 2027 months —
 > now guarded (`data_ends_at_expiry`) and regression-tested.
+>
+> **2026-08-31 (A2 landed): `config/futures_specs.csv`** — 29 rows, 5
+> sectors (equity 8, rates 5, metals 6, energy 3, FX 7), full + micro pairs,
+> pulled live from the IBKR contract database by
+> `scripts/research/futures/a2_specs_ibkr.py` (multiplier/minTick from the
+> exchange definition IBKR carries; conid + as_of recorded; CME spec pages
+> 403 non-browser traffic so `source_url` is a CME search link, not a
+> verified deep link). Invariant tests pass (`tests/unit/test_futures_specs.py`).
+> Gaps: **margin not collected** — whatIf previews return empty on the
+> paper account (mirrors the live cash account's missing futures
+> permission); fill from the TWS contract dialog or CME margin page before
+> the tradeable-subset math. Lesson: one IBKR symbol carries several trading
+> classes (symbol SI → SI 5000 oz AND SIL 1000 oz); filter by tradingClass or
+> you silently get the wrong book. Capital-realism reading at 2026-08-28
+> prices: MCL is the only micro under $10k notional; MES $39k, MGC $45k,
+> SIL $67k, M6E $14k, 10Y (yield-quoted, $10/bp) — at €20k, vol-targeted
+> sizing wants fractions of one micro in most markets, confirming design
+> constraint 5 (integer-contract rounding will dominate the €20k cell).
+> Relative tick (tick/price): large-tick books are ZB 2.8 bp, 10Y 2.1 bp,
+> ZN 1.4 bp, CL/MCL 1.2 bp, FX 0.4–1.4 bp; small-tick are NQ/MNQ 0.08 bp,
+> YM 0.19 bp, GC/MGC 0.22 bp. A5 (commissions + empirical spreads) still open.
 
 Status: PLAN (draft, not yet adopted). Extends
 `docs/research-new-asset-classes.md` (scoping, Phase A authorisation) and is
