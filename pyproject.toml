@@ -2,6 +2,7 @@
 name = "axtrade"
 version = "0.1.0"
 description = "Algorithmic trading platform"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "ib_insync>=0.9.86",

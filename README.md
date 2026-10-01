@@ -77,6 +77,10 @@ falsification built in (binding pre-registrations, a stopping rule that closed s
 research when the last pre-registered test failed), and periodic whole-project audits whose
 findings are tracked to closure. `docs/PROGRESS.md` is the backward-looking log.
 
+## License
+
+MIT. See `LICENSE`.
+
 ## Status and disclaimer
 
 Personal research project. Paper trading only. Nothing here is investment advice, and the
